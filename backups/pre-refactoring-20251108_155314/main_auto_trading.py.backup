@@ -1,0 +1,1398 @@
+"""
+키움 조건식 → VWAP 필터링 → 실시간 자동매매 통합 시스템
+
+전체 플로우:
+1. 조건식 6개로 1차 필터링 (50~100개 종목)
+2. VWAP 사전 검증으로 2차 필터링 (5~20개 종목)
+3. 선정 종목 실시간 모니터링
+4. VWAP 매수 신호 감지 → 사전 검증 → 자동 매수
+5. 보유 중 모니터링 → VWAP 매도 신호 또는 트레일링 스탑 → 자동 매도
+6. 무한 루프 (Ctrl+C로 중지)
+"""
+import asyncio
+import websockets
+import json
+import sys
+import os
+import signal
+from datetime import datetime, timedelta
+from typing import List, Dict, Set
+from pathlib import Path
+
+# 프로젝트 루트 경로
+project_root = Path(__file__).parent
+sys.path.insert(0, str(project_root))
+
+from kiwoom_api import KiwoomAPI
+from analyzers.pre_trade_validator import PreTradeValidator
+from analyzers.entry_timing_analyzer import EntryTimingAnalyzer
+from utils.config_loader import load_config
+from database.trading_db import TradingDatabase
+from dotenv import load_dotenv
+import yfinance as yf
+import pandas as pd
+import time
+from rich.console import Console
+from rich.table import Table
+from rich.panel import Panel
+from rich.live import Live
+from rich import box
+
+# 환경변수 로드
+load_dotenv()
+
+# WebSocket URL
+SOCKET_URL = 'wss://api.kiwoom.com:10000/api/dostk/websocket'
+
+console = Console()
+
+
+def download_stock_data(ticker: str, days: int = 7):
+    """주식 데이터 다운로드 (5분봉)"""
+    try:
+        import warnings
+        warnings.filterwarnings('ignore')  # Yahoo Finance 경고 메시지 숨김
+
+        stock = yf.Ticker(ticker)
+        df = stock.history(period=f"{days}d", interval="5m")
+
+        if df.empty:
+            return None
+
+        df.reset_index(inplace=True)
+        df.columns = [col.lower() for col in df.columns]
+        return df
+
+    except Exception as e:
+        return None
+
+
+def validate_stock_for_trading(stock_code: str, stock_name: str, validator: PreTradeValidator):
+    """종목 사전 검증 (매수 전)"""
+    try:
+        ticker = f"{stock_code}.KS"
+        df = download_stock_data(ticker, days=7)
+
+        if df is None or len(df) < 100:
+            return {'allowed': False, 'reason': '데이터 부족'}
+
+        current_price = df['close'].iloc[-1]
+        current_time = datetime.now()
+
+        allowed, reason, stats = validator.validate_trade(
+            stock_code=stock_code,
+            stock_name=stock_name,
+            historical_data=df,
+            current_price=current_price,
+            current_time=current_time
+        )
+
+        return {
+            'allowed': allowed,
+            'reason': reason,
+            'stats': stats,
+            'data': df
+        }
+
+    except Exception as e:
+        return {'allowed': False, 'reason': f'오류: {str(e)}'}
+
+
+class IntegratedTradingSystem:
+    """통합 자동매매 시스템"""
+
+    def __init__(self, access_token: str, api: KiwoomAPI, condition_indices: List[int]):
+        self.uri = SOCKET_URL
+        self.access_token = access_token
+        self.api = api
+        self.condition_indices = condition_indices
+
+        # 설정 로드
+        self.config = load_config("config/strategy_hybrid.yaml")
+
+        # 데이터베이스 초기화
+        self.db = TradingDatabase("data/trading.db")
+        console.print("[dim]✓ 데이터베이스 초기화 완료[/dim]")
+
+        # VWAP 검증기
+        self.validator = PreTradeValidator(
+            config=self.config,
+            lookback_days=5,
+            min_trades=2,
+            min_win_rate=50.0,
+            min_avg_profit=0.5,
+            min_profit_factor=1.2
+        )
+
+        # VWAP 분석기
+        analyzer_config = self.config.get_analyzer_config()
+        self.analyzer = EntryTimingAnalyzer(**analyzer_config)
+
+        # WebSocket
+        self.websocket = None
+        self.connected = False
+        self.running = True
+
+        # 종목 관리
+        self.condition_list = []
+        self.watchlist: Set[str] = set()  # 모니터링 대상
+        self.validated_stocks: Dict[str, Dict] = {}  # 검증 통과 종목 상세 정보
+
+        # 포지션 관리
+        self.positions: Dict[str, Dict] = {}  # {stock_code: position_info}
+
+        # 실시간 데이터 캐시
+        self.price_cache: Dict[str, float] = {}
+
+        # 계좌 정보 (실시간 업데이트)
+        self.current_cash = 0.0
+        self.total_assets = 0.0
+        self.positions_value = 0.0
+
+        # 리스크 관리자 (나중에 실계좌 기반으로 초기화)
+        self.risk_manager = None
+
+    async def connect(self):
+        """WebSocket 연결"""
+        try:
+            self.websocket = await websockets.connect(self.uri)
+            self.connected = True
+            console.print("=" * 120, style="bold green")
+            console.print(f"{'키움 통합 자동매매 시스템':^120}", style="bold green")
+            console.print("=" * 120, style="bold green")
+            console.print()
+        except Exception as e:
+            console.print(f"[red]❌ WebSocket 연결 실패: {e}[/red]")
+            raise
+
+    async def send_message(self, trnm: str, data: dict = None):
+        """WebSocket 메시지 전송"""
+        if not self.websocket or not self.connected:
+            raise Exception("WebSocket이 연결되지 않았습니다.")
+
+        message = {"trnm": trnm}
+        if data:
+            message.update(data)
+
+        await self.websocket.send(json.dumps(message))
+
+    async def receive_message(self):
+        """WebSocket 메시지 수신"""
+        if not self.websocket or not self.connected:
+            raise Exception("WebSocket이 연결되지 않았습니다.")
+
+        message = await self.websocket.recv()
+        return json.loads(message)
+
+    async def login(self):
+        """WebSocket 로그인"""
+        console.print(f"[{datetime.now().strftime('%H:%M:%S')}] WebSocket 로그인")
+
+        login_packet = {'trnm': 'LOGIN', 'token': self.access_token}
+        await self.websocket.send(json.dumps(login_packet))
+
+        response = await self.receive_message()
+
+        if response.get("return_code") == 0:
+            console.print("✅ 로그인 성공", style="green")
+            console.print()
+            return True
+        else:
+            console.print(f"[red]❌ 로그인 실패: {response.get('return_msg')}[/red]")
+            return False
+
+    async def initialize_account(self):
+        """계좌 정보 초기화 (시스템 시작 시)"""
+        from core.risk_manager import RiskManager
+
+        console.print()
+        console.print("=" * 120, style="bold cyan")
+        console.print(f"{'계좌 정보 조회':^120}", style="bold cyan")
+        console.print("=" * 120, style="bold cyan")
+
+        try:
+            # 1. 계좌 잔고 조회 (API-ID: kt00001)
+            balance_info = self.api.get_balance()
+
+            # 예수금 파싱 (15자리 문자열 → 숫자)
+            cash_str = balance_info.get('entr', '000000000000000')
+            self.current_cash = float(cash_str)
+
+            # 2. 보유 종목 조회 (API-ID: ka01690)
+            account_info = self.api.get_account_info()
+            positions = account_info.get('day_bal_rt', [])
+
+            # 3. 보유 포지션 평가액 계산
+            self.positions_value = 0.0
+            for pos in positions:
+                # 빈 종목은 스킵
+                if not pos.get('stk_cd') or pos.get('stk_cd') == '':
+                    continue
+
+                cur_prc = int(pos.get('cur_prc', 0)) if pos.get('cur_prc') else 0
+                rmnd_qty = int(pos.get('rmnd_qty', 0)) if pos.get('rmnd_qty') else 0
+                self.positions_value += cur_prc * rmnd_qty
+
+            # 4. 총 자산
+            self.total_assets = self.current_cash + self.positions_value
+
+            # 4. 계좌 정보 출력
+            table = Table(title="💰 계좌 현황", box=box.ROUNDED, show_header=True, header_style="bold magenta")
+            table.add_column("항목", style="cyan", width=20)
+            table.add_column("금액", style="yellow", justify="right", width=20)
+
+            table.add_row("계좌번호", self.api.account_number)
+            table.add_row("예수금", f"{self.current_cash:,.0f}원")
+            table.add_row("보유종목 평가", f"{self.positions_value:,.0f}원")
+            table.add_row("총 자산", f"{self.total_assets:,.0f}원")
+            table.add_row("보유종목 수", f"{len(positions)}개")
+
+            console.print(table)
+            console.print()
+
+            # 5. 보유 포지션 로드
+            if positions:
+                console.print("[bold]보유 포지션:[/bold]")
+                for pos in positions:
+                    # 빈 종목은 스킵
+                    stock_code = pos.get('stk_cd', '')
+                    if not stock_code or stock_code == '':
+                        continue
+
+                    stock_name = pos.get('stk_nm', '')
+                    quantity = int(pos.get('rmnd_qty', 0)) if pos.get('rmnd_qty') else 0
+                    avg_price = int(pos.get('buy_uv', 0)) if pos.get('buy_uv') else 0
+                    current_price = int(pos.get('cur_prc', 0)) if pos.get('cur_prc') else 0
+                    profit_rate = float(pos.get('prft_rt', 0)) if pos.get('prft_rt') else 0.0
+
+                    self.positions[stock_code] = {
+                        'stock_name': stock_name,
+                        'quantity': quantity,
+                        'avg_price': avg_price,
+                        'current_price': current_price,
+                        'profit_rate': profit_rate,
+                        'eval_amount': quantity * current_price
+                    }
+
+                    console.print(f"  • {stock_name}({stock_code}): {quantity}주 @ {current_price:,}원 "
+                                f"[{'green' if profit_rate >= 0 else 'red'}]{profit_rate:+.2f}%[/]")
+                console.print()
+
+            # 6. 리스크 관리자 초기화 (실제 잔고 기반)
+            self.risk_manager = RiskManager(
+                initial_balance=self.current_cash,
+                storage_path='data/risk_log.json'
+            )
+
+            console.print(f"[green]✓ 리스크 관리자 초기화 완료 (초기 잔고: {self.current_cash:,.0f}원)[/green]")
+            console.print()
+
+        except Exception as e:
+            console.print(f"[red]❌ 계좌 정보 조회 실패: {e}[/red]")
+            console.print("[yellow]⚠️  기본값으로 초기화합니다 (10,000,000원)[/yellow]")
+
+            # 기본값으로 초기화
+            self.current_cash = 10000000
+            self.positions_value = 0
+            self.total_assets = 10000000
+
+            self.risk_manager = RiskManager(
+                initial_balance=self.current_cash,
+                storage_path='data/risk_log.json'
+            )
+            console.print()
+
+    async def update_account_balance(self):
+        """거래 후 실시간 잔고 업데이트"""
+        try:
+            # 1. 계좌 잔고 조회 (API-ID: kt00001)
+            balance_info = self.api.get_balance()
+            cash_str = balance_info.get('entr', str(int(self.current_cash)).zfill(15))
+            self.current_cash = float(cash_str)
+
+            # 2. 보유 종목 조회 (API-ID: ka01690)
+            account_info = self.api.get_account_info()
+            positions = account_info.get('day_bal_rt', [])
+
+            # 3. 보유 포지션 평가액 계산
+            self.positions_value = 0.0
+            for pos in positions:
+                if not pos.get('stk_cd') or pos.get('stk_cd') == '':
+                    continue
+
+                cur_prc = int(pos.get('cur_prc', 0)) if pos.get('cur_prc') else 0
+                rmnd_qty = int(pos.get('rmnd_qty', 0)) if pos.get('rmnd_qty') else 0
+                self.positions_value += cur_prc * rmnd_qty
+
+            # 4. 총 자산
+            self.total_assets = self.current_cash + self.positions_value
+
+            # 5. 리스크 관리자 잔고 업데이트
+            if self.risk_manager:
+                self.risk_manager.update_balance(self.current_cash)
+
+            console.print(f"[dim]💰 잔고 업데이트: {self.current_cash:,.0f}원 (총자산: {self.total_assets:,.0f}원)[/dim]")
+
+        except Exception as e:
+            console.print(f"[yellow]⚠️  잔고 업데이트 실패: {e}[/yellow]")
+
+    async def get_condition_list(self):
+        """조건검색식 목록 조회"""
+        console.print("[1] 조건검색식 목록 조회")
+        console.print()
+
+        await self.send_message("CNSRLST")
+        response = await self.receive_message()
+
+        if response.get("return_code") == 0:
+            self.condition_list = response.get("data", [])
+            console.print(f"✅ 총 {len(self.condition_list)}개 조건검색식 로드", style="green")
+            console.print()
+
+            # "전략" 키워드가 포함된 조건식만 자동 선택
+            strategy_conditions = []
+            console.print("🎯 전략 조건식 자동 선택:", style="bold cyan")
+            for i, condition in enumerate(self.condition_list):
+                seq = condition[0] if len(condition) > 0 else "?"
+                name = condition[1] if len(condition) > 1 else "?"
+
+                # "전략" 키워드가 포함된 조건식
+                if "전략" in name:
+                    strategy_conditions.append(i)
+                    console.print(f"  ✓ [{i}] {name} (seq: {seq})", style="green")
+
+            console.print()
+            console.print(f"📊 총 {len(strategy_conditions)}개 전략 조건식 선택됨: {strategy_conditions}", style="bold yellow")
+            console.print()
+
+            # 선택된 인덱스를 condition_indices에 자동 설정
+            if hasattr(self, 'condition_indices') and len(self.condition_indices) == 0:
+                self.condition_indices = strategy_conditions
+                console.print(f"[cyan]자동으로 설정된 인덱스: {self.condition_indices}[/cyan]")
+                console.print()
+
+            return True
+        else:
+            console.print(f"[red]❌ 조건검색식 조회 실패[/red]")
+            return False
+
+    async def search_condition(self, seq: str, name: str):
+        """조건검색 실행"""
+        try:
+            await self.send_message("CNSRREQ", {
+                "seq": seq,
+                "search_type": "1",
+                "stex_tp": "K"
+            })
+            response = await self.receive_message()
+
+            if response is None:
+                console.print(f"[yellow]⚠️  응답 없음 (타임아웃)[/yellow]")
+                return []
+
+            if response.get("return_code") == 0:
+                stock_list = response.get("data", [])
+
+                # None 체크
+                if stock_list is None:
+                    console.print(f"[yellow]⚠️  종목 데이터 없음[/yellow]")
+                    return []
+
+                stock_codes = [s.get("jmcode", "").replace("A", "") for s in stock_list]
+                stock_codes = [code for code in stock_codes if code]
+                return stock_codes
+            else:
+                console.print(f"[yellow]⚠️  오류: {response.get('return_msg', 'Unknown')}[/yellow]")
+                return []
+        except Exception as e:
+            console.print(f"[red]❌ 조건검색 오류: {e}[/red]")
+            return []
+
+    async def run_condition_filtering(self):
+        """1차 + 2차 필터링 실행"""
+        console.print()
+        console.print("=" * 120, style="bold cyan")
+        console.print(f"{'1단계: 조건식 검색 (1차 필터링)':^120}", style="bold cyan")
+        console.print("=" * 120, style="bold cyan")
+        console.print()
+
+        # 조건식 검색
+        all_stocks = set()
+        filter_time = datetime.now()
+
+        for idx in self.condition_indices:
+            if idx < len(self.condition_list):
+                condition = self.condition_list[idx]
+                seq = condition[0]
+                name = condition[1]
+
+                console.print(f"  🔍 {name} 검색 중...")
+                stocks = await self.search_condition(seq, name)
+                all_stocks.update(stocks)
+                console.print(f"     → {len(stocks)}개 발견")
+
+                # 1차 필터링 결과 DB에 저장
+                filter_data = {
+                    'filter_time': filter_time.isoformat(),
+                    'filter_type': '1차',
+                    'condition_name': name,
+                    'stocks_found': len(stocks),
+                    'stock_codes': list(stocks),
+                    'stocks_passed': 0,
+                    'stocks_failed': 0,
+                    'passed_stocks': [],
+                    'schedule_type': 'manual',
+                    'is_new_stock': 0
+                }
+                self.db.insert_filter_history(filter_data)
+
+                await asyncio.sleep(0.5)
+
+        unique_stocks = list(all_stocks)
+
+        console.print()
+        console.print(f"📊 중복 제거 후 총 {len(unique_stocks)}개 종목", style="bold green")
+        console.print()
+
+        # 2차 필터링
+        console.print("=" * 120, style="bold yellow")
+        console.print(f"{'2단계: VWAP 사전 검증 (2차 필터링)':^120}", style="bold yellow")
+        console.print("=" * 120, style="bold yellow")
+        console.print()
+
+        BATCH_SIZE = 5
+        DELAY_BETWEEN_REQUESTS = 0.2
+        DELAY_BETWEEN_BATCHES = 1.0
+
+        # 종목명 조회
+        stock_info_list = []
+        console.print(f"[cyan]📋 종목명 조회 중... (총 {len(unique_stocks)}개)[/cyan]")
+
+        for i, code in enumerate(unique_stocks, 1):
+            try:
+                result = self.api.get_stock_info(stock_code=code)
+                if result.get('return_code') == 0:
+                    stock_name = result.get('stk_nm', code)  # 올바른 필드명: stk_nm
+                else:
+                    stock_name = code
+                stock_info_list.append((code, stock_name))
+
+                if i % 10 == 0:
+                    console.print(f"  {i}/{len(unique_stocks)} 완료...", style="dim")
+
+                await asyncio.sleep(DELAY_BETWEEN_REQUESTS)
+
+                if i % BATCH_SIZE == 0:
+                    await asyncio.sleep(DELAY_BETWEEN_BATCHES)
+
+            except KeyboardInterrupt:
+                console.print()
+                console.print("[yellow]⚠️  사용자가 중지했습니다. 지금까지 조회한 종목으로 진행합니다.[/yellow]")
+                break
+            except Exception as e:
+                stock_info_list.append((code, code))
+                await asyncio.sleep(DELAY_BETWEEN_REQUESTS)
+
+        console.print(f"[green]✅ 종목명 조회 완료[/green]")
+        console.print()
+
+        # VWAP 검증
+        console.print(f"[cyan]🔍 VWAP 검증 시작...[/cyan]")
+        console.print()
+
+        validated_count = 0
+        for i, (code, name) in enumerate(stock_info_list, 1):
+            try:
+                if i % 5 == 0:
+                    console.print(f"  진행: {i}/{len(stock_info_list)}", style="dim")
+
+                result = validate_stock_for_trading(code, name, self.validator)
+
+                # DB에 검증 점수 저장
+                stats = result.get('stats', {})
+                score_data = {
+                    'stock_code': code,
+                    'stock_name': name,
+                    'validation_time': datetime.now().isoformat(),
+                    'vwap_win_rate': stats.get('win_rate'),
+                    'vwap_avg_profit': stats.get('avg_profit_pct'),
+                    'vwap_trade_count': stats.get('total_trades'),
+                    'vwap_profit_factor': stats.get('profit_factor'),
+                    'vwap_max_profit': stats.get('max_profit_pct'),
+                    'vwap_max_loss': stats.get('max_loss_pct'),
+                    'news_sentiment_score': None,  # TODO: 뉴스 분석 연동
+                    'news_impact_type': None,
+                    'news_keywords': [],
+                    'news_titles': [],
+                    'news_count': 0,
+                    'total_score': stats.get('avg_profit_pct', 0),  # 임시: VWAP 점수만
+                    'weight_vwap': 1.0,  # 임시: VWAP만 사용
+                    'weight_news': 0.0,
+                    'is_passed': 1 if result.get('allowed') else 0
+                }
+                self.db.insert_validation_score(score_data)
+
+                if result.get('allowed'):
+                    self.watchlist.add(code)
+                    self.validated_stocks[code] = {
+                        'name': name,
+                        'stats': stats,
+                        'data': result.get('data')
+                    }
+                    validated_count += 1
+                    console.print(
+                        f"  ✅ {name}: 승률 {stats.get('win_rate', 0):.1f}%, "
+                        f"수익 {stats.get('avg_profit_pct', 0):+.1f}%",
+                        style="green"
+                    )
+
+                if i % BATCH_SIZE == 0:
+                    await asyncio.sleep(DELAY_BETWEEN_BATCHES)
+
+            except KeyboardInterrupt:
+                console.print()
+                console.print("[yellow]⚠️  사용자가 중지했습니다. 지금까지 검증한 종목으로 진행합니다.[/yellow]")
+                break
+            except Exception as e:
+                console.print(f"[red]검증 오류 ({code}): {e}[/red]", style="dim")
+                continue
+
+        console.print()
+        console.print("=" * 120, style="bold magenta")
+        console.print(f"{'📊 필터링 결과 요약':^120}", style="bold magenta")
+        console.print("=" * 120, style="bold magenta")
+        console.print()
+        console.print(f"  1차 필터링 (조건식 검색): {len(unique_stocks)}개 종목 발견", style="cyan")
+        console.print(f"  2차 필터링 (VWAP 검증): {validated_count}개 통과, {len(stock_info_list) - validated_count}개 탈락", style="yellow")
+        console.print(f"  최종 선정 종목: {validated_count}개", style="bold green" if validated_count > 0 else "bold red")
+        console.print()
+
+        # 최종 선정 종목 표시
+        if self.watchlist:
+            table = Table(title="최종 선정 종목 (모니터링 대상)", box=box.DOUBLE)
+            table.add_column("순위", style="cyan", justify="right")
+            table.add_column("종목명", style="yellow")
+            table.add_column("코드", style="dim")
+            table.add_column("승률", justify="right")
+            table.add_column("평균수익률", justify="right", style="green")
+            table.add_column("거래수", justify="right")
+
+            sorted_stocks = sorted(
+                self.validated_stocks.items(),
+                key=lambda x: x[1]['stats']['avg_profit_pct'],
+                reverse=True
+            )
+
+            for rank, (code, info) in enumerate(sorted_stocks, 1):
+                stats = info['stats']
+                table.add_row(
+                    str(rank),
+                    info['name'],
+                    code,
+                    f"{stats['win_rate']:.1f}%",
+                    f"{stats['avg_profit_pct']:+.2f}%",
+                    f"{stats['total_trades']}회"
+                )
+
+            console.print(table)
+            console.print()
+
+    def is_market_open(self) -> bool:
+        """장 운영 시간 체크 (평일 09:00 ~ 15:30)"""
+        now = datetime.now()
+
+        # 주말 체크
+        if now.weekday() >= 5:  # 토요일(5), 일요일(6)
+            return False
+
+        # 장 시간 체크 (09:00 ~ 15:30)
+        market_open = now.replace(hour=9, minute=0, second=0, microsecond=0)
+        market_close = now.replace(hour=15, minute=30, second=0, microsecond=0)
+
+        return market_open <= now <= market_close
+
+    async def monitor_and_trade(self):
+        """실시간 모니터링 및 매매 (5분마다 조건검색 재실행)"""
+        console.print("=" * 120, style="bold magenta")
+        console.print(f"{'3단계: 실시간 모니터링 시작':^120}", style="bold magenta")
+        console.print("=" * 120, style="bold magenta")
+        console.print()
+
+        console.print(f"🎯 초기 모니터링 대상: {len(self.watchlist)}개 종목")
+        console.print(f"⏰ 시작 시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        console.print(f"🔄 5분마다 조건검색 재실행 → 새 종목 자동 추가")
+        console.print()
+
+        # 장 시간 체크
+        if not self.is_market_open():
+            console.print("[yellow]⚠️  현재 장 운영 시간이 아닙니다.[/yellow]")
+            console.print("[yellow]   평일 09:00 ~ 15:30에만 모니터링이 가능합니다.[/yellow]")
+            console.print()
+            console.print("[cyan]💡 장 시작 시간까지 대기합니다...[/cyan]")
+            console.print("[dim]Ctrl+C를 눌러 종료할 수 있습니다.[/dim]")
+            console.print()
+        else:
+            console.print("[cyan]✅ 장이 열려있습니다. 실시간 모니터링 시작...[/cyan]")
+            console.print("[dim]Ctrl+C를 눌러 종료할 수 있습니다.[/dim]")
+            console.print()
+
+        check_interval = 60  # 1분마다 종목 체크
+        rescan_interval = 300  # 5분마다 조건검색 재실행
+
+        last_check = datetime.now()
+        last_rescan = datetime.now()
+        last_status_update = datetime.now()
+
+        try:
+            while self.running:
+                current_time = datetime.now()
+
+                # 장 시간인지 체크
+                if self.is_market_open():
+                    # 5분마다 조건검색 재실행
+                    if (current_time - last_rescan).seconds >= rescan_interval:
+                        console.print()
+                        console.print("[cyan]🔄 5분 경과 - 조건검색 재실행 중...[/cyan]")
+                        await self.rescan_and_add_stocks()
+                        last_rescan = current_time
+                        console.print(f"[green]✅ 현재 모니터링 종목: {len(self.watchlist)}개[/green]")
+                        console.print()
+
+                    # 1분마다 종목 체크
+                    elif (current_time - last_check).seconds >= check_interval:
+                        self.check_all_stocks()
+                        last_check = current_time
+                    else:
+                        # 남은 시간 카운트다운 (같은 줄에서 갱신)
+                        elapsed = (current_time - last_check).seconds
+                        remaining = check_interval - elapsed
+
+                        # 다음 재검색까지 남은 시간도 표시
+                        rescan_elapsed = (current_time - last_rescan).seconds
+                        rescan_remaining = rescan_interval - rescan_elapsed
+                        rescan_min = rescan_remaining // 60
+                        rescan_sec = rescan_remaining % 60
+
+                        import sys
+                        sys.stdout.write(f"\r다음 체크: {remaining}초 후 | 다음 재검색: {rescan_min}분 {rescan_sec}초 후 | Ctrl+C: 종료   ")
+                        sys.stdout.flush()
+                else:
+                    # 장 시간이 아니면 1분마다 상태 업데이트 (같은 줄에)
+                    if (current_time - last_status_update).seconds >= 60:
+                        # 같은 줄에서 업데이트
+                        console.print(f"\r[dim]{current_time.strftime('%H:%M:%S')} - 장 시간 아님, 대기 중...[/dim]", end="")
+                        last_status_update = current_time
+
+                # asyncio.sleep 사용 (KeyboardInterrupt 감지 가능)
+                await asyncio.sleep(1)
+
+        except KeyboardInterrupt:
+            console.print()
+            console.print("[yellow]⚠️  사용자가 중지를 요청했습니다.[/yellow]")
+            self.shutdown()
+
+    def check_all_stocks(self):
+        """모든 종목 체크 및 실시간 테이블 갱신 (매수 조건 중심)"""
+        import sys
+        from rich.table import Table
+        from rich.live import Live
+
+        current_time = datetime.now().strftime('%H:%M:%S')
+
+        # 종목별 실시간 데이터 수집
+        stock_data = []
+
+        for stock_code in self.watchlist:
+            try:
+                stock_info = self.validated_stocks.get(stock_code)
+                if not stock_info:
+                    console.print(f"[dim]⚠️  {stock_code}: validated_stocks에 없음[/dim]")
+                    continue
+
+                # 현재가 조회
+                ticker = f"{stock_code}.KS"
+                df = download_stock_data(ticker, days=1)
+
+                if df is None or len(df) < 20:
+                    console.print(f"[dim]⚠️  {stock_code}: 데이터 부족 (len={len(df) if df is not None else 0})[/dim]")
+                    continue
+
+                # VWAP, MA20, ATR 계산
+                df = self.analyzer.calculate_vwap(df)
+                df['ma20'] = df['close'].rolling(window=20).mean()
+                df['volume_ma20'] = df['volume'].rolling(window=20).mean()
+
+                current_price = df['close'].iloc[-1]
+                current_vwap = df['vwap'].iloc[-1]
+                current_ma20 = df['ma20'].iloc[-1]
+                current_volume = df['volume'].iloc[-1]
+                avg_volume = df['volume_ma20'].iloc[-1]
+
+                # 거래량 증감률
+                volume_change_pct = ((current_volume - avg_volume) / avg_volume * 100) if avg_volume > 0 else 0
+
+                # 매수 조건 체크
+                condition_vwap = current_price > current_vwap  # VWAP 위
+                condition_ma20 = current_price > current_ma20  # MA20 위 (상승추세)
+                condition_volume = volume_change_pct > 20      # 거래량 20% 이상 증가
+
+                # 시그널 판단
+                conditions_met = sum([condition_vwap, condition_ma20, condition_volume])
+
+                if conditions_met == 3:
+                    signal = "✅ 매수"
+                    signal_color = "green"
+                elif conditions_met >= 2:
+                    signal = "⏳ 대기"
+                    signal_color = "yellow"
+                else:
+                    signal = "❌ 제외"
+                    signal_color = "red"
+
+                stock_data.append({
+                    'code': stock_code,
+                    'name': stock_info['name'],
+                    'price': current_price,
+                    'vwap': current_vwap,
+                    'vwap_ok': condition_vwap,
+                    'ma20': current_ma20,
+                    'ma20_ok': condition_ma20,
+                    'volume_change_pct': volume_change_pct,
+                    'volume_ok': condition_volume,
+                    'signal': signal,
+                    'signal_color': signal_color,
+                    'conditions_met': conditions_met,
+                    'time': current_time
+                })
+
+                # 매수/매도 신호 체크 (기존 로직)
+                if stock_code in self.positions:
+                    self.check_exit_signal(stock_code)
+                else:
+                    self.check_entry_signal(stock_code)
+
+            except Exception as e:
+                console.print(f"[red]❌ {stock_code}: {e}[/red]")
+                import traceback
+                traceback.print_exc()
+                continue
+
+        # 조건 충족 개수 순 → 매수 시그널 우선
+        stock_data.sort(key=lambda x: x['conditions_met'], reverse=True)
+
+        # 화면 클리어
+        console.clear()
+        console.print()
+
+        # 종목 수 확인
+        if len(stock_data) == 0:
+            console.print("[yellow]⚠️  모니터링 중인 종목이 없습니다.[/yellow]")
+            console.print(f"[dim]watchlist: {len(self.watchlist)}개[/dim]")
+            console.print(f"[dim]validated_stocks: {len(self.validated_stocks)}개[/dim]")
+            return
+
+        # ========================================
+        # 1. 시뮬레이션 통계 요약 테이블
+        # ========================================
+        sim_table = Table(title=f"📈 시뮬레이션 통계 요약 ({current_time})", box=box.ROUNDED, show_header=True, header_style="bold cyan")
+        sim_table.add_column("순번", style="cyan", justify="right", width=4)
+        sim_table.add_column("코드", style="yellow", width=8)
+        sim_table.add_column("종목명", style="white", width=12)
+        sim_table.add_column("총거래", justify="right", width=8)
+        sim_table.add_column("승", style="green", justify="right", width=6)
+        sim_table.add_column("패", style="red", justify="right", width=6)
+        sim_table.add_column("승률", justify="right", width=8)
+        sim_table.add_column("평균수익", justify="right", width=10)
+        sim_table.add_column("최대수익", justify="right", width=10)
+        sim_table.add_column("최대손실", justify="right", width=10)
+        sim_table.add_column("종합점수", justify="right", width=8)
+
+        for i, data in enumerate(stock_data, 1):
+            stock_info = self.validated_stocks.get(data['code'])
+            if not stock_info:
+                continue
+
+            stats = stock_info['stats']
+            total_trades = stats.get('total_trades', 0)
+            winning_trades = stats.get('winning_trades', 0)
+            losing_trades = stats.get('losing_trades', 0)
+            win_rate = stats.get('win_rate', 0)
+            avg_profit = stats.get('avg_profit_pct', 0)
+            max_profit = stats.get('max_profit_pct', 0)
+            max_loss = stats.get('max_loss_pct', 0)
+
+            # 종합 점수
+            score = (win_rate * 0.6) + (avg_profit * 10 * 0.4)
+
+            # 점수 색상
+            score_color = "green" if score >= 70 else "yellow" if score >= 50 else "red"
+
+            # 승률 색상
+            wr_color = "green" if win_rate >= 60 else "yellow" if win_rate >= 40 else "red"
+
+            # 평균수익 색상
+            avg_color = "green" if avg_profit >= 2 else "yellow" if avg_profit >= 1 else "red"
+
+            sim_table.add_row(
+                str(i),
+                data['code'],
+                data['name'],
+                str(total_trades),
+                str(winning_trades),
+                str(losing_trades),
+                f"[{wr_color}]{win_rate:.1f}%[/{wr_color}]",
+                f"[{avg_color}]{avg_profit:+.2f}%[/{avg_color}]",
+                f"[green]{max_profit:+.2f}%[/green]",
+                f"[red]{max_loss:+.2f}%[/red]",
+                f"[{score_color}]{score:.0f}[/{score_color}]"
+            )
+
+        console.print(sim_table)
+        console.print()
+
+        # ========================================
+        # 2. 실시간 모니터링 테이블 (매수 조건)
+        # ========================================
+        table = Table(title=f"📊 실시간 모니터링 - 매수 조건 체크 ({current_time})", box=box.ROUNDED, show_header=True, header_style="bold magenta")
+        table.add_column("순번", style="cyan", justify="right", width=4)
+        table.add_column("코드", style="yellow", width=8)
+        table.add_column("종목명", style="white", width=12)
+        table.add_column("현재가", justify="right", width=10)
+        table.add_column("VWAP", justify="right", width=10)
+        table.add_column("MA20", justify="right", width=10)
+        table.add_column("거래량증감", justify="right", width=10)
+        table.add_column("시그널", justify="center", width=10)
+        table.add_column("체크시간", style="dim", width=10)
+
+        for i, data in enumerate(stock_data, 1):
+            # VWAP 조건 색상
+            vwap_str = f"{data['vwap']:,.0f}"
+            if data['vwap_ok']:
+                vwap_str = f"[green]{vwap_str} ✓[/green]"
+            else:
+                vwap_str = f"[red]{vwap_str} ✗[/red]"
+
+            # MA20 조건 색상
+            ma20_str = f"{data['ma20']:,.0f}"
+            if data['ma20_ok']:
+                ma20_str = f"[green]{ma20_str} ✓[/green]"
+            else:
+                ma20_str = f"[red]{ma20_str} ✗[/red]"
+
+            # 거래량 증감 색상
+            vol_change_str = f"{data['volume_change_pct']:+.1f}%"
+            if data['volume_ok']:
+                vol_change_str = f"[green]{vol_change_str} ✓[/green]"
+            else:
+                vol_change_str = f"[red]{vol_change_str} ✗[/red]"
+
+            # 시그널 색상
+            signal_color = data['signal_color']
+            signal_str = f"[{signal_color}]{data['signal']}[/{signal_color}]"
+
+            table.add_row(
+                str(i),
+                data['code'],
+                data['name'],
+                f"{data['price']:,.0f}",
+                vwap_str,
+                ma20_str,
+                vol_change_str,
+                signal_str,
+                data['time']
+            )
+
+        # 실시간 모니터링 테이블 출력
+        console.print(table)
+        console.print()
+        console.print(f"[dim]다음 체크: 60초 후 | Ctrl+C: 종료[/dim]")
+
+    def check_entry_signal(self, stock_code: str):
+        """매수 신호 체크"""
+        try:
+            stock_info = self.validated_stocks.get(stock_code)
+            if not stock_info:
+                return
+
+            # 최신 데이터 다운로드
+            ticker = f"{stock_code}.KS"
+            df = download_stock_data(ticker, days=1)
+
+            if df is None or len(df) < 50:
+                return
+
+            # VWAP 계산 및 신호 생성
+            df = self.analyzer.calculate_vwap(df)
+            df = self.analyzer.calculate_atr(df)
+
+            signal_config = self.config.get_signal_generation_config()
+            df = self.analyzer.generate_signals(df, **signal_config)
+
+            # 최신 신호 확인
+            latest_signal = df['signal'].iloc[-1]
+            current_price = df['close'].iloc[-1]
+            current_vwap = df['vwap'].iloc[-1]
+
+            if latest_signal == 1:  # 매수 신호
+                # 사전 검증 재확인
+                validation = validate_stock_for_trading(
+                    stock_code,
+                    stock_info['name'],
+                    self.validator
+                )
+
+                if validation.get('allowed'):
+                    self.execute_buy(stock_code, stock_info['name'], current_price, df)
+
+        except Exception as e:
+            console.print(f"[red]❌ {stock_code} 매수 신호 체크 실패: {e}[/red]")
+
+    def check_exit_signal(self, stock_code: str):
+        """매도 신호 체크"""
+        try:
+            position = self.positions.get(stock_code)
+            if not position:
+                return
+
+            # 최신 데이터 다운로드
+            ticker = f"{stock_code}.KS"
+            df = download_stock_data(ticker, days=1)
+
+            if df is None or len(df) < 50:
+                return
+
+            # VWAP 계산 및 신호 생성
+            df = self.analyzer.calculate_vwap(df)
+            df = self.analyzer.calculate_atr(df)
+
+            signal_config = self.config.get_signal_generation_config()
+            df = self.analyzer.generate_signals(df, **signal_config)
+
+            # 최신 신호 확인
+            latest_signal = df['signal'].iloc[-1]
+            current_price = df['close'].iloc[-1]
+
+            # 수익률 계산
+            profit_pct = ((current_price - position['entry_price']) / position['entry_price']) * 100
+
+            # 매도 조건 체크
+            should_exit = False
+            exit_reason = ""
+
+            # 1. VWAP 하향 돌파
+            if latest_signal == -1:
+                should_exit = True
+                exit_reason = "VWAP 하향 돌파"
+
+            # 2. 트레일링 스탑 체크
+            trailing_config = self.config.get_trailing_config()
+            atr = df['atr'].iloc[-1] if 'atr' in df.columns else None
+
+            trailing_result = self.analyzer.check_trailing_stop(
+                current_price=current_price,
+                avg_price=position['entry_price'],
+                highest_price=position.get('highest_price', position['entry_price']),
+                trailing_active=position.get('trailing_active', False),
+                atr=atr,
+                **trailing_config
+            )
+
+            if trailing_result[0]:  # should_exit
+                should_exit = True
+                exit_reason = trailing_result[3]  # exit_reason
+
+            # 매도 실행
+            if should_exit:
+                self.execute_sell(stock_code, current_price, profit_pct, exit_reason)
+
+            # 최고가 갱신
+            if current_price > position.get('highest_price', position['entry_price']):
+                position['highest_price'] = current_price
+
+        except Exception as e:
+            console.print(f"[red]❌ {stock_code} 매도 신호 체크 실패: {e}[/red]")
+
+    def execute_buy(self, stock_code: str, stock_name: str, price: float, df: pd.DataFrame):
+        """매수 실행 (실계좌 기반 리스크 관리)"""
+        console.print()
+        console.print("=" * 80, style="green")
+        console.print(f"🔔 매수 신호 발생: {stock_name} ({stock_code})", style="bold green")
+        console.print(f"   가격: {price:,.0f}원")
+        console.print(f"   시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+        # 실계좌 기반 포지션 크기 계산
+        if not self.risk_manager:
+            console.print("[red]❌ 리스크 관리자가 초기화되지 않았습니다.[/red]")
+            return
+
+        # 손절가 계산 (임시로 -3%)
+        stop_loss_price = price * 0.97
+
+        # 포지션 크기 계산
+        position_calc = self.risk_manager.calculate_position_size(
+            current_balance=self.current_cash,
+            current_price=price,
+            stop_loss_price=stop_loss_price,
+            entry_confidence=1.0
+        )
+
+        quantity = position_calc['quantity']
+        amount = position_calc['investment']
+
+        # 진입 가능 여부 확인
+        can_enter, reason = self.risk_manager.can_open_position(
+            current_balance=self.current_cash,
+            current_positions_value=self.positions_value,
+            position_count=len(self.positions),
+            position_size=amount
+        )
+
+        if not can_enter:
+            console.print(f"[yellow]⚠️  매수 불가: {reason}[/yellow]")
+            console.print("=" * 80, style="yellow")
+            return
+
+        console.print(f"[dim]📊 포지션 계산:[/dim]")
+        console.print(f"[dim]   - 투자금액: {amount:,.0f}원 (리스크: {position_calc['risk_amount']:,.0f}원)[/dim]")
+        console.print(f"[dim]   - 매수수량: {quantity}주[/dim]")
+        console.print(f"[dim]   - 포지션비율: {position_calc['position_ratio']:.1f}%[/dim]")
+
+        # 포지션 생성 (실제로는 API 호출)
+        entry_time = datetime.now()
+        self.positions[stock_code] = {
+            'name': stock_name,
+            'entry_price': price,
+            'entry_time': entry_time,
+            'quantity': quantity,
+            'highest_price': price,
+            'trailing_active': False,
+            'trade_id': None  # DB trade_id 저장용
+        }
+
+        # DB에 매수 거래 저장
+        stock_info = self.validated_stocks.get(stock_code, {})
+        stats = stock_info.get('stats', {})
+
+        trade_data = {
+            'stock_code': stock_code,
+            'stock_name': stock_name,
+            'trade_type': 'BUY',
+            'trade_time': entry_time.isoformat(),
+            'price': price,
+            'quantity': quantity,
+            'amount': amount,
+            'condition_name': 'VWAP',  # TODO: 실제 조건식 이름
+            'strategy_config': 'hybrid',
+            'entry_reason': 'VWAP 상향 돌파',
+            'vwap_validation_score': stats.get('avg_profit_pct', 0),
+            'sim_win_rate': stats.get('win_rate'),
+            'sim_avg_profit': stats.get('avg_profit_pct'),
+            'sim_trade_count': stats.get('total_trades'),
+            'sim_profit_factor': stats.get('profit_factor'),
+            'news_sentiment': None,  # TODO: 뉴스 분석 연동
+            'news_impact': None,
+            'news_keywords': [],
+            'news_titles': []
+        }
+
+        trade_id = self.db.insert_trade(trade_data)
+        self.positions[stock_code]['trade_id'] = trade_id
+
+        # 리스크 관리자에 거래 기록
+        self.risk_manager.record_trade(
+            stock_code=stock_code,
+            stock_name=stock_name,
+            trade_type='BUY',
+            quantity=quantity,
+            price=price,
+            realized_pnl=0
+        )
+
+        console.print(f"✅ 매수 완료 (DB ID: {trade_id})")
+        console.print("=" * 80, style="green")
+        console.print()
+
+        # 잔고 업데이트 (비동기 실행은 나중에)
+        # TODO: asyncio.create_task(self.update_account_balance())
+
+    def execute_sell(self, stock_code: str, price: float, profit_pct: float, reason: str):
+        """매도 실행"""
+        position = self.positions.get(stock_code)
+        if not position:
+            return
+
+        holding_duration = (datetime.now() - position['entry_time']).seconds
+        realized_profit = (price - position['entry_price']) * position['quantity']
+
+        console.print()
+        console.print("=" * 80, style="red")
+        console.print(f"🔔 매도 신호 발생: {position['name']} ({stock_code})", style="bold red")
+        console.print(f"   매수가: {position['entry_price']:,.0f}원")
+        console.print(f"   매도가: {price:,.0f}원")
+        console.print(f"   수익률: {profit_pct:+.2f}%")
+        console.print(f"   실현손익: {realized_profit:+,.0f}원")
+        console.print(f"   사유: {reason}")
+        console.print(f"   보유시간: {holding_duration // 60}분")
+
+        # DB에 매도 정보 저장 (매수 시 생성한 trade 업데이트)
+        trade_id = position.get('trade_id')
+        if trade_id:
+            # 매도 거래 추가 (SELL)
+            sell_trade = {
+                'stock_code': stock_code,
+                'stock_name': position['name'],
+                'trade_type': 'SELL',
+                'trade_time': datetime.now().isoformat(),
+                'price': price,
+                'quantity': position['quantity'],
+                'amount': price * position['quantity'],
+                'exit_reason': reason,
+                'realized_profit': realized_profit,
+                'profit_rate': profit_pct,
+                'holding_duration': holding_duration
+            }
+            self.db.insert_trade(sell_trade)
+
+        # 리스크 관리자에 거래 기록
+        self.risk_manager.record_trade(
+            stock_code=stock_code,
+            stock_name=position['name'],
+            trade_type='SELL',
+            quantity=position['quantity'],
+            price=price,
+            realized_pnl=realized_profit
+        )
+
+        # 포지션 제거 (실제로는 API 호출)
+        del self.positions[stock_code]
+
+        console.print(f"✅ 매도 완료")
+        console.print("=" * 80, style="red")
+        console.print()
+
+        # 잔고 업데이트 (비동기 실행은 나중에)
+        # TODO: asyncio.create_task(self.update_account_balance())
+
+    def shutdown(self):
+        """시스템 종료"""
+        self.running = False
+
+        console.print()
+        console.print("=" * 120, style="yellow")
+        console.print(f"{'시스템 종료 중...':^120}", style="bold yellow")
+        console.print("=" * 120, style="yellow")
+        console.print()
+
+        # 미청산 포지션 표시
+        if self.positions:
+            console.print(f"[yellow]⚠️  미청산 포지션: {len(self.positions)}개[/yellow]")
+
+            for code, pos in self.positions.items():
+                console.print(f"  - {pos['name']} ({code}): {pos['entry_price']:,.0f}원에 매수")
+
+            console.print()
+
+        console.print("✅ 시스템 종료 완료")
+
+    async def wait_until_time(self, target_hour: int, target_minute: int):
+        """특정 시각까지 대기"""
+        import sys
+
+        # 목표 시간 계산
+        now = datetime.now()
+
+        if now.weekday() >= 5:  # 토요일(5), 일요일(6)
+            # 다음 월요일 계산
+            days_until_monday = 7 - now.weekday()
+            next_monday = now + timedelta(days=days_until_monday)
+            target_time = next_monday.replace(hour=target_hour, minute=target_minute, second=0, microsecond=0)
+        else:
+            # 평일
+            target_time = now.replace(hour=target_hour, minute=target_minute, second=0, microsecond=0)
+
+            # 이미 목표 시간을 지났으면 다음날
+            if now >= target_time:
+                target_time += timedelta(days=1)
+                # 금요일이면 다음 월요일로
+                if target_time.weekday() >= 5:
+                    days_until_monday = 7 - target_time.weekday()
+                    target_time += timedelta(days=days_until_monday)
+
+        # 처음 한 번만 목표 시간 출력
+        console.print(f"[yellow]⏰ 목표: {target_time.strftime('%m/%d %H:%M')} ({target_time.strftime('%A')})[/yellow]")
+
+        # 대기 루프
+        while True:
+            now = datetime.now()
+            time_diff = (target_time - now).total_seconds()
+
+            if time_diff <= 0:
+                # 줄바꿈 후 완료 메시지
+                print()
+                console.print(f"[green]✓ {target_hour:02d}:{target_minute:02d} 도달![/green]")
+                break
+
+            hours = int(time_diff // 3600)
+            minutes = int((time_diff % 3600) // 60)
+
+            # 같은 줄에서 업데이트 (carriage return 사용)
+            sys.stdout.write(f"\r⏰ 대기 중... 남은 시간: {hours:02d}시간 {minutes:02d}분   ")
+            sys.stdout.flush()
+
+            # asyncio.sleep 사용 (KeyboardInterrupt 감지 가능)
+            await asyncio.sleep(60)
+
+    async def daily_routine(self):
+        """일일 루틴 실행 (하루에 한 번만)"""
+        console.print()
+        console.print("=" * 120, style="bold yellow")
+        console.print(f"{'📅 일일 자동매매 루틴 시작':^120}", style="bold yellow")
+        console.print("=" * 120, style="bold yellow")
+        console.print()
+
+        # 1. 08:50까지 대기 (이미 지났으면 바로 시작)
+        now = datetime.now()
+        target_time = now.replace(hour=8, minute=50, second=0, microsecond=0)
+
+        if now < target_time:
+            # 아직 08:50 전이면 대기
+            await self.wait_until_time(8, 50)
+        else:
+            # 이미 08:50 지났으면 바로 시작
+            console.print(f"[cyan]⏰ 현재 시간: {now.strftime('%H:%M')} - 바로 필터링 시작합니다.[/cyan]")
+            console.print()
+
+        try:
+            # 2. WebSocket 연결 및 로그인
+            console.print("\n[1단계] 시스템 초기화")
+            await self.connect()
+
+            if not await self.login():
+                console.print("[red]❌ 로그인 실패. 내일 다시 시도합니다.[/red]")
+                return
+
+            # 3. 계좌 정보 초기화
+            await self.initialize_account()
+
+            # 4. 조건식 목록 조회
+            if not await self.get_condition_list():
+                console.print("[red]❌ 조건식 조회 실패. 내일 다시 시도합니다.[/red]")
+                return
+
+            # 5. 1차 + 2차 필터링 (08:50 ~ 09:00)
+            console.print("\n[2단계] 필터링 시작 (08:50)")
+            await self.run_condition_filtering()
+
+            # 선정 종목이 없으면 오늘은 종료
+            if not self.watchlist:
+                console.print("[yellow]⚠️  선정된 종목이 없습니다. 오늘 거래 없음.[/yellow]")
+                return
+
+            # 6. WebSocket 종료 (REST API만 사용)
+            if self.websocket:
+                await self.websocket.close()
+
+            # 7. 09:00까지 대기 (이미 지났으면 바로 시작)
+            now = datetime.now()
+            market_open = now.replace(hour=9, minute=0, second=0, microsecond=0)
+
+            if now < market_open:
+                # 아직 09:00 전이면 대기
+                await self.wait_until_time(9, 0)
+            else:
+                # 이미 09:00 지났으면 바로 시작
+                console.print(f"[cyan]⏰ 현재 시간: {now.strftime('%H:%M')} - 바로 모니터링 시작합니다.[/cyan]")
+                console.print()
+
+            # 8. 실시간 모니터링 및 매매 (09:00 ~ 15:30)
+            console.print("\n[3단계] 실시간 모니터링 시작")
+            await self.monitor_and_trade()
+
+        except Exception as e:
+            console.print(f"[red]❌ 루틴 실행 오류: {e}[/red]")
+            import traceback
+            traceback.print_exc()
+        finally:
+            # WebSocket 정리
+            if self.websocket:
+                await self.websocket.close()
+
+    async def run(self):
+        """전체 시스템 실행 (무한 반복)"""
+        console.print()
+        console.print("=" * 120, style="bold green")
+        console.print(f"{'🚀 자동매매 시스템 시작 (스케줄링 모드)':^120}", style="bold green")
+        console.print("=" * 120, style="bold green")
+        console.print()
+        console.print("[cyan]매일 08:50 필터링 → 09:00 모니터링 시작[/cyan]")
+        console.print("[dim]Ctrl+C를 눌러 종료할 수 있습니다.[/dim]")
+        console.print()
+
+        try:
+            while True:
+                # 일일 루틴 실행 (08:50부터 15:30까지)
+                await self.daily_routine()
+
+                # 루틴 종료 후 다음날까지 대기
+                console.print()
+                console.print("[green]✅ 오늘 거래 종료[/green]")
+                console.print("[cyan]💤 다음 사이클을 시작합니다...[/cyan]")
+                console.print()
+
+        except KeyboardInterrupt:
+            console.print()
+            console.print("[yellow]⚠️  사용자가 중지했습니다.[/yellow]")
+        except Exception as e:
+            console.print(f"[red]❌ 시스템 오류: {e}[/red]")
+            import traceback
+            traceback.print_exc()
+        finally:
+            if self.websocket:
+                await self.websocket.close()
+
+
+async def main():
+    """메인 실행"""
+    console.print()
+    console.print("=" * 120, style="bold green")
+    console.print(f"{'키움 조건식 → VWAP 필터링 → 자동매매 통합 시스템':^120}", style="bold green")
+    console.print("=" * 120, style="bold green")
+    console.print()
+
+    # API 클라이언트 생성
+    console.print("[초기화] API 클라이언트 생성")
+    api = KiwoomAPI()
+    console.print("  ✓ 완료")
+    console.print()
+
+    # AccessToken 발급
+    console.print("[초기화] AccessToken 발급")
+    api.get_access_token()
+
+    if not api.access_token:
+        console.print("[red]❌ 토큰 발급 실패[/red]")
+        return
+
+    console.print("  ✓ 완료")
+    console.print()
+
+    # 조건식 인덱스 (자동으로 "전략" 키워드 포함된 조건식 선택)
+    CONDITION_INDICES = []  # 빈 리스트로 시작 → get_condition_list()에서 자동 설정
+
+    # 통합 시스템 생성 및 실행
+    system = IntegratedTradingSystem(api.access_token, api, CONDITION_INDICES)
+
+    # Ctrl+C 핸들러 등록
+    def signal_handler(sig, frame):
+        console.print()
+        console.print("[yellow]⚠️  종료 신호 수신[/yellow]")
+        system.running = False
+
+    signal.signal(signal.SIGINT, signal_handler)
+
+    # 시스템 실행
+    await system.run()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

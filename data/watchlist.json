@@ -1,0 +1,23 @@
+[
+  {
+    "stock_code": "005930",
+    "stock_name": "삼성전자",
+    "last_check_time": null,
+    "last_score": 0.0,
+    "last_signal": "HOLD"
+  },
+  {
+    "stock_code": "000660",
+    "stock_name": "SK하이닉스",
+    "last_check_time": null,
+    "last_score": 0.0,
+    "last_signal": "HOLD"
+  },
+  {
+    "stock_code": "035420",
+    "stock_name": "NAVER",
+    "last_check_time": null,
+    "last_score": 0.0,
+    "last_signal": "HOLD"
+  }
+]

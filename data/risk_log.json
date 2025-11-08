@@ -1,0 +1,47 @@
+{
+  "initial_balance": 384285.0,
+  "today": "2025-11-07",
+  "daily_trades": [
+    {
+      "timestamp": "2025-11-07T11:43:29.081645",
+      "stock_code": "011930",
+      "stock_name": "신성이엔지",
+      "type": "SELL",
+      "quantity": 20,
+      "price": 1722.0,
+      "amount": 34440.0,
+      "realized_pnl": -6160.0
+    },
+    {
+      "timestamp": "2025-11-07T12:10:55.741907",
+      "stock_code": "011930",
+      "stock_name": "신성이엔지",
+      "type": "SELL",
+      "quantity": 20,
+      "price": 1728.0,
+      "amount": 34560.0,
+      "realized_pnl": -6040.0
+    },
+    {
+      "timestamp": "2025-11-07T12:17:37.449044",
+      "stock_code": "011930",
+      "stock_name": "신성이엔지",
+      "type": "SELL",
+      "quantity": 20,
+      "price": 1728.0,
+      "amount": 34560.0,
+      "realized_pnl": -6040.0
+    },
+    {
+      "timestamp": "2025-11-07T12:28:30.067063",
+      "stock_code": "009420",
+      "stock_name": "한올바이오파마",
+      "type": "SELL",
+      "quantity": 5,
+      "price": 34500.0,
+      "amount": 172500.0,
+      "realized_pnl": -59000.0
+    }
+  ],
+  "daily_realized_pnl": -77240.0
+}

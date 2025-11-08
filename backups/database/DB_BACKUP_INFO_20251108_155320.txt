@@ -1,0 +1,5 @@
+Backup Date: 20251108_155320
+Databases Backed Up: 1
+Backup Location: backups/database
+Files:
+-rw-r--r-- 1 greatbps greatbps 0 11월  8 15:53 backups/database/kiwoom_trading.db.20251108_155320

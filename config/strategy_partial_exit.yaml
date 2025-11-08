@@ -1,0 +1,77 @@
+# 부분 청산 전략 설정
+# - 다단계 이익 실현
+# - 균형잡힌 필터링
+# - 적절한 재진입 대기 (30분)
+
+trailing:
+  activation_pct: 1.5        # 트레일링 활성화 수익률
+  ratio: 1.0                 # 트레일링 비율
+  stop_loss_pct: 1.0         # 기본 손절
+
+  use_profit_tier: true      # 목표가 도달 후 강화 ✅
+  profit_tier_threshold: 4.0 # 4% 도달 시 강화 (부분 청산 후)
+  profit_tier_ratio: 0.5     # 강화 트레일링 비율
+
+  use_atr_based: false
+  atr_multiplier: 1.5
+
+filters:
+  use_trend_filter: true
+  trend_period: 20
+  use_volume_filter: true
+  volume_multiplier: 1.2
+  use_breakout_confirm: false
+  breakout_confirm_candles: 2
+  use_volume_value_filter: false
+  min_volume_value: 1000000000
+  use_market_momentum: false
+  use_daily_trend_filter: false
+  use_ema_alignment: true
+  use_rsi_filter: true
+  rsi_threshold: 50.0
+  use_volatility_filter: false
+  min_atr_pct: 0.5
+  max_atr_pct: 5.0
+
+time_filter:
+  use_time_filter: false
+  market_open: "09:00"
+  market_close: "15:20"
+  avoid_early_minutes: 10
+  avoid_late_minutes: 10
+
+re_entry:
+  use_cooldown: true
+  cooldown_minutes: 30       # 적절한 재진입 대기
+
+risk_management:
+  initial_capital: 10000000
+  daily_max_loss_pct: 2.0
+  max_drawdown_pct: 10.0
+  max_trades_per_day: 5
+  max_consecutive_losses: 3
+  position_risk_pct: 1.0
+  min_rr_ratio: 1.5
+
+partial_exit:
+  enabled: true              # 부분 청산 핵심 전략 ✅
+  tiers:
+    - profit_pct: 1.2        # +1.2%에 40% 청산 (빠른 1차 이익 실현)
+      exit_ratio: 0.4
+    - profit_pct: 2.5        # +2.5%에 30% 청산 (2차 이익 실현)
+      exit_ratio: 0.3
+    - profit_pct: 4.0        # +4.0%에 20% 청산 (3차 이익 실현)
+      exit_ratio: 0.2
+    # 나머지 10%는 트레일링 스탑으로 대박 기회 보존
+
+logging:
+  enabled: true
+  log_dir: "logs"
+  log_level: "INFO"
+
+test:
+  stock_symbols:
+    - "005930"
+    - "015760"
+  data_days: 7
+  interval: "5m"

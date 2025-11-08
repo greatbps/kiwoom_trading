@@ -1,0 +1,70 @@
+# 공격적 전략 설정
+# - 짧은 재진입 대기 (10분)
+# - 강화된 트레일링 (0.5%)
+# - 빠른 트레일링 활성화 (1.0%)
+
+trailing:
+  activation_pct: 1.0        # 트레일링 활성화 수익률 (1.0%로 낮춤 - 빨리 활성화)
+  ratio: 0.7                 # 트레일링 비율 (0.7%로 강화 - 더 타이트)
+  stop_loss_pct: 1.0         # 기본 손절
+
+  use_profit_tier: true      # 목표가 도달 후 강화 ✅
+  profit_tier_threshold: 2.5 # 강화 트레일링 시작 (2.5%로 낮춤)
+  profit_tier_ratio: 0.4     # 강화 트레일링 비율 (0.4%로 더 강화)
+
+  use_atr_based: false
+  atr_multiplier: 1.5
+
+filters:
+  use_trend_filter: true
+  trend_period: 20
+  use_volume_filter: true
+  volume_multiplier: 1.2
+  use_breakout_confirm: false
+  breakout_confirm_candles: 2
+  use_volume_value_filter: false
+  min_volume_value: 1000000000
+  use_market_momentum: false
+  use_daily_trend_filter: false
+  use_ema_alignment: true
+  use_rsi_filter: true
+  rsi_threshold: 50.0
+  use_volatility_filter: false  # 필터 최소화
+  min_atr_pct: 0.5
+  max_atr_pct: 5.0
+
+time_filter:
+  use_time_filter: false     # 시간 제약 없음
+  market_open: "09:00"
+  market_close: "15:20"
+  avoid_early_minutes: 10
+  avoid_late_minutes: 10
+
+re_entry:
+  use_cooldown: true         # 재진입 대기 활성화 ✅
+  cooldown_minutes: 10       # 10분으로 짧게 (더 공격적)
+
+risk_management:
+  initial_capital: 10000000
+  daily_max_loss_pct: 3.0    # 일일 손실 한도 3%로 상향
+  max_drawdown_pct: 10.0
+  max_trades_per_day: 10     # 거래 횟수 10회로 증가
+  max_consecutive_losses: 4  # 연속 손실 4회까지 허용
+  position_risk_pct: 1.5     # 포지션 리스크 1.5%로 증가
+  min_rr_ratio: 1.5
+
+partial_exit:
+  enabled: false             # 부분 청산 비활성화 (풀 포지션 운용)
+  tiers: []
+
+logging:
+  enabled: true
+  log_dir: "logs"
+  log_level: "INFO"
+
+test:
+  stock_symbols:
+    - "005930"
+    - "015760"
+  data_days: 7
+  interval: "5m"

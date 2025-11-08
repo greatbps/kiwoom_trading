@@ -1,0 +1,54 @@
+{
+  "start_time": "2025-10-25T18:10:05.108161",
+  "signals": 12,
+  "entries": 12,
+  "exits": 10,
+  "filters_blocked": 0,
+  "risk_blocked": 0,
+  "end_time": "2025-10-25T18:10:10.665002",
+  "total_events": 34,
+  "stocks": {
+    "005930.KS": {
+      "signals": 2,
+      "entries": 2,
+      "exits": 1,
+      "total_profit": 6000.0
+    },
+    "035420.KS": {
+      "signals": 2,
+      "entries": 2,
+      "exits": 2,
+      "total_profit": -65000.0
+    },
+    "051910.KS": {
+      "signals": 1,
+      "entries": 1,
+      "exits": 1,
+      "total_profit": 375000.0
+    },
+    "035720.KS": {
+      "signals": 2,
+      "entries": 2,
+      "exits": 2,
+      "total_profit": 7000.0
+    },
+    "005380.KS": {
+      "signals": 2,
+      "entries": 2,
+      "exits": 1,
+      "total_profit": -2500.0
+    },
+    "000270.KS": {
+      "signals": 1,
+      "entries": 1,
+      "exits": 1,
+      "total_profit": 10000.0
+    },
+    "207940.KS": {
+      "signals": 2,
+      "entries": 2,
+      "exits": 2,
+      "total_profit": 170000.0
+    }
+  }
+}
