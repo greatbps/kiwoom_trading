@@ -75,13 +75,14 @@ fi
 
 echo ""
 echo -e "${BLUE}=====================================${NC}"
-echo -e "${BLUE}  모든 준비 완료! 시스템 시작...${NC}"
+echo -e "${BLUE}  모든 준비 완료!${NC}"
 echo -e "${BLUE}=====================================${NC}"
 echo ""
-echo -e "${YELLOW}※ 중지하려면 Ctrl+C를 누르세요${NC}"
-echo ""
 
-# 5. 메인 메뉴 실행 (통합 메뉴)
+# 5. 메인 메뉴 실행
+echo -e "${GREEN}메인 메뉴를 시작합니다...${NC}"
+echo -e "${YELLOW}※ 종료하려면 Ctrl+C를 누르세요${NC}"
+echo ""
 python main_menu.py
 
 # 종료 코드 확인

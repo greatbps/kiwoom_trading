@@ -5,7 +5,7 @@
 - 수급/기본: 각 50점 만점 (업종 상대평가)
 - 시장 상황(Market Regime)에 따른 보정
 """
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from .news_analyzer import NewsAnalyzer
 from .sentiment_analyzer import SentimentAnalyzer
 from .technical_analyzer import TechnicalAnalyzer
@@ -37,6 +37,53 @@ class AnalysisEngine:
             'neutral': 1.0,     # 중립
             'bear': 0.8         # 약세장 (보수적 접근)
         }
+
+        # 키워드 감성 분석용 키워드 (docs/news_collector.py 기반)
+        self.positive_keywords = [
+            "상승", "증가", "호조", "개선", "성장", "확대", "신고가", "돌파", "수혜", "기대",
+            "긍정", "유리", "강세", "급등", "상승세", "반등", "회복", "성공", "선전", "대박",
+            "실적개선", "매출증가", "이익증가", "시장점유율", "신제품", "수주", "계약", "협력"
+        ]
+
+        self.negative_keywords = [
+            "하락", "감소", "부진", "악화", "축소", "신저가", "하락세", "급락", "폭락",
+            "부정", "불리", "약세", "우려", "위험", "손실", "적자", "부실", "위기", "충격",
+            "실적악화", "매출감소", "이익감소", "규제", "조사", "소송", "분쟁", "적자"
+        ]
+
+    def _calculate_keyword_sentiment(self, news_list: List[Dict]) -> float:
+        """
+        키워드 기반 감성 점수 계산 (docs/news_collector.py 로직 적용)
+
+        Args:
+            news_list: 뉴스 리스트
+
+        Returns:
+            감성 점수 (-1.0 ~ 1.0)
+        """
+        total_sentiment = 0.0
+        total_words = 0
+
+        for news in news_list:
+            # title과 description 모두 분석
+            text = f"{news.get('title', '')} {news.get('description', '')}".lower()
+            words = text.split()
+            total_words += len(words)
+
+            for word in words:
+                # 긍정 키워드 체크
+                if any(pos in word for pos in self.positive_keywords):
+                    total_sentiment += 1
+                # 부정 키워드 체크
+                elif any(neg in word for neg in self.negative_keywords):
+                    total_sentiment -= 1
+
+        if total_words == 0:
+            return 0.0
+
+        # -1 ~ 1 범위로 정규화
+        sentiment_score = total_sentiment / total_words
+        return max(-1.0, min(1.0, sentiment_score * 10))  # 10배 증폭 후 제한
 
     def _load_weights(self) -> Dict[str, float]:
         """
@@ -81,7 +128,11 @@ class AnalysisEngine:
             news_list = news_data.get('news_list', [])
             frequency_score = news_data.get('frequency_score', 50)
 
+            # 디버깅: 뉴스 수집 결과
+            print(f"  [dim]뉴스 수집: {len(news_list)}건[/dim]")
+
             if not news_list:
+                print(f"  [dim]⚠️  뉴스 없음 → 기본점수 50점[/dim]")
                 return {
                     'score': 50,
                     'sentiment': 'neutral',
@@ -89,34 +140,45 @@ class AnalysisEngine:
                     'signals': ['뉴스 데이터 없음']
                 }
 
-            # 감성 분석
-            sentiment_result = self.sentiment_analyzer.analyze_sentiment(news_list, stock_name)
+            # 감성 분석 (AI 대신 키워드 기반 분석 사용)
+            print(f"  [dim]⚠️  AI 감성분석 스킵 (할당량 부족), 키워드 기반 분석 사용[/dim]")
 
-            # 최종 점수 계산 (sentiment_analyzer에서 이미 계산됨)
-            final_score = sentiment_result.get('final_score', 50)
+            # 키워드 기반 감성 점수 계산
+            sentiment_score = self._calculate_keyword_sentiment(news_list)
 
-            # 재료 분석 시그널 생성
+            # 감성 점수(-1~1)를 0~100으로 변환
+            sentiment_normalized = (sentiment_score + 1) * 50  # -1→0, 0→50, 1→100
+
+            # 최종 점수 = 뉴스 빈도 50% + 감성 점수 50%
+            final_score = (frequency_score * 0.5 + sentiment_normalized * 0.5)
+
+            # 감성 레벨 판단
+            if sentiment_score >= 0.3:
+                sentiment_level = "positive"
+            elif sentiment_score <= -0.3:
+                sentiment_level = "negative"
+            else:
+                sentiment_level = "neutral"
+
+            print(f"  [dim]키워드 감성: {sentiment_level} ({sentiment_score:.2f}), 최종 점수: {final_score:.1f}[/dim]")
+
+            # 시그널 생성
             signals = [
-                f"감성: {sentiment_result.get('sentiment', 'neutral')}",
-                f"신뢰도: {sentiment_result.get('confidence', 0)}%",
-                f"영향도: {sentiment_result.get('impact', 0)}/10",
-                f"뉴스 건수: {len(news_list)}건"
+                f"감성: {sentiment_level} (키워드 기반)",
+                f"뉴스 건수: {len(news_list)}건",
+                f"빈도 점수: {frequency_score:.0f}",
+                f"감성 점수: {sentiment_normalized:.0f}"
             ]
-
-            # 재료 분석이 있으면 추가
-            if 'material_analysis' in sentiment_result and sentiment_result['material_analysis'].get('has_material'):
-                mat = sentiment_result['material_analysis']
-                timeframe_kr = {'SHORT': '단기', 'MID': '중기', 'LONG': '장기', 'NONE': '없음'}.get(mat.get('timeframe', 'NONE'), '없음')
-                signals.append(f"재료: {timeframe_kr} (배수: {mat.get('multiplier', 1.0)}x)")
 
             return {
                 'score': final_score,
-                'sentiment': sentiment_result.get('sentiment', 'neutral'),
-                'confidence': sentiment_result.get('confidence', 0),
-                'impact': sentiment_result.get('impact', 0),
+                'sentiment': sentiment_level,
+                'confidence': abs(sentiment_score) * 100,  # 감성 강도를 신뢰도로
+                'impact': min(len(news_list) * 2, 10),  # 뉴스 개수 기반 영향도 (최대 10)
                 'news_count': len(news_list),
                 'frequency_score': frequency_score,
-                'material_analysis': sentiment_result.get('material_analysis'),  # 재료 분석 데이터 포함
+                'sentiment_score_raw': sentiment_score,
+                'material_analysis': None,
                 'signals': signals
             }
 

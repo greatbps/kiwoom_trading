@@ -4,14 +4,14 @@
 trailing:
   activation_pct: 1.5        # 문서 명세: 트레일링 활성화 +1.5%
   ratio: 1.0                 # 문서 명세: 트레일링 비율 -1.0%
-  stop_loss_pct: 1.0         # 문서 명세: 기본 손절 -1.0%
+  stop_loss_pct: 3.0         # 문서 명세: 기본 손절 -3.0%
 
   use_profit_tier: true      # 큰 수익 시 강화 ✅
-  profit_tier_threshold: 3.5 # +3.5% 도달 시
+  profit_tier_threshold: 6.0 # 🔧 FIX: +6% 도달 시 (문서 명세 반영)
   profit_tier_ratio: 0.5     # 0.5%로 강화
 
-  use_atr_based: false
-  atr_multiplier: 1.5
+  use_atr_based: true        # 🔧 FIX: ATR 기반 트레일링 활성화 (문서 명세)
+  atr_multiplier: 2.0        # 🔧 FIX: ATR×2 (문서 명세) [복원: 1.5→2.0]
 
 filters:
   use_trend_filter: true
@@ -28,18 +28,18 @@ filters:
 
   use_market_momentum: false
 
-  use_daily_trend_filter: false
+  use_daily_trend_filter: true
 
   use_volatility_filter: true   # 위험 종목 제외 ✅
   min_atr_pct: 0.5
   max_atr_pct: 4.5             # 너무 위험한 종목 배제
 
 time_filter:
-  use_time_filter: false       # 5분봉에는 시간 제약 과함
+  use_time_filter: true        # 🔧 FIX: 장 초반/마감 회피 활성화 (문서 명세)
   market_open: "09:00"
   market_close: "15:20"
-  avoid_early_minutes: 10
-  avoid_late_minutes: 10
+  avoid_early_minutes: 30      # 🔧 FIX: 09:30까지 회피 (문서 명세) [복원: 10→30]
+  avoid_late_minutes: 21       # 🔧 FIX: 14:59까지만 진입 (15:20-21=14:59) [복원: 10→21]
 
 re_entry:
   use_cooldown: true           # 재진입 방지 ✅
@@ -54,14 +54,39 @@ risk_management:
   position_risk_pct: 1.0
   min_rr_ratio: 1.5
 
+risk_control:
+  max_daily_loss_pct: 3.0      # SignalOrchestrator L0 필터용 (일일 손실 한도)
+  hard_stop_pct: 2.5           # 🔧 FIX: 비상 하드 스탑 -2.5% (거래 분석 기반 강화)
+  technical_stop_pct: 1.5      # 기술적 손절선 -1.5%
+
+  # 초기 실패 컷 (손익비 개선의 핵심)
+  early_failure:
+    enabled: true              # 활성화
+    window_minutes: 10         # 10분 이내 (더 빠르게)
+    loss_cut_pct: -0.5         # -0.5% 도달 시 즉시 컷 (더 타이트하게)
+
 partial_exit:
   enabled: true                # 부분 청산 핵심 전략 ✅
   tiers:
-    - profit_pct: 4.0          # 문서 명세: +4%에 40% 청산 (1차 익절)
+    - profit_pct: 4.0          # 🔧 FIX: 1차: +4%에 40% 청산 (문서 명세) [복원: 1.0→4.0]
       exit_ratio: 0.4
-    - profit_pct: 6.0          # 문서 명세: +6%에 40% 청산 (2차 익절)
+    - profit_pct: 6.0          # 🔧 FIX: 2차: +6%에 40% 청산 (문서 명세) [복원: 2.0→6.0]
       exit_ratio: 0.4
-    # 나머지 20%는 트레일링 스탑으로 대박 기회 보존
+    # 나머지 20%는 ATR×2 트레일링 스톱으로 큰 수익 추구 (문서 명세)
+
+trailing_stop:
+  activation_profit_pct: 2.0   # +2.0% 도달 시 트레일링 활성화 [수정: 1.5→2.0]
+  distance_pct: 1.5            # 최고가 대비 -1.5% 트레일링 [수정: 1.0→1.5]
+  min_lock_profit_pct: 1.0     # 최소 +1.0% 수익 보장 [수정: 0.5→1.0]
+
+vwap_exit:
+  profit_threshold_for_ignore: 2.0  # +2.0% 이상에서는 VWAP 무시
+  multi_condition_required: true    # 다중 조건 필요 (VWAP 단독 청산 방지)
+
+time_based_exit:
+  loss_breakeven_exit_time: "15:00:00"  # 🔧 FIX: 15:00 전량 강제 청산 (문서 명세) [복원: 14:30→15:00]
+  final_force_exit_time: "15:00:00"     # 🔧 FIX: 15:00 전량 강제 청산 (문서 명세)
+  loss_breakeven_threshold_pct: 0.0     # 전량 청산으로 통일
 
 logging:
   enabled: true

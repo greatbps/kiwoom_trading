@@ -98,6 +98,12 @@ def run_simulation_with_config(config_path: str, stock_data_cache: dict):
         # Signal generation config
         signal_config = config.get_signal_generation_config()
         trailing_config = config.get_trailing_config()
+        trailing_kwargs = {
+            'use_atr_based': trailing_config.get('use_atr_based', False),
+            'atr_multiplier': trailing_config.get('atr_multiplier', 1.5),
+            'use_profit_tier': trailing_config.get('use_profit_tier', False),
+            'profit_tier_threshold': trailing_config.get('profit_tier_threshold', 3.0)
+        }
         partial_config = config.get_partial_exit_config()
 
         # VWAP, ATR 계산
@@ -207,7 +213,7 @@ def run_simulation_with_config(config_path: str, stock_data_cache: dict):
                     highest_price=position['highest_price'],
                     trailing_active=position['trailing_active'],
                     atr=atr,
-                    **trailing_config
+                    **trailing_kwargs
                 )
 
                 position['trailing_active'] = trailing_active

@@ -60,7 +60,9 @@ class SentimentAnalyzer:
 
         self.client = OpenAI(
             api_key=self.api_key,
-            base_url="https://api.deepseek.com"
+            base_url="https://api.deepseek.com",
+            max_retries=0,  # 재시도 비활성화 (타임아웃 우선)
+            timeout=3.0     # 3초 타임아웃
         )
 
     def _init_gpt(self):
@@ -69,7 +71,11 @@ class SentimentAnalyzer:
         if not self.api_key:
             raise ValueError("OpenAI API 키가 설정되지 않았습니다.")
 
-        self.client = OpenAI(api_key=self.api_key)
+        self.client = OpenAI(
+            api_key=self.api_key,
+            max_retries=0,  # 재시도 비활성화 (타임아웃 우선)
+            timeout=3.0     # 3초 타임아웃
+        )
 
     def analyze_sentiment(self, news_list: List[Dict], stock_name: str, max_news: int = 5) -> Dict:
         """
@@ -99,10 +105,12 @@ class SentimentAnalyzer:
         analysis = self._call_ai_api(news_text, stock_name)
 
         if not analysis:
+            print(f"    [dim]⚠️  {self.provider.upper()} AI 응답 없음 (타임아웃 or 실패) → 기본점수 50점[/dim]")
             return self._get_empty_result()
 
         # 3단계: 최종 점수 계산 (재료 점수 반영)
         final_score = self._calculate_final_score(analysis, len(news_list), material_result)
+        print(f"    [dim]✓ {self.provider.upper()} 분석 성공: sentiment_score={analysis.get('sentiment_score', 0)}, final_score={final_score}[/dim]")
 
         return {
             **analysis,
@@ -154,46 +162,88 @@ class SentimentAnalyzer:
             return None
 
     def _call_gemini(self, news_text: str, stock_name: str) -> Optional[Dict]:
-        """Gemini API 호출"""
-        prompt = self._create_prompt(news_text, stock_name)
-        response = self.model.generate_content(prompt)
-        result_text = response.text.strip()
-        return self._parse_json_response(result_text)
+        """Gemini API 호출 (타임아웃 3초)"""
+        import signal
+
+        def timeout_handler(signum, frame):
+            raise TimeoutError("Gemini API 타임아웃 (3초)")
+
+        try:
+            # 타임아웃 설정 (3초)
+            signal.signal(signal.SIGALRM, timeout_handler)
+            signal.alarm(3)
+
+            prompt = self._create_prompt(news_text, stock_name)
+            response = self.model.generate_content(prompt)
+            result_text = response.text.strip()
+
+            # 타임아웃 해제
+            signal.alarm(0)
+
+            return self._parse_json_response(result_text)
+        except TimeoutError as e:
+            print(f"⚠️  Gemini API 타임아웃 (3초 초과)")
+            signal.alarm(0)  # 타임아웃 해제
+            return None
 
     def _call_deepseek(self, news_text: str, stock_name: str) -> Optional[Dict]:
-        """DeepSeek API 호출"""
+        """DeepSeek API 호출 (타임아웃 3초, 재시도 없음)"""
+        from openai import APITimeoutError, APIError
         prompt = self._create_prompt(news_text, stock_name)
 
-        response = self.client.chat.completions.create(
-            model="deepseek-chat",
-            messages=[
-                {"role": "system", "content": "당신은 주식 뉴스 감성 분석 전문가입니다. 반드시 JSON 형식으로만 응답하세요."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.3,
-            max_tokens=1000
-        )
+        try:
+            response = self.client.chat.completions.create(
+                model="deepseek-chat",
+                messages=[
+                    {"role": "system", "content": "당신은 주식 뉴스 감성 분석 전문가입니다. 반드시 JSON 형식으로만 응답하세요."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3,
+                max_tokens=1000
+                # timeout과 max_retries는 클라이언트 초기화 시 설정됨
+            )
 
-        result_text = response.choices[0].message.content.strip()
-        return self._parse_json_response(result_text)
+            result_text = response.choices[0].message.content.strip()
+            return self._parse_json_response(result_text)
+        except APITimeoutError:
+            # 타임아웃은 정상 동작 (응답 느린 경우 스킵)
+            return None
+        except APIError as e:
+            print(f"⚠️  DeepSeek API 오류: {e}")
+            return None
+        except Exception as e:
+            print(f"⚠️  DeepSeek 예상치 못한 오류 ({e.__class__.__name__}): {e}")
+            return None
 
     def _call_gpt(self, news_text: str, stock_name: str) -> Optional[Dict]:
-        """GPT API 호출"""
+        """GPT API 호출 (타임아웃 3초, 재시도 없음)"""
+        from openai import APITimeoutError, APIError
         prompt = self._create_prompt(news_text, stock_name)
 
-        response = self.client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "당신은 주식 뉴스 감성 분석 전문가입니다. 반드시 JSON 형식으로만 응답하세요."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.3,
-            max_tokens=1000,
-            response_format={"type": "json_object"}
-        )
+        try:
+            response = self.client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "당신은 주식 뉴스 감성 분석 전문가입니다. 반드시 JSON 형식으로만 응답하세요."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3,
+                max_tokens=1000,
+                response_format={"type": "json_object"}
+                # timeout과 max_retries는 클라이언트 초기화 시 설정됨
+            )
 
-        result_text = response.choices[0].message.content.strip()
-        return self._parse_json_response(result_text)
+            result_text = response.choices[0].message.content.strip()
+            return self._parse_json_response(result_text)
+        except APITimeoutError:
+            # 타임아웃은 정상 동작 (응답 느린 경우 스킵)
+            return None
+        except APIError as e:
+            print(f"⚠️  GPT API 오류: {e}")
+            return None
+        except Exception as e:
+            print(f"⚠️  GPT 예상치 못한 오류 ({e.__class__.__name__}): {e}")
+            return None
 
     def _create_prompt(self, news_text: str, stock_name: str) -> str:
         """

@@ -76,6 +76,12 @@ def run_single_stock_simulation(
 
     # Trailing config
     trailing_config = config.get_trailing_config()
+    trailing_kwargs = {
+        'use_atr_based': trailing_config.get('use_atr_based', False),
+        'atr_multiplier': trailing_config.get('atr_multiplier', 1.5),
+        'use_profit_tier': trailing_config.get('use_profit_tier', False),
+        'profit_tier_threshold': trailing_config.get('profit_tier_threshold', 3.0)
+    }
 
     # VWAP 계산
     df = analyzer.calculate_vwap(df)
@@ -154,7 +160,7 @@ def run_single_stock_simulation(
                 highest_price=position['highest_price'],
                 trailing_active=position['trailing_active'],
                 atr=atr,
-                **trailing_config
+                **trailing_kwargs
             )
 
             position['trailing_active'] = trailing_active

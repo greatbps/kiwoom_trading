@@ -80,7 +80,7 @@ class ConfigLoader:
             # 트레일링 스탑
             'trailing_activation_pct': trailing.get('activation_pct', 1.5),
             'trailing_ratio': trailing.get('ratio', 1.0),
-            'stop_loss_pct': trailing.get('stop_loss_pct', 1.0),
+            'stop_loss_pct': trailing.get('stop_loss_pct', 3.0),
             'profit_tier_trailing_ratio': trailing.get('profit_tier_ratio', 0.5),
 
             # 필터
@@ -167,6 +167,10 @@ class ConfigLoader:
         trailing = self.get_section('trailing')
 
         return {
+            'activation_pct': trailing.get('activation_pct', 1.5),
+            'ratio': trailing.get('ratio', 1.0),
+            'stop_loss_pct': trailing.get('stop_loss_pct', 1.0),
+            'profit_tier_ratio': trailing.get('profit_tier_ratio', 0.5),
             'use_atr_based': trailing.get('use_atr_based', False),
             'atr_multiplier': trailing.get('atr_multiplier', 1.5),
             'use_profit_tier': trailing.get('use_profit_tier', False),

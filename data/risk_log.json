@@ -1,47 +1,233 @@
 {
-  "initial_balance": 384285.0,
-  "today": "2025-11-07",
+  "initial_balance": 408712.0,
+  "today": "2025-11-21",
   "daily_trades": [
     {
-      "timestamp": "2025-11-07T11:43:29.081645",
-      "stock_code": "011930",
-      "stock_name": "신성이엔지",
-      "type": "SELL",
-      "quantity": 20,
-      "price": 1722.0,
-      "amount": 34440.0,
-      "realized_pnl": -6160.0
+      "timestamp": "2025-11-21T10:13:22.549677",
+      "stock_code": "235980",
+      "stock_name": "메드팩토",
+      "type": "BUY",
+      "quantity": 4,
+      "price": 7840.0,
+      "amount": 31360.0,
+      "realized_pnl": 0.0
     },
     {
-      "timestamp": "2025-11-07T12:10:55.741907",
-      "stock_code": "011930",
-      "stock_name": "신성이엔지",
+      "timestamp": "2025-11-21T10:59:19.863601",
+      "stock_code": "235980",
+      "stock_name": "메드팩토",
       "type": "SELL",
-      "quantity": 20,
-      "price": 1728.0,
-      "amount": 34560.0,
-      "realized_pnl": -6040.0
+      "quantity": 1,
+      "price": 8190.0,
+      "amount": 8190.0,
+      "realized_pnl": 350.0
     },
     {
-      "timestamp": "2025-11-07T12:17:37.449044",
-      "stock_code": "011930",
-      "stock_name": "신성이엔지",
-      "type": "SELL",
-      "quantity": 20,
-      "price": 1728.0,
-      "amount": 34560.0,
-      "realized_pnl": -6040.0
+      "timestamp": "2025-11-21T12:52:37.619481",
+      "stock_code": "388870",
+      "stock_name": "파로스아이바이오",
+      "type": "BUY",
+      "quantity": 4,
+      "price": 8100.0,
+      "amount": 32400.0,
+      "realized_pnl": 0.0
     },
     {
-      "timestamp": "2025-11-07T12:28:30.067063",
-      "stock_code": "009420",
-      "stock_name": "한올바이오파마",
+      "timestamp": "2025-11-21T13:29:53.967136",
+      "stock_code": "388870",
+      "stock_name": "파로스아이바이오",
       "type": "SELL",
-      "quantity": 5,
-      "price": 34500.0,
-      "amount": 172500.0,
-      "realized_pnl": -59000.0
+      "quantity": 4,
+      "price": 7830.0,
+      "amount": 31320.0,
+      "realized_pnl": -1080.0
     }
   ],
-  "daily_realized_pnl": -77240.0
+  "daily_realized_pnl": -730.0,
+  "week_start": "2025-11-17",
+  "weekly_trades": [
+    {
+      "timestamp": "2025-11-20T10:03:15.723595",
+      "stock_code": "204620",
+      "stock_name": "글로벌텍스프리",
+      "type": "BUY",
+      "quantity": 5,
+      "price": 6380.0,
+      "amount": 31900.0,
+      "realized_pnl": 0.0
+    },
+    {
+      "timestamp": "2025-11-20T10:42:31.854244",
+      "stock_code": "204620",
+      "stock_name": "글로벌텍스프리",
+      "type": "SELL",
+      "quantity": 2,
+      "price": 6650.0,
+      "amount": 13300.0,
+      "realized_pnl": 540.0
+    },
+    {
+      "timestamp": "2025-11-20T10:48:06.810910",
+      "stock_code": "204620",
+      "stock_name": "글로벌텍스프리",
+      "type": "SELL",
+      "quantity": 2,
+      "price": 6780.0,
+      "amount": 13560.0,
+      "realized_pnl": 800.0
+    },
+    {
+      "timestamp": "2025-11-20T10:55:49.633958",
+      "stock_code": "049950",
+      "stock_name": "미래컴퍼니",
+      "type": "BUY",
+      "quantity": 2,
+      "price": 15770.0,
+      "amount": 31540.0,
+      "realized_pnl": 0.0
+    },
+    {
+      "timestamp": "2025-11-20T11:00:37.548009",
+      "stock_code": "204620",
+      "stock_name": "글로벌텍스프리",
+      "type": "SELL",
+      "quantity": 1,
+      "price": 6670.0,
+      "amount": 6670.0,
+      "realized_pnl": 290.0
+    },
+    {
+      "timestamp": "2025-11-20T11:30:44.628851",
+      "stock_code": "049950",
+      "stock_name": "미래컴퍼니",
+      "type": "SELL",
+      "quantity": 2,
+      "price": 15910.0,
+      "amount": 31820.0,
+      "realized_pnl": 280.0
+    },
+    {
+      "timestamp": "2025-11-20T11:34:36.925073",
+      "stock_code": "049950",
+      "stock_name": "미래컴퍼니",
+      "type": "BUY",
+      "quantity": 2,
+      "price": 15950.0,
+      "amount": 31900.0,
+      "realized_pnl": 0.0
+    },
+    {
+      "timestamp": "2025-11-20T12:48:13.418700",
+      "stock_code": "003680",
+      "stock_name": "한성기업",
+      "type": "BUY",
+      "quantity": 10,
+      "price": 7310.0,
+      "amount": 73100.0,
+      "realized_pnl": 0.0
+    },
+    {
+      "timestamp": "2025-11-20T12:53:23.737974",
+      "stock_code": "204620",
+      "stock_name": "글로벌텍스프리",
+      "type": "BUY",
+      "quantity": 5,
+      "price": 6790.0,
+      "amount": 33950.0,
+      "realized_pnl": 0.0
+    },
+    {
+      "timestamp": "2025-11-20T13:04:09.441767",
+      "stock_code": "032350",
+      "stock_name": "롯데관광개발",
+      "type": "BUY",
+      "quantity": 1,
+      "price": 22300.0,
+      "amount": 22300.0,
+      "realized_pnl": 0.0
+    },
+    {
+      "timestamp": "2025-11-20T13:15:09.014213",
+      "stock_code": "049950",
+      "stock_name": "미래컴퍼니",
+      "type": "SELL",
+      "quantity": 2,
+      "price": 16140.0,
+      "amount": 32280.0,
+      "realized_pnl": 380.0
+    },
+    {
+      "timestamp": "2025-11-20T13:44:00.106188",
+      "stock_code": "204620",
+      "stock_name": "글로벌텍스프리",
+      "type": "SELL",
+      "quantity": 5,
+      "price": 6850.0,
+      "amount": 34250.0,
+      "realized_pnl": 300.0
+    },
+    {
+      "timestamp": "2025-11-20T14:13:06.013773",
+      "stock_code": "003680",
+      "stock_name": "한성기업",
+      "type": "SELL",
+      "quantity": 10,
+      "price": 7000.0,
+      "amount": 70000.0,
+      "realized_pnl": -3100.0
+    },
+    {
+      "timestamp": "2025-11-20T15:00:34.745366",
+      "stock_code": "032350",
+      "stock_name": "롯데관광개발",
+      "type": "SELL",
+      "quantity": 1,
+      "price": 22350.0,
+      "amount": 22350.0,
+      "realized_pnl": 50.0
+    },
+    {
+      "timestamp": "2025-11-21T10:13:22.549677",
+      "stock_code": "235980",
+      "stock_name": "메드팩토",
+      "type": "BUY",
+      "quantity": 4,
+      "price": 7840.0,
+      "amount": 31360.0,
+      "realized_pnl": 0.0
+    },
+    {
+      "timestamp": "2025-11-21T10:59:19.863601",
+      "stock_code": "235980",
+      "stock_name": "메드팩토",
+      "type": "SELL",
+      "quantity": 1,
+      "price": 8190.0,
+      "amount": 8190.0,
+      "realized_pnl": 350.0
+    },
+    {
+      "timestamp": "2025-11-21T12:52:37.619481",
+      "stock_code": "388870",
+      "stock_name": "파로스아이바이오",
+      "type": "BUY",
+      "quantity": 4,
+      "price": 8100.0,
+      "amount": 32400.0,
+      "realized_pnl": 0.0
+    },
+    {
+      "timestamp": "2025-11-21T13:29:53.967136",
+      "stock_code": "388870",
+      "stock_name": "파로스아이바이오",
+      "type": "SELL",
+      "quantity": 4,
+      "price": 7830.0,
+      "amount": 31320.0,
+      "realized_pnl": -1080.0
+    }
+  ],
+  "weekly_realized_pnl": -1190.0,
+  "consecutive_losses": 1,
+  "cooldown_until": null
 }

@@ -50,14 +50,33 @@ def download_stock_data_sync(ticker: str, days: int = 7):
     """Yahoo Finance에서 데이터 다운로드 (동기 버전)"""
     import warnings
     import logging
+    import sys
+    from io import StringIO
 
-    yf_logger = logging.getLogger('yfinance')
-    original_level = yf_logger.level
-    yf_logger.setLevel(logging.ERROR)
+    # stderr 임시 리다이렉트 (yfinance가 stderr로 출력하는 경우 대비)
+    old_stderr = sys.stderr
+    sys.stderr = StringIO()
+
+    # 모든 yfinance 관련 로거 비활성화
+    yf_loggers = [
+        logging.getLogger('yfinance'),
+        logging.getLogger('yfinance.base_downloader'),
+        logging.getLogger('yfinance.data'),
+        logging.getLogger('yfinance.utils'),
+        logging.getLogger('peewee')
+    ]
+    original_levels = [(logger, logger.level, logger.disabled) for logger in yf_loggers]
+
+    for logger in yf_loggers:
+        logger.setLevel(logging.CRITICAL)
+        logger.disabled = True
 
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
+            warnings.filterwarnings("ignore", category=FutureWarning)
+            warnings.filterwarnings("ignore", category=DeprecationWarning)
+
             stock = yf.Ticker(ticker)
             df = stock.history(period=f"{days}d", interval="5m", progress=False)
 
@@ -71,7 +90,13 @@ def download_stock_data_sync(ticker: str, days: int = 7):
     except Exception:
         return None
     finally:
-        yf_logger.setLevel(original_level)
+        # 원래 설정 복원
+        sys.stderr = old_stderr
+
+        # 로거 상태 복원
+        for logger, level, disabled in original_levels:
+            logger.setLevel(level)
+            logger.disabled = disabled
 
 
 async def download_stock_data_yahoo(ticker: str, days: int = 7, try_kq: bool = True):
@@ -270,6 +295,11 @@ async def validate_single_stock_hybrid(stock_code: str, stock_name: str, validat
             current_time=current_time
         )
 
+        # 시장 정보 기반으로 티커 결정 (.KS/.KQ 자동 전환)
+        market = 'KOSPI' if stock_code.startswith('0') else 'KOSDAQ'
+        ticker_suffix = '.KS' if market == 'KOSPI' else '.KQ'
+        ticker = f"{stock_code}{ticker_suffix}"
+
         return {
             'success': True,
             'allowed': allowed,
@@ -277,7 +307,8 @@ async def validate_single_stock_hybrid(stock_code: str, stock_name: str, validat
             'stock_name': stock_name,
             'reason': reason,
             'stats': stats,
-            'ticker': f"{stock_code}.KS"
+            'ticker': ticker,
+            'market': market
         }
 
     except Exception as e:
@@ -292,15 +323,19 @@ async def validate_single_stock_hybrid(stock_code: str, stock_name: str, validat
 
 def validate_single_stock(stock_code: str, stock_name: str, validator: PreTradeValidator):
     """
-    단일 종목 VWAP 검증 (레거시 동기 버전, 하위 호환성 유지)
-    야후 파이낸스만 사용
+    단일 종목 VWAP 검증 (개선: StockDataFetcher 사용, .KS/.KQ 자동 전환)
     """
     try:
-        # 야후 파이낸스 형식으로 변환
-        ticker = f"{stock_code}.KS"
+        from utils.stock_data_fetcher import StockDataFetcher
 
-        # 데이터 다운로드
-        df = download_stock_data_for_validation(ticker, days=7)
+        # StockDataFetcher 사용 (.KS/.KQ 자동 전환)
+        fetcher = StockDataFetcher(verbose=False)
+        df = fetcher.fetch_sync(
+            stock_code,
+            days=7,
+            source='yahoo',  # 레거시 함수는 야후만 사용
+            interval='5m'
+        )
 
         if df is None or len(df) < 100:
             return {
@@ -429,6 +464,9 @@ class KiwoomVWAPPipeline:
         if response.get("return_code") == 0:
             console.print("✅ 로그인 성공", style="green")
             console.print()
+            # 로그인 완료 후 충분한 대기 시간 (서버 인증 처리 완료 대기)
+            # 키움 서버가 인증을 완전히 처리하기까지 시간이 필요
+            await asyncio.sleep(3.0)  # 1.5초 → 3초로 증가
             return True
         else:
             console.print(f"[red]❌ 로그인 실패: {response.get('return_msg')}[/red]")
@@ -446,6 +484,8 @@ class KiwoomVWAPPipeline:
             self.condition_list = response.get("data", [])
             console.print(f"✅ 총 {len(self.condition_list)}개 조건검색식 조회 완료", style="green")
             console.print()
+            # 조건검색 실행 전 대기 (서버 준비 시간 확보)
+            await asyncio.sleep(2.0)  # 1초 → 2초로 증가
             return True
         else:
             console.print(f"[red]❌ 조건검색식 조회 실패: {response.get('return_msg')}[/red]")
@@ -485,53 +525,112 @@ class KiwoomVWAPPipeline:
         sys.stdout.flush()
         return stock_names
 
-    async def search_condition(self, seq: str, name: str):
-        """조건검색 실행"""
+    async def search_condition(self, seq: str, name: str, max_retries: int = 2):
+        """조건검색 실행 (재시도 로직 포함)"""
         console.print(f"[{datetime.now().strftime('%H:%M:%S')}] 조건검색 실행")
         console.print(f"  조건식 번호: {seq}")
         console.print(f"  조건식명: {name}")
         console.print()
 
-        await self.send_message("CNSRREQ", {
-            "seq": seq,
-            "search_type": "1",  # 조회타입
-            "stex_tp": "K"  # 거래소구분 (K: 코스피/코스닥)
-        })
-        response = await self.receive_message()
+        for attempt in range(max_retries):
+            try:
+                await self.send_message("CNSRREQ", {
+                    "seq": seq,
+                    "search_type": "1",  # 조회타입
+                    "stex_tp": "K"  # 거래소구분 (K: 코스피/코스닥)
+                })
 
-        if response.get("return_code") == 0:
-            stock_list = response.get("data", [])
-            # None 체크 추가
-            if stock_list is None:
-                stock_list = []
-            stock_codes = [s.get("jmcode", "").replace("A", "") for s in stock_list]
-            stock_codes = [code for code in stock_codes if code]
+                # 응답 대기 (타임아웃 5초)
+                response = await asyncio.wait_for(self.receive_message(), timeout=5.0)
 
-            self.condition_stocks[seq] = stock_codes
+                return_code = response.get("return_code")
 
-            console.print("=" * 120, style="cyan")
-            console.print(f"{'조건검색 결과 (1차 필터링)':^120}", style="bold cyan")
-            console.print("=" * 120, style="cyan")
-            console.print(f"조건식 번호: {seq}")
-            console.print(f"발견 종목: {len(stock_codes)}개", style="green")
-            console.print()
+                if return_code == 0:
+                    stock_list = response.get("data", [])
+                    # None 체크 추가
+                    if stock_list is None:
+                        stock_list = []
+                    stock_codes = [s.get("jmcode", "").replace("A", "") for s in stock_list]
+                    stock_codes = [code for code in stock_codes if code]
 
-            if stock_codes:
-                # 종목명 조회
-                stock_names = self.get_stock_names(stock_codes)
+                    self.condition_stocks[seq] = stock_codes
 
-                console.print("1차 필터링 종목 리스트:")
-                console.print("─" * 120)
-                for i, code in enumerate(stock_codes, 1):
-                    stock_name = stock_names.get(code, code)
-                    console.print(f"  {i:2d}. [{code}] {stock_name}")
-                console.print("─" * 120)
-                console.print()
+                    console.print("=" * 120, style="cyan")
+                    console.print(f"{'조건검색 결과 (1차 필터링)':^120}", style="bold cyan")
+                    console.print("=" * 120, style="cyan")
+                    console.print(f"조건식 번호: {seq}")
+                    console.print(f"발견 종목: {len(stock_codes)}개", style="green")
+                    console.print()
 
-            return stock_codes
-        else:
-            console.print(f"[red]❌ 조건검색 실패: {response.get('return_msg')}[/red]")
-            return []
+                    if stock_codes:
+                        # 종목명 조회
+                        stock_names = self.get_stock_names(stock_codes)
+
+                        console.print("1차 필터링 종목 리스트:")
+                        console.print("─" * 120)
+                        for i, code in enumerate(stock_codes, 1):
+                            stock_name = stock_names.get(code, code)
+                            console.print(f"  {i:2d}. [{code}] {stock_name}")
+                        console.print("─" * 120)
+                        console.print()
+
+                    return stock_codes
+
+                elif return_code == 100013:
+                    # 인증 오류 - 재로그인 시도
+                    console.print(f"[yellow]⚠️  인증 오류 발생 (시도 {attempt + 1}/{max_retries})[/yellow]")
+                    if attempt < max_retries - 1:
+                        console.print("[yellow]재로그인 시도 중...[/yellow]")
+                        await asyncio.sleep(2.0)
+                        if await self.login():
+                            console.print("[green]재로그인 성공, 조건검색 재시도[/green]")
+                            continue
+                        else:
+                            console.print("[red]재로그인 실패[/red]")
+                            return []
+                    else:
+                        console.print(f"[red]❌ 최대 재시도 횟수 초과[/red]")
+                        return []
+                else:
+                    console.print(f"[red]❌ 조건검색 실패: {response.get('return_msg')} (코드: {return_code})[/red]")
+                    return []
+
+            except asyncio.TimeoutError:
+                console.print(f"[yellow]⚠️  응답 타임아웃 (시도 {attempt + 1}/{max_retries})[/yellow]")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2.0)
+                    continue
+                else:
+                    console.print(f"[red]❌ 조건검색 타임아웃[/red]")
+                    return []
+            except websockets.exceptions.ConnectionClosed:
+                console.print(f"[yellow]⚠️  WebSocket 연결 끊김 (시도 {attempt + 1}/{max_retries})[/yellow]")
+                if attempt < max_retries - 1:
+                    console.print("[yellow]재연결 시도 중...[/yellow]")
+                    await self.connect()
+                    console.print(f"[green]✓ 재연결 성공, 로그인 재시도...[/green]")
+                    if not await self.login():
+                        console.print(f"[red]❌ 로그인 재시도 실패[/red]")
+                        return []
+                    console.print(f"[green]✓ 인증 완료, 조건검색 재시도: {name}[/green]")
+                    continue
+                else:
+                    console.print(f"[red]❌ 최대 재시도 횟수 초과[/red]")
+                    return []
+            except Exception as e:
+                console.print(f"[red]❌ 조건검색 오류: {e}[/red]")
+                if attempt < max_retries - 1 and "connection" in str(e).lower():
+                    console.print("[yellow]연결 문제 감지, 재연결 시도...[/yellow]")
+                    await self.connect()
+                    console.print(f"[green]✓ 재연결 성공, 로그인 재시도...[/green]")
+                    if not await self.login():
+                        console.print(f"[red]❌ 로그인 재시도 실패[/red]")
+                        return []
+                    console.print(f"[green]✓ 인증 완료, 조건검색 재시도: {name}[/green]")
+                    continue
+                return []
+
+        return []
 
     async def run_vwap_validation(self, stock_codes: List[str]):
         """VWAP 2차 검증 (하이브리드 데이터: 키움 + 야후)"""
@@ -944,8 +1043,8 @@ class KiwoomVWAPPipeline:
                     stocks = await self.search_condition(seq, name)
                     all_stocks.update(stocks)
 
-                    # 다음 조건 검색 전 대기
-                    await asyncio.sleep(1)
+                    # 다음 조건 검색 전 대기 (서버 부하 방지)
+                    await asyncio.sleep(2.0)
 
             # 중복 제거
             unique_stocks = list(all_stocks)

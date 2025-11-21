@@ -1,0 +1,34 @@
+# Development Dependencies
+# 테스트 프레임워크
+
+# Pytest 및 플러그인
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.1.0
+pytest-mock>=3.11.0
+pytest-timeout>=2.1.0
+pytest-xdist>=3.3.0  # 병렬 테스트
+pytest-benchmark>=4.0.0  # 성능 벤치마크
+
+# 커버리지
+coverage>=7.3.0
+
+# 코드 품질 도구
+black>=23.0.0  # 코드 포맷터
+flake8>=6.0.0  # 린터
+pylint>=2.17.0  # 정적 분석
+mypy>=1.5.0  # 타입 체커
+isort>=5.12.0  # import 정렬
+
+# Mock 라이브러리
+responses>=0.23.0  # HTTP mock
+freezegun>=1.2.0  # 시간 mock
+faker>=19.0.0  # 테스트 데이터 생성
+
+# 문서화
+sphinx>=7.0.0
+sphinx-rtd-theme>=1.3.0
+
+# 개발 도구
+ipython>=8.12.0
+jupyter>=1.0.0

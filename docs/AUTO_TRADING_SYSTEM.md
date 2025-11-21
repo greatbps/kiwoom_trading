@@ -74,12 +74,18 @@ MAX_POSITION_SIZE = 0.30       # 포지션당 최대 30%
 # 하드 리밋 (절대 초과 불가)
 HARD_MAX_POSITION = 200000     # 20만원
 HARD_MAX_DAILY_LOSS = 500000   # 50만원 (일일)
+HARD_MAX_WEEKLY_LOSS = 0.03    # 주간 손실 3% 초과 시 신규 진입 제한
 HARD_MAX_DAILY_TRADES = 10     # 일일 최대 10회
 
 # 포트폴리오 제약
 MAX_POSITIONS = 5              # 최대 5종목
 MIN_CASH_RESERVE = 0.20        # 최소 현금 20%
 ```
+
+> **주간 손실 관리**  
+> - `HARD_MAX_WEEKLY_LOSS`가 발동하면 신규 진입은 중단되며, 보유 포지션은 트레일링만 허용한다.  
+> - RiskManager는 자동으로 진입 비중을 50% 이하로 낮추고 `risk_log.json`에 경고를 남긴다.  
+> - 주간 손실이 -1% 미만으로 회복될 때까지 강화 모드를 유지한다.
 
 **주요 기능:**
 
@@ -106,8 +112,8 @@ MIN_CASH_RESERVE = 0.20        # 최소 현금 20%
 
 3. **긴급 중지 조건 확인**
    ```python
-   should_stop, reason = risk_manager.check_emergency_stop(unrealized_pnl)
-   # 일일 손실 한도 초과시 True
+should_stop, reason = risk_manager.check_emergency_stop(unrealized_pnl)
+# 일일(-5%) 또는 주간(-3%) 손실 한도 초과시 True
    ```
 
 4. **리스크 지표 계산**
@@ -217,7 +223,7 @@ while is_running:
     positions_value = get_total_value()
     unrealized_pnl = get_total_profit_loss()
 
-    # 3. 긴급 중지 조건 확인
+    # 3. 긴급 중지 조건 확인 (일일 -5%, 주간 -3%)
     should_stop, reason = check_emergency_stop(unrealized_pnl)
     if should_stop:
         emergency_liquidate()  # 모든 포지션 강제 청산

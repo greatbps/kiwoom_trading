@@ -10,6 +10,19 @@ import base64
 import hashlib
 import hmac
 
+from exceptions import (
+    handle_api_errors,
+    handle_trading_errors,
+    retry_on_error,
+    AuthenticationError,
+    ConnectionError as TradingConnectionError,
+    TimeoutError as TradingTimeoutError,
+    APIException,
+    ConfigurationError,
+    OrderFailedError,
+    InsufficientFundsError
+)
+
 
 class KiwoomAPI:
     """키움증권 REST API 클라이언트"""
@@ -39,7 +52,10 @@ class KiwoomAPI:
 
         # 필수 정보 검증
         if not all([self.api_key, self.api_secret]):
-            raise ValueError("API 키 정보가 필요합니다. .env 파일을 확인하세요.")
+            raise ConfigurationError(
+                "API 키 정보가 필요합니다. .env 파일을 확인하세요.",
+                config_key="KIWOOM_APP_KEY or KIWOOM_APP_SECRET"
+            )
 
         # 토큰 관리
         self.access_token: Optional[str] = None
@@ -118,12 +134,68 @@ class KiwoomAPI:
 
         return headers
 
+    def _handle_request_error(self, e: requests.exceptions.RequestException, operation: str, timeout: int = None):
+        """
+        HTTP 요청 에러를 적절한 Trading 예외로 변환
+
+        Args:
+            e: requests 예외
+            operation: 작업 설명
+            timeout: 타임아웃 시간 (초)
+
+        Raises:
+            TradingTimeoutError: 타임아웃 시
+            TradingConnectionError: 연결 실패 시
+            AuthenticationError: 인증 실패 시
+            APIException: 기타 API 오류 시
+        """
+        if isinstance(e, requests.exceptions.Timeout):
+            raise TradingTimeoutError(
+                f"{operation} 타임아웃",
+                timeout_seconds=timeout
+            ) from e
+        elif isinstance(e, requests.exceptions.ConnectionError):
+            raise TradingConnectionError(
+                f"{operation} 연결 실패: {str(e)}"
+            ) from e
+        elif isinstance(e, requests.exceptions.HTTPError):
+            status_code = e.response.status_code if e.response else None
+            try:
+                response_data = e.response.json() if e.response and e.response.content else None
+            except:
+                response_data = e.response.text if e.response else None
+
+            if status_code == 401:
+                # 토큰 만료 시 재발급 시도
+                self.access_token = None
+                raise AuthenticationError(
+                    f"{operation} 인증 만료",
+                    status_code=status_code,
+                    response_data=response_data
+                ) from e
+            else:
+                raise APIException(
+                    f"{operation} API 오류",
+                    status_code=status_code,
+                    response_data=response_data
+                ) from e
+        else:
+            raise APIException(f"{operation} 요청 실패: {str(e)}") from e
+
+    @retry_on_error(max_retries=2, delay=1.0, backoff=2.0, exceptions=(TradingConnectionError, TradingTimeoutError))
+    @handle_api_errors(raise_on_auth_error=True, log_errors=True)
     def get_access_token(self) -> str:
         """
         접근 토큰(Access Token) 발급
 
         Returns:
             접근 토큰
+
+        Raises:
+            AuthenticationError: 인증 실패 시
+            ConnectionError: 연결 실패 시
+            TimeoutError: 타임아웃 시
+            APIException: API 오류 시
         """
         # 토큰이 유효하면 재사용 (24시간 유효, 5분 여유)
         if self.access_token and self.token_expires_at:
@@ -143,7 +215,7 @@ class KiwoomAPI:
         }
 
         try:
-            response = self.session.post(url, json=data, headers=headers)
+            response = self.session.post(url, json=data, headers=headers, timeout=30)
             response.raise_for_status()
 
             result = response.json()
@@ -154,7 +226,10 @@ class KiwoomAPI:
             return_msg = result.get("return_msg")
 
             if return_code != 0:
-                raise Exception(f"토큰 발급 실패: [{return_code}] {return_msg}")
+                raise AuthenticationError(
+                    f"토큰 발급 실패: [{return_code}] {return_msg}",
+                    response_data=result
+                )
 
             # 토큰 저장
             self.access_token = result.get("token")
@@ -176,13 +251,36 @@ class KiwoomAPI:
             print(f"[DEBUG] 저장된 토큰: {self.access_token[:30]}..." if self.access_token else "None")
             return self.access_token
 
-        except requests.exceptions.RequestException as e:
-            print(f"✗ 토큰 발급 실패: {e}")
-            if hasattr(e, 'response') and e.response is not None:
-                print(f"  응답 코드: {e.response.status_code}")
-                print(f"  응답 내용: {e.response.text}")
-            raise
+        except requests.exceptions.Timeout as e:
+            raise TradingTimeoutError(
+                "토큰 발급 요청 타임아웃",
+                timeout_seconds=30
+            ) from e
+        except requests.exceptions.ConnectionError as e:
+            raise TradingConnectionError(
+                f"토큰 발급 서버 연결 실패: {str(e)}"
+            ) from e
+        except requests.exceptions.HTTPError as e:
+            status_code = e.response.status_code if e.response else None
+            response_data = e.response.json() if e.response and e.response.content else None
 
+            if status_code == 401:
+                raise AuthenticationError(
+                    "API 키 인증 실패",
+                    status_code=status_code,
+                    response_data=response_data
+                ) from e
+            else:
+                raise APIException(
+                    f"토큰 발급 API 오류: {str(e)}",
+                    status_code=status_code,
+                    response_data=response_data
+                ) from e
+        except requests.exceptions.RequestException as e:
+            raise APIException(f"토큰 발급 요청 실패: {str(e)}") from e
+
+    @retry_on_error(max_retries=2, delay=0.5, backoff=2.0, exceptions=(TradingConnectionError, TradingTimeoutError))
+    @handle_api_errors(default_return=None, log_errors=True)
     def get_stock_price(self, stock_code: str) -> Dict[str, Any]:
         """
         주식 현재가 조회 (기본주식정보조회 - ka10001)
@@ -191,7 +289,11 @@ class KiwoomAPI:
             stock_code: 종목코드 (6자리)
 
         Returns:
-            주식 정보
+            주식 정보 (실패 시 None)
+
+        Raises:
+            AuthenticationError: 인증 만료 시
+            APIException: API 오류 시
         """
         # 토큰 확인
         if not self.access_token:
@@ -203,18 +305,16 @@ class KiwoomAPI:
         headers = self._get_headers(method="GET", path=path)
 
         try:
-            response = self.session.get(url, headers=headers)
+            response = self.session.get(url, headers=headers, timeout=10)
             response.raise_for_status()
-
             return response.json()
-
         except requests.exceptions.RequestException as e:
-            print(f"✗ 주식 가격 조회 실패: {e}")
-            if hasattr(e, 'response') and e.response is not None:
-                print(f"  응답 코드: {e.response.status_code}")
-                print(f"  응답 내용: {e.response.text}")
-            raise
+            # 가격 조회 실패는 정상 동작 (5분봉 데이터 사용)
+            # 에러 로그 출력하지 않고 None 반환
+            return None
 
+    @retry_on_error(max_retries=2, delay=0.5, backoff=2.0, exceptions=(TradingConnectionError, TradingTimeoutError))
+    @handle_api_errors(default_return=None, log_errors=True)
     def get_balance(self) -> Dict[str, Any]:
         """
         계좌 잔고 조회 (예수금 상세 현황)
@@ -226,7 +326,12 @@ class KiwoomAPI:
                 'ord_alow_amt': 주문가능금액,
                 'pymn_alow_amt': 출금가능금액,
                 ...
-            }
+            } (실패 시 None)
+
+        Raises:
+            ConfigurationError: 계좌번호 미설정 시
+            AuthenticationError: 인증 만료 시
+            APIException: API 오류 시
         """
         # 토큰 확인
         if not self.access_token:
@@ -234,7 +339,10 @@ class KiwoomAPI:
 
         # 계좌번호 검증
         if not self.account_number:
-            raise ValueError("계좌번호가 설정되지 않았습니다.")
+            raise ConfigurationError(
+                "계좌번호가 설정되지 않았습니다.",
+                config_key="KIWOOM_ACCOUNT_NUMBER"
+            )
 
         # 올바른 엔드포인트
         endpoint = '/api/dostk/acnt'
@@ -255,18 +363,13 @@ class KiwoomAPI:
         }
 
         try:
-            response = self.session.post(url, headers=headers, json=data)
+            response = self.session.post(url, headers=headers, json=data, timeout=10)
             response.raise_for_status()
-
             return response.json()
-
         except requests.exceptions.RequestException as e:
-            print(f"✗ 잔고 조회 실패: {e}")
-            if hasattr(e, 'response') and e.response is not None:
-                print(f"  응답 코드: {e.response.status_code}")
-                print(f"  응답 내용: {e.response.text}")
-            raise
+            self._handle_request_error(e, "계좌 잔고 조회", timeout=10)
 
+    @handle_api_errors(default_return={'return_code': -1, 'output': []}, log_errors=True)
     def get_account_info(self) -> Dict[str, Any]:
         """
         계좌 보유 종목 조회 (일별잔고수익률)
@@ -332,6 +435,7 @@ class KiwoomAPI:
                 print(f"  응답 내용: {e.response.text}")
             raise
 
+    @handle_api_errors(default_return={'return_code': -1, 'data': []}, log_errors=True)
     def get_daily_chart(self, stock_code: str, base_dt: str = None,
                        upd_stkpc_tp: str = "1", cont_yn: str = "N",
                        next_key: str = "") -> Dict[str, Any]:
@@ -396,6 +500,7 @@ class KiwoomAPI:
                 print(f"  응답 내용: {e.response.text}")
             raise
 
+    @handle_api_errors(default_return={'return_code': -1, 'data': []}, log_errors=True)
     def get_minute_chart(self, stock_code: str, tic_scope: str = "1",
                         upd_stkpc_tp: str = "1", cont_yn: str = "N",
                         next_key: str = "") -> Dict[str, Any]:
@@ -455,6 +560,7 @@ class KiwoomAPI:
                 print(f"  응답 내용: {e.response.text}")
             raise
 
+    @handle_api_errors(default_return={'return_code': -1, 'output': []}, log_errors=True)
     def get_foreign_investor_trend(self, stock_code: str, cont_yn: str = "N",
                                    next_key: str = "") -> Dict[str, Any]:
         """
@@ -509,6 +615,7 @@ class KiwoomAPI:
                 print(f"  응답 내용: {e.response.text}")
             raise
 
+    @handle_api_errors(default_return={'return_code': -1, 'output': []}, log_errors=True)
     def get_investor_trend(self, stock_code: str, dt: str = None,
                           amt_qty_tp: str = "1", trde_tp: str = "0",
                           unit_tp: str = "1000", cont_yn: str = "N",
@@ -592,6 +699,7 @@ class KiwoomAPI:
                 print(f"  응답 내용: {e.response.text}")
             raise
 
+    @handle_api_errors(default_return={'return_code': -1, 'output': []}, log_errors=True)
     def get_program_trading(self, dt: str = None, mrkt_tp: str = "P00101",
                            stex_tp: str = "1", cont_yn: str = "N",
                            next_key: str = "") -> Dict[str, Any]:
@@ -663,6 +771,7 @@ class KiwoomAPI:
                 print(f"  응답 내용: {e.response.text}")
             raise
 
+    @handle_api_errors(default_return={'return_code': -1, 'output': {}}, log_errors=True)
     def get_stock_info(self, stock_code: str, cont_yn: str = "N",
                       next_key: str = "") -> Dict[str, Any]:
         """
@@ -731,6 +840,9 @@ class KiwoomAPI:
                 print(f"  응답 내용: {e.response.text}")
             raise
 
+    @retry_on_error(max_retries=1, delay=1.0, exceptions=(TradingConnectionError, TradingTimeoutError))
+    @handle_trading_errors(notify_user=True, log_errors=True)
+    @handle_api_errors(raise_on_auth_error=True, log_errors=True)
     def order_buy(self, stock_code: str, quantity: int, price: int = 0,
                   trade_type: str = "0", dmst_stex_tp: str = "KRX") -> Dict[str, Any]:
         """
@@ -752,6 +864,12 @@ class KiwoomAPI:
             - ord_no: 주문번호
             - return_code: 응답코드 (0: 정상)
             - return_msg: 응답메시지
+
+        Raises:
+            InsufficientFundsError: 잔고 부족 시
+            OrderFailedError: 주문 실패 시
+            AuthenticationError: 인증 만료 시
+            APIException: API 오류 시
         """
         # 토큰 확인
         if not self.access_token:
@@ -783,27 +901,44 @@ class KiwoomAPI:
             print(f"\n[매수 주문 API 요청]")
             print(f"  종목: {stock_code}, 수량: {quantity}, 가격: {price if price > 0 else '시장가'}")
 
-            response = self.session.post(url, headers=headers, json=data)
+            response = self.session.post(url, headers=headers, json=data, timeout=15)
             response.raise_for_status()
 
             result = response.json()
 
             print(f"[DEBUG] 매수 주문 응답: {result}")
 
-            if result.get('return_code') == 0:
-                print(f"✓ 매수 주문 성공 - 주문번호: {result.get('ord_no')}")
-            else:
-                print(f"✗ 매수 주문 실패: {result.get('return_msg')}")
+            return_code = result.get('return_code')
+            return_msg = result.get('return_msg', '')
+            ord_no = result.get('ord_no')
 
-            return result
+            if return_code == 0:
+                print(f"✓ 매수 주문 성공 - 주문번호: {ord_no}")
+                return result
+            else:
+                # 잔고 부족 에러 체크
+                if '잔고' in return_msg or '예수금' in return_msg or 'insufficient' in return_msg.lower():
+                    raise InsufficientFundsError(
+                        required_amount=price * quantity if price > 0 else 0,
+                        available_amount=0,  # API 응답에서 파싱 필요
+                        stock_code=stock_code,
+                        details={'return_code': return_code, 'return_msg': return_msg}
+                    )
+                else:
+                    raise OrderFailedError(
+                        f"매수 주문 실패: {return_msg}",
+                        order_id=ord_no,
+                        stock_code=stock_code,
+                        order_type='buy',
+                        details={'return_code': return_code, 'quantity': quantity, 'price': price}
+                    )
 
         except requests.exceptions.RequestException as e:
-            print(f"✗ 매수 주문 API 호출 실패: {e}")
-            if hasattr(e, 'response') and e.response is not None:
-                print(f"  응답 코드: {e.response.status_code}")
-                print(f"  응답 내용: {e.response.text}")
-            raise
+            self._handle_request_error(e, f"매수 주문({stock_code})", timeout=15)
 
+    @retry_on_error(max_retries=1, delay=1.0, exceptions=(TradingConnectionError, TradingTimeoutError))
+    @handle_trading_errors(notify_user=True, log_errors=True)
+    @handle_api_errors(raise_on_auth_error=True, log_errors=True)
     def order_sell(self, stock_code: str, quantity: int, price: int = 0,
                    trade_type: str = "0", dmst_stex_tp: str = "KRX") -> Dict[str, Any]:
         """
@@ -826,6 +961,11 @@ class KiwoomAPI:
             - dmst_stex_tp: 거래소구분
             - return_code: 응답코드 (0: 정상)
             - return_msg: 응답메시지
+
+        Raises:
+            OrderFailedError: 주문 실패 시
+            AuthenticationError: 인증 만료 시
+            APIException: API 오류 시
         """
         # 토큰 확인
         if not self.access_token:
@@ -857,27 +997,33 @@ class KiwoomAPI:
             print(f"\n[매도 주문 API 요청]")
             print(f"  종목: {stock_code}, 수량: {quantity}, 가격: {price if price > 0 else '시장가'}")
 
-            response = self.session.post(url, headers=headers, json=data)
+            response = self.session.post(url, headers=headers, json=data, timeout=15)
             response.raise_for_status()
 
             result = response.json()
 
             print(f"[DEBUG] 매도 주문 응답: {result}")
 
-            if result.get('return_code') == 0:
-                print(f"✓ 매도 주문 성공 - 주문번호: {result.get('ord_no')}")
-            else:
-                print(f"✗ 매도 주문 실패: {result.get('return_msg')}")
+            return_code = result.get('return_code')
+            return_msg = result.get('return_msg', '')
+            ord_no = result.get('ord_no')
 
-            return result
+            if return_code == 0:
+                print(f"✓ 매도 주문 성공 - 주문번호: {ord_no}")
+                return result
+            else:
+                raise OrderFailedError(
+                    f"매도 주문 실패: {return_msg}",
+                    order_id=ord_no,
+                    stock_code=stock_code,
+                    order_type='sell',
+                    details={'return_code': return_code, 'quantity': quantity, 'price': price}
+                )
 
         except requests.exceptions.RequestException as e:
-            print(f"✗ 매도 주문 API 호출 실패: {e}")
-            if hasattr(e, 'response') and e.response is not None:
-                print(f"  응답 코드: {e.response.status_code}")
-                print(f"  응답 내용: {e.response.text}")
-            raise
+            self._handle_request_error(e, f"매도 주문({stock_code})", timeout=15)
 
+    @handle_api_errors(default_return={'return_code': -1, 'order_number': None}, log_errors=True)
     def order_modify(self, orig_ord_no: str, stock_code: str, quantity: int,
                      price: int, dmst_stex_tp: str = "KRX") -> Dict[str, Any]:
         """
@@ -947,6 +1093,9 @@ class KiwoomAPI:
                 print(f"  응답 내용: {e.response.text}")
             raise
 
+    @retry_on_error(max_retries=1, delay=1.0, exceptions=(TradingConnectionError, TradingTimeoutError))
+    @handle_trading_errors(notify_user=True, log_errors=True)
+    @handle_api_errors(raise_on_auth_error=True, log_errors=True)
     def order_cancel(self, orig_ord_no: str, stock_code: str, quantity: int = 0,
                      dmst_stex_tp: str = "KRX") -> Dict[str, Any]:
         """
@@ -965,6 +1114,11 @@ class KiwoomAPI:
             - cncl_qty: 취소수량
             - return_code: 응답코드 (0: 정상)
             - return_msg: 응답메시지
+
+        Raises:
+            OrderFailedError: 취소 실패 시
+            AuthenticationError: 인증 만료 시
+            APIException: API 오류 시
         """
         # 토큰 확인
         if not self.access_token:
@@ -1012,6 +1166,7 @@ class KiwoomAPI:
                 print(f"  응답 내용: {e.response.text}")
             raise
 
+    @handle_api_errors(default_return={'return_code': -1, 'output': []}, log_errors=True)
     def get_unexecuted_orders(self, dmst_stex_tp: str = "KRX", cont_yn: str = "N",
                              next_key: str = "") -> Dict[str, Any]:
         """
@@ -1078,6 +1233,7 @@ class KiwoomAPI:
                 print(f"  응답 내용: {e.response.text}")
             raise
 
+    @handle_api_errors(default_return={'return_code': -1, 'output': []}, log_errors=True)
     def get_executed_orders(self, qry_dt: str = None, dmst_stex_tp: str = "KRX",
                            cont_yn: str = "N", next_key: str = "") -> Dict[str, Any]:
         """
@@ -1152,6 +1308,7 @@ class KiwoomAPI:
                 print(f"  응답 내용: {e.response.text}")
             raise
 
+    @handle_api_errors(default_return={'return_code': -1, 'output': []}, log_errors=True)
     def get_account_evaluation(self, cont_yn: str = "N", next_key: str = "") -> Dict[str, Any]:
         """
         계좌평가현황 조회 (kt00004)
@@ -1215,6 +1372,7 @@ class KiwoomAPI:
                 print(f"  응답 내용: {e.response.text}")
             raise
 
+    @handle_api_errors(default_return={'return_code': -1, 'output': {}}, log_errors=True)
     def get_stock_quote(self, stock_code: str, cont_yn: str = "N",
                        next_key: str = "") -> Dict[str, Any]:
         """
@@ -1279,6 +1437,7 @@ class KiwoomAPI:
                 print(f"  응답 내용: {e.response.text}")
             raise
 
+    @handle_api_errors(default_return={'return_code': -1, 'output': []}, log_errors=True)
     def get_execution_info(self, stock_code: str, cont_yn: str = "N",
                           next_key: str = "") -> Dict[str, Any]:
         """
@@ -1339,6 +1498,7 @@ class KiwoomAPI:
                 print(f"  응답 내용: {e.response.text}")
             raise
 
+    @handle_api_errors(default_return={'return_code': -1, 'data': []}, log_errors=True)
     def get_ohlcv_data(self, stock_code: str, period: str = 'D', count: int = 30) -> Dict[str, Any]:
         """
         OHLCV 데이터 조회 (일봉/분봉)

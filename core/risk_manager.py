@@ -41,12 +41,16 @@ class RiskManager:
 
     # 문서 명세: 하드 리밋 (절대 초과 불가)
     HARD_MAX_POSITION = 200000     # 20만원
-    HARD_MAX_DAILY_LOSS = 500000   # 50만원 (일일)
+    HARD_MAX_DAILY_LOSS_PCT = 0.05   # 🔧 FIX: 일일 손실 -5% (문서 명세) [변경: ₩500K → 자산 대비 -5%]
+    HARD_MAX_WEEKLY_LOSS_PCT = 0.03  # 🔧 FIX: 주간 손실 -3% (문서 명세)
     HARD_MAX_DAILY_TRADES = 10     # 일일 최대 10회
 
     # 문서 명세: 포트폴리오 제약
     MAX_POSITIONS = 5              # 최대 5종목
     MIN_CASH_RESERVE = 0.20        # 최소 현금 20%
+
+    # 🔧 FIX: 연속 손실 관리 (문서 명세)
+    CONSECUTIVE_LOSS_LIMIT = 3     # 연속 손실 3회면 쿨다운
 
     def __init__(self, initial_balance: float, storage_path: str = 'data/risk_log.json'):
         """
@@ -63,6 +67,16 @@ class RiskManager:
         self.today = date.today().isoformat()
         self.daily_trades: List[dict] = []
         self.daily_realized_pnl = 0.0  # 오늘 실현 손익
+
+        # 🔧 FIX: 주간 추적 (문서 명세)
+        from datetime import timedelta
+        self.week_start = (date.today() - timedelta(days=date.today().weekday())).isoformat()
+        self.weekly_trades: List[dict] = []
+        self.weekly_realized_pnl = 0.0  # 이번 주 실현 손익
+
+        # 🔧 FIX: 연속 손실 추적 (문서 명세)
+        self.consecutive_losses = 0  # 연속 손실 카운터
+        self.cooldown_until = None  # 쿨다운 종료 날짜
 
         # 로그 로드
         self.load()
@@ -86,6 +100,12 @@ class RiskManager:
         Returns:
             (가능 여부, 사유)
         """
+        # 🔧 FIX: 0. 연속 손실 쿨다운 체크 (문서 명세)
+        if self.cooldown_until:
+            from datetime import datetime
+            if datetime.now().date() <= datetime.fromisoformat(self.cooldown_until).date():
+                return False, f"연속 손실 쿨다운 중 (해제: {self.cooldown_until})"
+
         # 1. 보유 종목 수 제한
         if position_count >= self.MAX_POSITIONS:
             return False, f"최대 보유 종목 수 초과 ({position_count}/{self.MAX_POSITIONS})"
@@ -94,16 +114,27 @@ class RiskManager:
         if len(self.daily_trades) >= self.HARD_MAX_DAILY_TRADES:
             return False, f"일일 최대 거래 횟수 초과 ({len(self.daily_trades)}/{self.HARD_MAX_DAILY_TRADES})"
 
-        # 3. 일일 손실 한도 확인
-        if self.daily_realized_pnl < -self.HARD_MAX_DAILY_LOSS:
-            return False, f"일일 손실 한도 초과 ({self.daily_realized_pnl:,.0f}원 / -{self.HARD_MAX_DAILY_LOSS:,.0f}원)"
+        # 🔧 FIX: 3. 일일 손실 한도 확인 (퍼센트 기반, 문서 명세)
+        total_assets = current_balance + current_positions_value
+        daily_loss_pct = (self.daily_realized_pnl / self.initial_balance) if self.initial_balance > 0 else 0
+        if daily_loss_pct < -self.HARD_MAX_DAILY_LOSS_PCT:
+            return False, f"일일 손실 한도 초과 ({daily_loss_pct:.2%} / -{self.HARD_MAX_DAILY_LOSS_PCT:.1%})"
+
+        # 🔧 FIX: 3-1. 주간 손실 경고 (문서 명세: -3% 시 entry_ratio 50% 축소, -5% 시 완전 차단)
+        total_assets = current_balance + current_positions_value
+        weekly_loss_pct = (self.weekly_realized_pnl / self.initial_balance) if self.initial_balance > 0 else 0
+
+        # -5% 도달 시 완전 차단 (hard stop)
+        if weekly_loss_pct < -0.05:
+            return False, f"주간 손실 한도 초과 ({weekly_loss_pct:.2%} / -5.0%)"
+
+        # -3% ~ -5% 구간은 entry_ratio 조정으로 처리 (완전 차단 X)
 
         # 4. 하드 포지션 크기 제한
         if position_size > self.HARD_MAX_POSITION:
             return False, f"하드 포지션 크기 제한 초과 ({position_size:,.0f}원 / {self.HARD_MAX_POSITION:,.0f}원)"
 
         # 5. 총 자산 대비 포지션 크기 제한 (30%)
-        total_assets = current_balance + current_positions_value
         max_position_value = total_assets * self.MAX_POSITION_SIZE
 
         if position_size > max_position_value:
@@ -117,6 +148,24 @@ class RiskManager:
             return False, f"현금 보유 비율 부족 ({cash_ratio:.1%} / 최소 {self.MIN_CASH_RESERVE:.1%})"
 
         return True, "OK"
+
+    def get_weekly_loss_adjustment(self) -> float:
+        """
+        주간 손실에 따른 entry_ratio 조정 계수 계산 (문서 명세)
+
+        Returns:
+            조정 계수 (0.0 ~ 1.0)
+            - 주간 손실 < -3%: 0.5 (50% 축소)
+            - 주간 손실 >= -3%: 1.0 (조정 없음)
+        """
+        weekly_loss_pct = (self.weekly_realized_pnl / self.initial_balance) if self.initial_balance > 0 else 0
+
+        # -3% 이하 손실 시 50% 축소 (문서 명세)
+        if weekly_loss_pct < -self.HARD_MAX_WEEKLY_LOSS_PCT:
+            return 0.5
+
+        # 정상 범위
+        return 1.0
 
     def calculate_position_size(
         self,
@@ -162,9 +211,17 @@ class RiskManager:
         # 3. 신뢰도 조정 (낮은 신뢰도면 포지션 축소)
         confidence_factor = max(0.5, entry_confidence)  # 최소 50%
 
+        # 🔧 FIX: 3-1. 주간 손실 조정 (문서 명세: -3% 이하 시 50% 축소)
+        weekly_adjustment = self.get_weekly_loss_adjustment()
+
         # 4. 최종 수량 결정 (더 작은 값 선택)
         final_quantity = min(risk_based_quantity, max_quantity)
-        final_quantity = int(final_quantity * confidence_factor)
+        final_quantity = int(final_quantity * confidence_factor * weekly_adjustment)  # 🔧 FIX: 주간 손실 조정 적용
+
+        # 🔧 CRITICAL FIX: 최소 1주 보장 (잔고가 충분하고 시그널이 발생했으면)
+        # confidence가 낮아서 0주가 되는 것을 방지
+        if final_quantity == 0 and max_quantity >= 1:
+            final_quantity = 1
 
         # 5. 결과 계산
         investment = final_quantity * current_price
@@ -176,7 +233,8 @@ class RiskManager:
             'investment': investment,
             'risk_amount': risk_amount,
             'position_ratio': position_ratio,
-            'max_loss': max_loss
+            'max_loss': max_loss,
+            'weekly_adjustment': weekly_adjustment  # 🔧 FIX: 주간 손실 조정 계수 (문서 명세)
         }
 
     def record_trade(
@@ -204,6 +262,12 @@ class RiskManager:
         if today != self.today:
             self._new_day()
 
+        # 🔧 FIX: 주가 바뀌면 주간 데이터 초기화
+        from datetime import timedelta
+        current_week_start = (date.today() - timedelta(days=date.today().weekday())).isoformat()
+        if current_week_start != self.week_start:
+            self._new_week()
+
         # numpy 타입을 Python 기본 타입으로 변환 (JSON 직렬화 위해)
         trade = {
             'timestamp': datetime.now().isoformat(),
@@ -217,10 +281,25 @@ class RiskManager:
         }
 
         self.daily_trades.append(trade)
+        self.weekly_trades.append(trade)  # 🔧 FIX: 주간 거래 추적
 
         # 실현 손익 업데이트 (매도시)
         if trade_type == 'SELL':
-            self.daily_realized_pnl += float(realized_pnl) if realized_pnl is not None else 0.0
+            pnl = float(realized_pnl) if realized_pnl is not None else 0.0
+            self.daily_realized_pnl += pnl
+            self.weekly_realized_pnl += pnl  # 🔧 FIX: 주간 손익 추적
+
+            # 🔧 FIX: 연속 손실 추적 (문서 명세)
+            if pnl < 0:
+                self.consecutive_losses += 1
+                # 연속 손실 3회 도달 시 1거래일 쿨다운
+                if self.consecutive_losses >= self.CONSECUTIVE_LOSS_LIMIT:
+                    from datetime import timedelta
+                    self.cooldown_until = (date.today() + timedelta(days=1)).isoformat()
+            else:
+                # 수익 거래 시 연속 손실 카운터 리셋
+                self.consecutive_losses = 0
+                self.cooldown_until = None
 
         self.save()
 
@@ -260,9 +339,10 @@ class RiskManager:
         """
         total_pnl = self.daily_realized_pnl + unrealized_pnl
 
-        # 1. 일일 손실 한도 초과
-        if total_pnl < -self.HARD_MAX_DAILY_LOSS:
-            return True, f"일일 손실 한도 초과 ({total_pnl:,.0f}원 / -{self.HARD_MAX_DAILY_LOSS:,.0f}원)"
+        # 🔧 FIX: 1. 일일 손실 한도 초과 (퍼센트 기반, 문서 명세)
+        daily_loss_pct = (total_pnl / self.initial_balance) if self.initial_balance > 0 else 0
+        if daily_loss_pct < -self.HARD_MAX_DAILY_LOSS_PCT:
+            return True, f"일일 손실 한도 초과 ({daily_loss_pct:.2%} / -{self.HARD_MAX_DAILY_LOSS_PCT:.1%})"
 
         # 2. 일일 거래 횟수 초과
         if len(self.daily_trades) >= self.HARD_MAX_DAILY_TRADES:
@@ -288,8 +368,9 @@ class RiskManager:
         cash_ratio = (current_balance / total_assets * 100) if total_assets > 0 else 0
         position_ratio = (positions_value / total_assets * 100) if total_assets > 0 else 0
 
-        # 일일 손실 한도까지 남은 금액
-        remaining_loss_allowance = self.HARD_MAX_DAILY_LOSS + total_pnl
+        # 🔧 FIX: 일일 손실 한도까지 남은 비율 (퍼센트 기반, 문서 명세)
+        daily_loss_pct = (total_pnl / self.initial_balance) if self.initial_balance > 0 else 0
+        remaining_loss_allowance_pct = self.HARD_MAX_DAILY_LOSS_PCT + daily_loss_pct  # 음수이므로 +로 계산
 
         # 일일 수익률
         daily_return = ((total_assets - self.initial_balance) / self.initial_balance * 100) if self.initial_balance > 0 else 0
@@ -304,7 +385,8 @@ class RiskManager:
             'daily_unrealized_pnl': unrealized_pnl,
             'daily_total_pnl': total_pnl,
             'daily_return': daily_return,
-            'remaining_loss_allowance': remaining_loss_allowance,
+            'daily_loss_pct': daily_loss_pct,  # 🔧 FIX: 일일 손실 퍼센트 추가
+            'remaining_loss_allowance_pct': remaining_loss_allowance_pct,  # 🔧 FIX: 퍼센트 기반
             'daily_trade_count': len(self.daily_trades),
             'max_daily_trades': self.HARD_MAX_DAILY_TRADES,
             'remaining_trades': self.HARD_MAX_DAILY_TRADES - len(self.daily_trades)
@@ -325,6 +407,13 @@ class RiskManager:
         self.daily_trades = []
         self.daily_realized_pnl = 0.0
 
+    def _new_week(self):
+        """🔧 FIX: 새로운 주 초기화 (문서 명세)"""
+        from datetime import timedelta
+        self.week_start = (date.today() - timedelta(days=date.today().weekday())).isoformat()
+        self.weekly_trades = []
+        self.weekly_realized_pnl = 0.0
+
     def save(self):
         """리스크 로그 저장 (원자적 쓰기)"""
         os.makedirs(os.path.dirname(self.storage_path), exist_ok=True)
@@ -334,7 +423,14 @@ class RiskManager:
             'initial_balance': float(self.initial_balance),
             'today': self.today,
             'daily_trades': self.daily_trades,
-            'daily_realized_pnl': float(self.daily_realized_pnl)
+            'daily_realized_pnl': float(self.daily_realized_pnl),
+            # 🔧 FIX: 주간 데이터 저장 (문서 명세)
+            'week_start': self.week_start,
+            'weekly_trades': self.weekly_trades,
+            'weekly_realized_pnl': float(self.weekly_realized_pnl),
+            # 🔧 FIX: 연속 손실 데이터 저장 (문서 명세)
+            'consecutive_losses': self.consecutive_losses,
+            'cooldown_until': self.cooldown_until
         }
 
         # 원자적 쓰기: 임시 파일에 쓴 후 rename
@@ -364,5 +460,18 @@ class RiskManager:
                     # 날짜가 다르면 초기화
                     self._new_day()
 
+                # 🔧 FIX: 주간 데이터 로드 (문서 명세)
+                if data.get('week_start') == self.week_start:
+                    self.weekly_trades = data.get('weekly_trades', [])
+                    self.weekly_realized_pnl = data.get('weekly_realized_pnl', 0.0)
+                else:
+                    # 주가 다르면 초기화
+                    self._new_week()
+
+                # 🔧 FIX: 연속 손실 데이터 로드 (문서 명세)
+                self.consecutive_losses = data.get('consecutive_losses', 0)
+                self.cooldown_until = data.get('cooldown_until', None)
+
         except FileNotFoundError:
             self._new_day()
+            self._new_week()

@@ -70,15 +70,16 @@ def print_menu():
     table.add_column("메뉴", style="white")
 
     menu_items = [
-        ("1", "🤖 자동 매매 시작 (실시간 트레이딩)"),
-        ("2", "🔍 조건 검색 실행 (종목 선정)"),
-        ("3", "📊 Ranker 학습 (Candidate Ranker)"),
-        ("4", "🧪 Ranker 테스트 (예측 및 랭킹)"),
-        ("5", "📈 백테스트 실행"),
-        ("6", "📄 리포트 생성 (일일/주간)"),
-        ("7", "💬 Telegram 알림 테스트"),
-        ("8", "⚙️  시스템 설정"),
-        ("9", "📚 도움말"),
+        ("1", "🚀 자동 매매 시작 (L0-L6 최적화)"),
+        ("2", "🔍 백테스트 검증 모드 (L0-L6 시그널 확인)"),
+        ("3", "💰 거래 내역 조회 (오늘/최근/전체)"),
+        ("4", "📊 Ranker 학습 (Candidate Ranker)"),
+        ("5", "🧪 Ranker 테스트 (예측 및 랭킹)"),
+        ("6", "📈 백테스트 실행"),
+        ("7", "📄 리포트 생성 (일일/주간)"),
+        ("8", "💬 Telegram 알림 테스트"),
+        ("9", "⚙️  시스템 설정"),
+        ("h", "📚 도움말"),
         ("0", "🚪 종료"),
     ]
 
@@ -90,20 +91,34 @@ def print_menu():
 
 
 async def run_auto_trading():
-    """자동 매매 실행"""
+    """자동 매매 실행 (L0-L6 최적화)"""
     console.print("\n" + "=" * 70, style="cyan")
-    console.print("[bold cyan]🤖 자동 매매 시작...[/bold cyan]")
+    console.print("[bold cyan]🚀 자동 매매 시작 (L0-L6 최적화)[/bold cyan]")
     console.print("=" * 70, style="cyan")
 
+    console.print("\n[bold]🎯 실행 모드:[/bold]")
+    console.print("  • L0-L6 시그널 파이프라인 실행")
+    console.print("  • 실제 API 매수/매도 주문 실행")
+    console.print("  • 실시간 포지션 관리")
+    console.print("  • 조건식: 17,18,19,20,21,22 (기본)")
+    console.print()
+
     try:
+        console.print("[green]자동 매매 시스템을 시작합니다...[/green]")
+        console.print("[dim]종료하려면 Ctrl+C를 누르세요.[/dim]\n")
+
         # main_auto_trading.py의 main 함수를 직접 호출
         import main_auto_trading
 
-        console.print("\n[yellow]자동 매매 시스템을 시작합니다...[/yellow]")
-        console.print("[dim]종료하려면 Ctrl+C를 누르세요.[/dim]\n")
+        # sys.argv 설정하여 argparse가 live 모드로 실행되도록
+        original_argv = sys.argv.copy()
+        sys.argv = ['main_auto_trading.py', '--live', '--conditions', '17,18,19,20,21,22']
 
         # main 함수 실행
         await main_auto_trading.main()
+
+        # 원래 argv 복원
+        sys.argv = original_argv
 
         console.print("\n[green]✅ 자동 매매가 정상 종료되었습니다.[/green]")
 
@@ -114,48 +129,313 @@ async def run_auto_trading():
         console.print(f"[red]❌ 오류: {e}[/red]")
         import traceback
         traceback.print_exc()
+    finally:
+        # argv 복원 보장
+        if 'original_argv' in locals():
+            sys.argv = original_argv
 
     console.input("\n[dim][Enter]를 눌러 메인 메뉴로 돌아가기...[/dim]")
 
 
-async def run_condition_search():
-    """조건 검색 실행"""
+async def view_trading_history():
+    """거래 내역 조회"""
     console.print("\n" + "=" * 70, style="cyan")
-    console.print("[bold cyan]🔍 조건 검색 실행...[/bold cyan]")
+    console.print("[bold cyan]💰 거래 내역 조회[/bold cyan]")
     console.print("=" * 70, style="cyan")
 
     try:
-        import subprocess
+        from database.trading_db import TradingDatabase
+        from rich.table import Table
+        from datetime import datetime, timedelta
 
-        console.print("\n[yellow]조건 검색을 시작합니다...[/yellow]")
-        console.print("[dim]종료하려면 Ctrl+C를 누르세요.[/dim]\n")
+        db = TradingDatabase()
 
-        process = subprocess.Popen(
-            ['python', 'main_condition_filter.py'],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1
-        )
+        # 기간 선택
+        console.print("\n[bold]조회 기간을 선택하세요:[/bold]")
+        console.print("  [1] 오늘")
+        console.print("  [2] 최근 7일")
+        console.print("  [3] 최근 30일")
+        console.print("  [4] 전체")
 
-        # 실시간 출력
-        while True:
-            if shutdown_flag:
-                process.terminate()
-                console.print("\n[yellow]조건 검색 종료...[/yellow]")
-                break
+        period = console.input("\n[yellow]선택 (1-4): [/yellow]").strip() or "1"
 
-            line = process.stdout.readline()
-            if not line and process.poll() is not None:
-                break
-            if line:
-                print(line.rstrip())  # console.print 대신 print 사용 (Rich 포맷팅 없이 원본 출력)
+        # 기간별 쿼리
+        if period == "1":
+            start_date = datetime.now().replace(hour=0, minute=0, second=0)
+            title = "오늘의 거래 내역"
+        elif period == "2":
+            start_date = datetime.now() - timedelta(days=7)
+            title = "최근 7일 거래 내역"
+        elif period == "3":
+            start_date = datetime.now() - timedelta(days=30)
+            title = "최근 30일 거래 내역"
+        else:
+            start_date = None
+            title = "전체 거래 내역"
 
-        process.wait()
+        # DB 조회
+        import sqlite3
+        conn = sqlite3.connect(db.db_path)
+        cursor = conn.cursor()
+
+        if start_date:
+            cursor.execute("""
+                SELECT trade_id, stock_code, stock_name, trade_type,
+                       trade_time, price, quantity, amount,
+                       realized_profit, profit_rate, exit_reason
+                FROM trades
+                WHERE trade_time >= ?
+                ORDER BY trade_time DESC
+                LIMIT 100
+            """, (start_date,))
+        else:
+            cursor.execute("""
+                SELECT trade_id, stock_code, stock_name, trade_type,
+                       trade_time, price, quantity, amount,
+                       realized_profit, profit_rate, exit_reason
+                FROM trades
+                ORDER BY trade_time DESC
+                LIMIT 100
+            """)
+
+        trades = cursor.fetchall()
+        conn.close()
+
+        # 테이블 출력
+        table = Table(title=f"\n{title}", box=box.ROUNDED)
+        table.add_column("ID", style="dim", width=4)
+        table.add_column("시간", style="cyan", width=16)
+        table.add_column("종목", style="white", width=12)
+        table.add_column("구분", style="yellow", width=4)
+        table.add_column("가격", style="magenta", justify="right", width=10)
+        table.add_column("수량", style="blue", justify="right", width=6)
+        table.add_column("금액", style="white", justify="right", width=12)
+        table.add_column("손익", style="white", justify="right", width=10)
+        table.add_column("수익률", style="white", justify="right", width=8)
+        table.add_column("사유", style="dim", width=20)
+
+        total_profit = 0
+        buy_count = 0
+        sell_count = 0
+
+        for trade in trades:
+            (trade_id, stock_code, stock_name, trade_type,
+             trade_time, price, quantity, amount,
+             realized_profit, profit_rate, exit_reason) = trade
+
+            # 안전한 타입 변환 함수
+            def safe_str(val):
+                if val is None:
+                    return ""
+                if isinstance(val, bytes):
+                    try:
+                        return val.decode('utf-8')
+                    except:
+                        return str(val)
+                return str(val)
+
+            def safe_float(val):
+                if val is None:
+                    return 0.0
+                if isinstance(val, (int, float)):
+                    return float(val)
+                if isinstance(val, bytes):
+                    return 0.0  # 바이너리는 0으로 처리
+                try:
+                    return float(val)
+                except:
+                    return 0.0
+
+            def safe_int(val):
+                if val is None:
+                    return 0
+                if isinstance(val, (int, float)):
+                    return int(val)
+                if isinstance(val, bytes):
+                    return 0
+                try:
+                    return int(val)
+                except:
+                    return 0
+
+            # 타입 변환
+            stock_code = safe_str(stock_code)
+            stock_name = safe_str(stock_name)
+            trade_type = safe_str(trade_type)
+            trade_time = safe_str(trade_time)
+            exit_reason = safe_str(exit_reason) if exit_reason else "-"
+
+            price = safe_float(price)
+            quantity = safe_int(quantity)
+            amount = safe_float(amount)
+            realized_profit = safe_float(realized_profit) if realized_profit else None
+            profit_rate = safe_float(profit_rate) if profit_rate else None
+
+            # 손익 계산
+            if trade_type == 'SELL' and realized_profit:
+                total_profit += realized_profit
+                profit_color = "green" if realized_profit > 0 else "red"
+                profit_str = f"[{profit_color}]{realized_profit:+,.0f}원[/{profit_color}]"
+                rate_str = f"[{profit_color}]{profit_rate:+.2f}%[/{profit_color}]" if profit_rate else "-"
+                sell_count += 1
+            else:
+                profit_str = "-"
+                rate_str = "-"
+                buy_count += 1
+
+            # 거래 구분 색상
+            type_color = "green" if trade_type == "BUY" else "red"
+            type_str = f"[{type_color}]{trade_type}[/{type_color}]"
+
+            table.add_row(
+                str(trade_id),
+                str(trade_time),
+                f"{stock_name}\n({stock_code})",
+                type_str,
+                f"{price:,.0f}",
+                str(quantity),
+                f"{amount:,.0f}",
+                profit_str,
+                rate_str,
+                exit_reason or "-"
+            )
+
+        console.print(table)
+
+        # 요약 정보
+        console.print(f"\n[bold]📊 요약:[/bold]")
+        console.print(f"  총 거래: {len(trades)}건 (매수: {buy_count}, 매도: {sell_count})")
+
+        if sell_count > 0:
+            avg_profit = total_profit / sell_count
+            profit_color = "green" if total_profit > 0 else "red"
+            console.print(f"  총 손익: [{profit_color}]{total_profit:+,.0f}원[/{profit_color}]")
+            console.print(f"  평균 손익: [{profit_color}]{avg_profit:+,.0f}원[/{profit_color}]")
+
+        if len(trades) == 100:
+            console.print("\n[yellow]⚠️  최근 100건만 표시됩니다.[/yellow]")
 
     except Exception as e:
-        logger.error(f"조건 검색 오류: {e}")
+        logger.error(f"거래 내역 조회 오류: {e}")
         console.print(f"[red]❌ 오류: {e}[/red]")
+        import traceback
+        traceback.print_exc()
+
+    console.input("\n[dim][Enter]를 눌러 메인 메뉴로 돌아가기...[/dim]")
+
+
+async def run_dry_run_mode():
+    """백테스트 검증 모드 (L0-L6 시그널 확인)"""
+    console.print("\n" + "=" * 70, style="cyan")
+    console.print("[bold cyan]🔍 백테스트 검증 모드 (L0-L6 시그널 확인)[/bold cyan]")
+    console.print("=" * 70, style="cyan")
+
+    console.print("\n[bold]🎯 백테스트 검증 모드 설명:[/bold]")
+    console.print("  • L0-L6 시그널 파이프라인 정상 동작 확인")
+    console.print("  • 매수 시그널 감지 및 로그 출력")
+    console.print("  • 포지션 크기 계산 표시")
+    console.print("  • [cyan]실제 API 매수 주문은 생략됩니다[/cyan]")
+    console.print()
+
+    try:
+        # 조건식 인덱스 선택
+        console.print("[yellow]사용할 조건식 인덱스를 입력하세요.[/yellow]")
+        console.print("[dim]   기본값: 17,18,19,20,21,22 (실전 6개 조건식)[/dim]")
+        console.print("[dim]   예: 0,1,2 또는 17,18,19,20,21,22 (쉼표로 구분)[/dim]")
+        indices_input = console.input("[yellow]조건식 인덱스 (기본: 17,18,19,20,21,22): [/yellow]").strip() or "17,18,19,20,21,22"
+
+        console.print(f"\n[green]✓ 조건식 {indices_input}를 사용하여 백테스트 검증 모드를 시작합니다.[/green]")
+        console.print("[dim]종료하려면 Ctrl+C를 누르세요.[/dim]\n")
+
+        # main_auto_trading.py의 main 함수를 직접 호출
+        import main_auto_trading
+
+        # sys.argv 설정하여 argparse가 dry-run 모드로 실행되도록
+        original_argv = sys.argv.copy()
+        sys.argv = ['main_auto_trading.py', '--dry-run', '--conditions', indices_input]
+
+        # main 함수 실행
+        await main_auto_trading.main()
+
+        # 원래 argv 복원
+        sys.argv = original_argv
+
+        console.print("\n[green]✅ 백테스트 검증 모드가 정상 종료되었습니다.[/green]")
+
+    except KeyboardInterrupt:
+        console.print("\n[yellow]⚠️  사용자가 백테스트 검증을 중단했습니다.[/yellow]")
+    except Exception as e:
+        logger.error(f"백테스트 검증 오류: {e}")
+        console.print(f"[red]❌ 오류: {e}[/red]")
+        import traceback
+        traceback.print_exc()
+    finally:
+        # argv 복원 보장
+        if 'original_argv' in locals():
+            sys.argv = original_argv
+
+    console.input("\n[dim][Enter]를 눌러 메인 메뉴로 돌아가기...[/dim]")
+
+
+async def run_live_mode():
+    """실전 투입 모드 (L0-L6 + 실제 매매)"""
+    console.print("\n" + "=" * 70, style="red")
+    console.print("[bold red]🚀 실전 투입 모드 (L0-L6 + 실제 매매)[/bold red]")
+    console.print("=" * 70, style="red")
+
+    console.print("\n[bold yellow]⚠️  경고: 실제 계좌에서 매매가 실행됩니다![/bold yellow]")
+    console.print("\n[bold]🎯 실전 투입 모드 설명:[/bold]")
+    console.print("  • L0-L6 시그널 파이프라인 실행")
+    console.print("  • [red]실제 API 매수/매도 주문 실행[/red]")
+    console.print("  • 실시간 포지션 관리")
+    console.print("  • 손익 추적 및 로그 기록")
+    console.print()
+
+    # 확인 프롬프트
+    confirm = console.input("[bold yellow]실전 투입을 진행하시겠습니까? (yes 입력 필요): [/bold yellow]").strip()
+
+    if confirm.lower() != 'yes':
+        console.print("[yellow]취소되었습니다.[/yellow]")
+        console.input("\n[dim][Enter]를 눌러 메인 메뉴로 돌아가기...[/dim]")
+        return
+
+    try:
+        # 조건식 인덱스 선택
+        console.print("\n[yellow]사용할 조건식 인덱스를 입력하세요.[/yellow]")
+        console.print("[dim]   권장: 17,18,19,20,21,22 (전체 6개 전략)[/dim]")
+        console.print("[dim]   예: 0,1,2,3,4,5 또는 17,18,19,20,21,22 (쉼표로 구분)[/dim]")
+        indices_input = console.input("[yellow]조건식 인덱스 (기본: 17,18,19,20,21,22): [/yellow]").strip() or "17,18,19,20,21,22"
+
+        console.print(f"\n[green]✓ 조건식 {indices_input}를 사용하여 실전 투입 모드를 시작합니다.[/green]")
+        console.print("[bold red]실제 매매가 실행됩니다![/bold red]")
+        console.print("[dim]종료하려면 Ctrl+C를 누르세요.[/dim]\n")
+
+        # main_auto_trading.py의 main 함수를 직접 호출
+        import main_auto_trading
+
+        # sys.argv 설정하여 argparse가 live 모드로 실행되도록
+        original_argv = sys.argv.copy()
+        sys.argv = ['main_auto_trading.py', '--live', '--conditions', indices_input]
+
+        # main 함수 실행
+        await main_auto_trading.main()
+
+        # 원래 argv 복원
+        sys.argv = original_argv
+
+        console.print("\n[green]✅ 실전 투입 모드가 정상 종료되었습니다.[/green]")
+
+    except KeyboardInterrupt:
+        console.print("\n[yellow]⚠️  사용자가 실전 투입을 중단했습니다.[/yellow]")
+    except Exception as e:
+        logger.error(f"실전 투입 오류: {e}")
+        console.print(f"[red]❌ 오류: {e}[/red]")
+        import traceback
+        traceback.print_exc()
+    finally:
+        # argv 복원 보장
+        if 'original_argv' in locals():
+            sys.argv = original_argv
 
     console.input("\n[dim][Enter]를 눌러 메인 메뉴로 돌아가기...[/dim]")
 
@@ -1109,21 +1389,23 @@ async def main():
             if choice == '1':
                 await run_auto_trading()
             elif choice == '2':
-                await run_condition_search()
+                await run_dry_run_mode()
             elif choice == '3':
+                await view_trading_history()
+            elif choice == '4':
                 from ml_train_menu import train_ranker_menu
                 await train_ranker_menu()
-            elif choice == '4':
-                await test_ml_prediction()
             elif choice == '5':
-                await run_backtest()
+                await test_ml_prediction()
             elif choice == '6':
-                await generate_report()
+                await run_backtest()
             elif choice == '7':
-                await test_telegram()
+                await generate_report()
             elif choice == '8':
-                show_settings()
+                await test_telegram()
             elif choice == '9':
+                show_settings()
+            elif choice == 'h':
                 show_help()
             elif choice == '0':
                 console.print("\n[yellow]👋 프로그램을 종료합니다...[/yellow]")

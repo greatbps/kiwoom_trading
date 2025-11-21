@@ -3,9 +3,9 @@
 ## 📋 전체 매매 흐름
 
 ```
-[관심종목 선정]
+[조건검색 & AI 통합 분석]
     ↓
-[5분봉 실시간 모니터링]
+[사전 매수 검증]
     ↓
 [진입 시그널 감지] → VWAP 상향 돌파 + 필터
     ↓
@@ -13,7 +13,7 @@
     ↓
 [포지션 관리] → 고가 추적 + 트레일링 스탑
     ↓
-[청산 실행] → 트레일링/손절/VWAP 하향
+[청산 실행] → 6단계 매도 전략
 ```
 
 ---
@@ -22,28 +22,17 @@
 
 ### 현재 로직
 ```
-없음 (수동 선정)
+조건검색(HTS) → VWAP 검증 → AI 통합 분석 → watchlist.json 저장
 ```
 
-### 보완 필요사항
-❌ **자동 종목 선별 기능 없음**
+- **조건검색**: 모멘텀/돌파 전략으로 1차 후보 추출 (`main_condition_filter.py`)
+- **VWAP 재검증**: `core/vwap_validator.py`가 5분봉 VWAP 백테스트로 노이즈 제거
+- **AI 통합 분석**: 뉴스·기술·수급·기본 분석 점수를 `analysis_engine.py`가 가중 합산
+- **사전 매수 검증**: `PreTradeValidator`가 최근 5일 시뮬 결과를 확인해 승인/거부 (docs/pre_trade_validation_guide.md)
 
-### 제안: 종목 스크리닝 추가
-```python
-def screen_stocks():
-    """
-    변동성 + 거래량 기준 종목 선별
-    """
-    criteria:
-    - 변동성: 일평균 등락률 > 2%
-    - 거래량: 일평균 거래대금 > 100억원
-    - 유동성: 호가 스프레드 < 0.5%
-    - 시가총액: 1000억 이상
-
-    return: 적합 종목 리스트
-```
-
-**구현 우선순위**: ⭐⭐⭐ (높음)
+### 운영상의 주의
+- 조건검색이 실패하면 watchlist가 비어 있으므로 자동 매수 루프 전에 파일 업데이트 여부를 확인한다.
+- AI 분석 가중치는 `config/analysis_weights.json`에서 백테스트 결과에 따라 자동 조정되며, 백업은 `config/backups/`에 저장된다.
 
 ---
 
@@ -51,91 +40,31 @@ def screen_stocks():
 
 ### 현재 로직
 ```python
-# 5분봉마다 체크
-if 포지션 없음:
-    # VWAP 계산
-    df = calculate_vwap(chart_data)
+# 1분 루프
+for stock in watchlist:
+    entry_check = entry_timing_analyzer.analyze_entry_timing(stock)
 
-    # 시그널 생성 (필터 적용)
-    df = generate_signals(df,
-        use_trend_filter=True,     # MA20 위
-        use_volume_filter=True     # 평균 대비 1.2배
-    )
-
-    # 매수 조건
-    if df.iloc[-1]['signal'] == 1:  # VWAP 상향 돌파
-        매수_실행()
+    if entry_check.can_enter and pre_trade_validator.allow(stock):
+        risk_ok, reason = risk_manager.can_open_position(...)
+        if risk_ok:
+            execute_buy(...)
 ```
 
 ### 진입 조건 상세
 
-| 구분 | 조건 | 현재값 | 상태 |
-|------|------|--------|------|
-| **필수** | VWAP 상향 돌파 | ✅ 구현 | ✅ |
-| **필터1** | 추세 (MA20 상단) | ✅ 구현 | ✅ |
-| **필터2** | 거래량 (평균×1.2) | ✅ 구현 | ✅ |
-| **필터3** | 시간대 필터 | ❌ 없음 | ⚠️ |
-| **필터4** | 변동성 필터 | ❌ 없음 | ⚠️ |
+| 구분 | 조건 | 상태 |
+|------|------|------|
+| **필수** | 5분봉 VWAP 상향 돌파 | ✅ |
+| **필터1** | MA20 상단 유지 (추세 필터) | ✅ |
+| **필터2** | 거래량 20분 평균 대비 ≥ 1.2배 | ✅ |
+| **필터3** | 시간 필터 (09:30~14:59) | ✅ |
+| **필터4** | 일봉 20일선 위 (상위 추세) | ✅ |
+| **필터5** | 변동성 ≤ 5% (ATR 기반) | ✅ |
+| **필터6** | 사전 매수 검증 통과 (승률/PF 기준) | ✅ |
 
-### 보완 필요사항
-
-#### 1) 시간대 필터 추가
-```python
-def check_time_filter(current_time):
-    """
-    장 초반/마감 전 회피
-    """
-    # 09:00-09:30: 변동성 과다 (회피)
-    if "09:00" <= current_time < "09:30":
-        return False
-
-    # 15:00-15:30: 마감 매매 (회피)
-    if "15:00" <= current_time:
-        return False
-
-    return True
-```
-
-**이유**: 장 초반/마감은 노이즈 많음
-**구현 우선순위**: ⭐⭐ (중간)
-
-#### 2) 변동성 필터 추가
-```python
-def check_volatility(df, max_volatility=5.0):
-    """
-    과도한 변동성 회피
-    """
-    recent_volatility = df['close'].pct_change().std() * 100
-
-    if recent_volatility > max_volatility:
-        return False  # 변동성 너무 큼
-
-    return True
-```
-
-**이유**: 급등락 종목은 트레일링 스탑 무용지물
-**구현 우선순위**: ⭐⭐ (중간)
-
-#### 3) 일봉 추세 확인 추가
-```python
-def check_daily_trend(stock_code):
-    """
-    일봉 상승 추세 확인
-    """
-    daily_data = get_daily_chart(stock_code, days=20)
-
-    # 20일 이평선 상단 여부
-    current_price = daily_data.iloc[-1]['close']
-    ma20 = daily_data['close'].rolling(20).mean().iloc[-1]
-
-    if current_price > ma20:
-        return True  # 일봉 상승 추세
-
-    return False
-```
-
-**이유**: 일봉 하락 추세에서 역추세 매매 회피
-**구현 우선순위**: ⭐⭐⭐ (높음)
+### 실무 팁
+- 변동성 한도는 하드 스탑(-3%) 및 분할 익절 구조와 조합되므로 5% 상단을 넘기지 않는다.
+- 사전 검증 실패, 시간 필터 미통과, 또는 RiskManager 경고가 발생하면 주문 시도를 중단하고 3분간 후보에서 제외한다.
 
 ---
 
@@ -143,348 +72,121 @@ def check_daily_trend(stock_code):
 
 ### 현재 로직
 ```python
-# 매수 직후
-position = 수량
-avg_price = 매수가
-highest_price = 매수가
-trailing_active = False
-trailing_stop_price = 0
+position_plan = risk_manager.calculate_position_size(...)  # 자본 2% 리스크, 포지션 30% 제한
 
-# 5분봉마다 업데이트
-while 포지션 보유:
-    # 고가 갱신
-    if current_price > highest_price:
-        highest_price = current_price
+if entry_signal == "STRONG_BUY":
+    entry_ratio = 1.0
+else:
+    entry_ratio = 0.7
 
-        # 트레일링 활성화 (+1.5% 도달)
-        if profit_rate >= 1.5% and not trailing_active:
-            trailing_active = True
-            trailing_stop_price = highest_price * 0.99  # -1.0%
+execute_buy(quantity=position_plan.quantity * entry_ratio)
 
-        # 트레일링 업데이트 (활성화 후)
-        elif trailing_active:
-            new_stop = highest_price * 0.99
-            if new_stop > trailing_stop_price:
-                trailing_stop_price = new_stop
+# 추가 진입 (조건부)
+if profit_rate > 0.5 and still_above_vwap:
+    execute_buy(quantity=position_plan.remaining_qty * stage2_ratio)
 ```
 
-### 보완 필요사항
-
-#### 1) 포지션 크기 관리 추가
-```python
-def calculate_position_size(capital, stock_price, risk_pct=1.0):
-    """
-    변동성 기반 포지션 크기 결정
-    """
-    # ATR 기반 변동성 계산
-    atr = calculate_atr(chart_data, period=14)
-
-    # 리스크 금액 계산 (자본의 1%)
-    risk_amount = capital * (risk_pct / 100)
-
-    # 1주당 리스크 = ATR * 2
-    risk_per_share = atr * 2
-
-    # 포지션 크기 = 리스크 금액 / 1주당 리스크
-    position_size = risk_amount / risk_per_share
-
-    # 최대 포지션: 자본의 50%
-    max_position = (capital * 0.5) / stock_price
-
-    return min(position_size, max_position)
-```
-
-**이유**: 변동성 큰 종목은 적게, 안정적 종목은 크게
-**현재 문제**: 전량 매수 (리스크 과다)
-**구현 우선순위**: ⭐⭐⭐⭐ (매우 높음)
-
-#### 2) 분할 매수 추가
-```python
-def staged_entry(total_capital):
-    """
-    1차: 50%
-    2차: VWAP 재확인 후 추가 30%
-    3차: 수익 시현 시 추가 20%
-    """
-    # 1차 진입
-    if signal == 'buy' and position == 0:
-        buy(total_capital * 0.5)
-
-    # 2차 진입 (확인)
-    elif position > 0 and profit_rate > 0.5%:
-        if still_above_vwap:
-            buy(total_capital * 0.3)
-
-    # 3차 진입 (추격)
-    elif position > 0 and profit_rate > 1.0%:
-        buy(total_capital * 0.2)
-```
-
-**이유**: 리스크 분산, 추세 확인
-**구현 우선순위**: ⭐⭐ (중간)
+### 현행 파라미터
+- 거래당 리스크 2%, 종목당 최대 30% (`RiskManager`)
+- STRONG_BUY → 100% 진입, BUY → 70% 진입 (`TRADING_SIGNAL_LOGIC.md`)
+- 변동성 상위 종목(ATR > 5%)은 stage2/3 진입을 비활성화하여 과도한 노출을 막는다.
+- 사전 검증이 최소 조건만 충족했을 경우 entry_ratio를 0.5로 낮추고 RiskManager 경고 플래그를 세팅한다.
 
 ---
 
 ## 📤 4단계: 청산 (매도)
 
-### 현재 로직 (우선순위별)
+### 6단계 매도 우선순위
 
 ```python
-# 우선순위 1: 트레일링 스탑
-if trailing_active and current_price <= trailing_stop_price:
-    매도_실행("트레일링 스탑")
-    # 수익률: +1.5% ~ 최고수익의 70%
+HARD_STOP_RATE = -0.03
+PARTIAL_TP1_RATE = 0.04
+PARTIAL_TP2_RATE = 0.06
+TRAILING_ATR_MULTIPLIER = 2
+FORCE_CLOSE_TIME = "15:00"
 
-# 우선순위 2: 기본 손절
-elif not trailing_active and profit_rate <= -1.0%:
-    매도_실행("손절")
-    # 수익률: -1.0%
-
-# 우선순위 3: VWAP 하향 돌파
-elif vwap_signal == -1:  # 필터 포함
-    매도_실행("VWAP 하향")
-    # 수익률: 변동
+# 1. Hard Stop (-3%) → 전량 시장가 손절
+# 2. 1차 익절 (+4%) → 보유 물량 40% 청산
+# 3. 2차 익절 (+6%) → 추가 40% 청산 + 트레일링 활성화
+# 4. ATR 트레일링 (고가 - ATR×2) → 잔량 20% 청산
+# 5. EMA + Volume Breakdown → 추세 붕괴 시 잔량 청산
+# 6. 시간 기반 (15:00 이후) → 전량 청산
 ```
 
-### 청산 조건 상세
+### 청산 파라미터
 
-| 우선순위 | 조건 | 파라미터 | 작동 여부 | 개선 필요 |
-|---------|------|----------|----------|----------|
-| 1 | 트레일링 스탑 | 활성: 1.5%, 비율: 1.0% | ✅ | ✅ 최적화 완료 |
-| 2 | 기본 손절 | -1.0% | ✅ | ⚠️ 고정값 |
-| 3 | VWAP 하향 | 필터 적용 | ✅ | ✅ |
-| 4 | 시간 기반 | ❌ 없음 | ❌ | ⚠️ 추가 필요 |
-| 5 | 최대 보유 | ❌ 없음 | ❌ | ⚠️ 추가 필요 |
+| 항목 | 값 | 비고 |
+|------|-----|------|
+| 하드 스탑 | -3% | 일일 손실 한도와 동일 |
+| 1차 익절 | +4% (40%) | 원금 회수 목적 |
+| 2차 익절 | +6% (40%) | 트레일링 활성화 트리거 |
+| 트레일링 스탑 | 최고가 - ATR×2 | 잔량 20% 추세 추종 |
+| 강제 청산 | 15:00 이후 | 장 마감 30분 전 |
 
-### 보완 필요사항
-
-#### 1) 손절을 ATR 기반으로 변경
-```python
-def calculate_stop_loss(entry_price, atr):
-    """
-    ATR 기반 동적 손절
-    """
-    # 변동성이 크면 손절폭도 넓게
-    stop_loss_price = entry_price - (atr * 2)
-
-    # 최소 -1%, 최대 -3%
-    min_stop = entry_price * 0.99
-    max_stop = entry_price * 0.97
-
-    return max(min(stop_loss_price, max_stop), min_stop)
-```
-
-**이유**: 변동성에 따라 유연한 손절
-**현재 문제**: 모든 종목에 -1% 고정 (부적절)
-**구현 우선순위**: ⭐⭐⭐ (높음)
-
-#### 2) 시간 기반 청산 추가
-```python
-def check_time_exit(entry_time, current_time, max_hold_minutes=240):
-    """
-    최대 보유 시간 제한
-    """
-    # 4시간(240분) 이상 보유 시 강제 청산
-    hold_time = (current_time - entry_time).minutes
-
-    if hold_time >= max_hold_minutes:
-        return True, "시간 초과"
-
-    # 14:50 이후 무조건 청산
-    if current_time.strftime("%H:%M") >= "14:50":
-        return True, "장 마감 임박"
-
-    return False, ""
-```
-
-**이유**: 장기 포지션 방지, 당일 청산 원칙
-**구현 우선순위**: ⭐⭐⭐ (높음)
-
-#### 3) 분할 청산 추가
-```python
-def staged_exit(position, profit_rate):
-    """
-    수익 구간별 분할 청산
-    """
-    # 1차 익절 (+2%): 50% 청산
-    if profit_rate >= 2.0 and position == 100%:
-        sell(position * 0.5)
-        # 나머지는 트레일링 스탑
-
-    # 2차 익절 (+4%): 추가 30% 청산
-    elif profit_rate >= 4.0 and position == 50%:
-        sell(position * 0.6)  # 전체의 30%
-        # 나머지는 트레일링 스탑
-```
-
-**이유**: 수익 확보 + 추세 추종 병행
-**구현 우선순위**: ⭐⭐ (중간)
+### 운용 가이드
+- ATR 기반 손절선이 -3%보다 넓게 계산되더라도 하드 스탑(-3%)을 우선 적용한다.
+- EMA Breakdown은 HIGH 신뢰도 신호에서 즉시 발동하며, MEDIUM 신호는 손실 구간일 때만 실행한다.
+- 강제 청산 직전(14:50 이후)에는 신규 진입을 차단하고 보유 종목만 관리한다.
 
 ---
 
 ## ⚙️ 5단계: 리스크 관리
 
-### 현재 상태
-```
-❌ 일일 손실 제한 없음
-❌ 최대 거래 횟수 제한 없음
-❌ 포트폴리오 분산 없음
-❌ 드로다운 모니터링 없음
-```
+### RiskManager 핵심 파라미터
 
-### 추가 필요: 리스크 관리 시스템
-
-#### 1) 일일 손실 제한
 ```python
-class RiskManager:
-    def __init__(self):
-        self.daily_max_loss = -2.0  # -2%
-        self.daily_pnl = 0
-        self.trade_count = 0
-        self.max_trades_per_day = 5
-
-    def can_trade(self):
-        """거래 가능 여부 체크"""
-        # 일일 손실 한도 초과
-        if self.daily_pnl <= self.daily_max_loss:
-            return False, "일일 손실 한도 초과"
-
-        # 거래 횟수 초과
-        if self.trade_count >= self.max_trades_per_day:
-            return False, "거래 횟수 초과"
-
-        return True, "OK"
-
-    def update_pnl(self, profit):
-        """손익 업데이트"""
-        self.daily_pnl += profit
-        self.trade_count += 1
+RISK_PER_TRADE = 0.02         # 거래당 2%
+MAX_POSITION_SIZE = 0.30      # 종목당 최대 30%
+MAX_POSITIONS = 5             # 동시 보유 5종목
+HARD_MAX_POSITION = 200000    # 단일 포지션 20만원 절대 한도
+HARD_MAX_DAILY_LOSS = -0.05   # 일일 손실 -5% 시 자동 중단
+HARD_MAX_WEEKLY_LOSS = -0.03  # 주간 손실 -3% 시 포지션 축소
+MAX_DAILY_TRADES = 10         # 일일 거래 제한
+MIN_CASH_RESERVE = 0.20       # 현금 20% 유지
+CONSECUTIVE_LOSS_LIMIT = 3    # 연속 손실 3회면 쿨다운
 ```
 
-**구현 우선순위**: ⭐⭐⭐⭐⭐ (필수)
+### 강화된 운용 규칙
+- **주간 손실 -3%**: 신규 포지션 금지, 보유 종목은 트레일링만 유지 또는 손익 0 근처 청산. 다음 주 RiskManager 리셋까지 entry_ratio를 50%로 제한.
+- **연속 손실 3건**: 1거래일 쿨다운 후 `PreTradeValidator` 기준을 강화(승률 ≥ 60%, PF ≥ 1.5).
+- **거래 재개 조건**: 일일 손실을 -2% 이내로 회복하고 주간 누적 손실이 -1% 이내가 되면 정상 사이즈로 복귀.
+- **데이터 품질**: 실시간 지표 수집 실패 시 해당 종목을 watchlist에서 즉시 제거했고, `risk_log.json`에 장애 원인을 기록한다.
 
-#### 2) 포트폴리오 분산
-```python
-def portfolio_allocation(total_capital, num_stocks=5):
-    """
-    자본 분산 (최대 5종목)
-    """
-    capital_per_stock = total_capital / num_stocks
+---
 
-    # 종목별 최대 투자 비중: 20%
-    max_per_stock = total_capital * 0.2
+## 🔁 사전 매수 검증 & 데이터 품질
 
-    return min(capital_per_stock, max_per_stock)
-```
-
-**구현 우선순위**: ⭐⭐⭐⭐ (매우 높음)
-
-#### 3) 연속 손실 제어
-```python
-def check_consecutive_losses(loss_history):
-    """
-    연속 3회 손실 시 거래 중단
-    """
-    recent_3 = loss_history[-3:]
-
-    if all(loss < 0 for loss in recent_3):
-        return False, "연속 손실, 거래 중단"
-
-    return True, "OK"
-```
-
-**구현 우선순위**: ⭐⭐⭐ (높음)
+- `PreTradeValidator`는 최근 5일 5분봉 백테스트로 승률·평균 수익률·Profit Factor를 확인한다.
+- 거래 샘플이 2회 미만일 경우 다음 중 하나를 적용한다.
+  - 진입 비중 50% 축소
+  - 상위 타임프레임(30분봉)으로 보조 검증 후 조건 충족 시에만 진입
+  - RiskManager 주의 플래그 기록 후 재검증 시까지 후보 리스트에서 제외
+- 백테스트 피처 중 실시간 값이 아직 준비되지 않은 항목은 문서에 “임시값”으로 표기되어 있으며, 실제 거래 판단에는 반영하지 않는다 (docs/BACKTEST_PROGRESS.md 참고).
 
 ---
 
 ## 📊 전체 로직 흐름도
 
 ```
-┌─────────────────────────────────────────┐
-│          시스템 시작 (09:00)              │
-└─────────────────┬───────────────────────┘
-                  ↓
-┌─────────────────────────────────────────┐
-│     리스크 체크 (일일 손실 한도 등)        │
-│     - 손실 < -2% ? → 거래 중단           │
-│     - 거래 횟수 < 5회 ? → 계속           │
-└─────────────────┬───────────────────────┘
-                  ↓
-         ┌────────────────┐
-         │ 포지션 있음?    │
-         └────┬───────┬───┘
-              NO      YES
-              ↓       ↓
-    ┌─────────────┐ ┌──────────────────┐
-    │ 진입 체크    │ │ 청산 체크         │
-    │             │ │                  │
-    │ 1.시간 필터  │ │ 1.트레일링 스탑   │
-    │ 2.VWAP 돌파 │ │ 2.손절(-1%)      │
-    │ 3.추세(MA20)│ │ 3.VWAP 하향      │
-    │ 4.거래량×1.2│ │ 4.시간 초과      │
-    │ 5.일봉 추세  │ │ 5.장 마감(14:50) │
-    └──────┬──────┘ └────────┬─────────┘
-           ↓                 ↓
-    ┌─────────────┐   ┌──────────────┐
-    │ 매수 실행    │   │ 매도 실행     │
-    │             │   │              │
-    │ -포지션 크기 │   │ -손익 기록    │
-    │ -진입 기록  │   │ -리스크 업데이트│
-    └─────────────┘   └──────────────┘
-           ↓                 ↓
-    ┌─────────────────────────────┐
-    │   다음 5분봉까지 대기         │
-    └──────────────┬──────────────┘
-                   ↓
-         ┌─────────────────┐
-         │ 14:50 이후?      │
-         │ YES → 전량 청산  │
-         │ NO → 계속        │
-         └──────────────────┘
+[조건검색 실행]
+    ↓
+[VWAP 백테스트 & AI 분석]
+    ↓
+[사전 검증 통과 종목 watchlist 등록]
+    ↓
+[실시간 1분 루프]
+    ├─ RiskManager 한도 확인
+    ├─ EntryTimingAnalyzer 체크
+    ├─ PreTradeValidator 재검증
+    ├─ 주문 실행 (OrderExecutor)
+    └─ 포지션 모니터링 & 6단계 매도 전략
 ```
 
 ---
 
-## ✅ 우선순위별 구현 과제
-
-### 🔴 필수 (즉시)
-1. **리스크 관리자 구현** (일일 손실 제한, 거래 횟수 제한)
-2. **포지션 크기 관리** (변동성 기반)
-3. **ATR 기반 손절** (고정값 → 동적)
-
-### 🟡 중요 (단기)
-4. **일봉 추세 확인** (역추세 매매 회피)
-5. **시간 기반 청산** (장 마감 전 청산)
-6. **종목 스크리닝** (자동 선별)
-
-### 🟢 개선 (중장기)
-7. 시간대 필터 (장 초반/마감 회피)
-8. 변동성 필터 (급등락 회피)
-9. 분할 매수/청산
-
----
-
-## 📝 현재 vs 이상적 비교
-
-| 기능 | 현재 | 이상적 | 차이 |
-|------|------|--------|------|
-| 진입 필터 | 3개 | 6개 | ⚠️ 3개 부족 |
-| 청산 조건 | 3개 | 5개 | ⚠️ 2개 부족 |
-| 포지션 관리 | 전량 | 변동성 기반 | ❌ 구현 필요 |
-| 리스크 관리 | 없음 | 5단계 | ❌ 구현 필요 |
-| 시간 관리 | 없음 | 3단계 | ❌ 구현 필요 |
-
----
-
-## 🎯 다음 단계
-
-1. **리스크 관리 시스템 구축** → `risk_manager.py` 생성
-2. **포지션 크기 계산 로직** → `position_sizer.py` 생성
-3. **진입/청산 조건 강화** → `entry_timing_analyzer.py` 업데이트
-4. **종목 스크리너** → `stock_screener.py` 생성
-5. **통합 테스트** → 10-20개 종목 실전 시뮬레이션
-
----
-
-**작성일**: 2025-10-25
-**버전**: 1.0
+## 📑 참고 문서
+- docs/REALTIME_SIGNAL_LOGIC.md – 실시간 매수/매도 6단계 로직
+- docs/TRADING_SIGNAL_LOGIC.md – 점수 기반 시그널 및 포지션 사이징
+- docs/pre_trade_validation_guide.md – 사전 검증 기준과 파라미터
+- docs/BACKTEST_PROGRESS.md – 백테스트/Ranker 진행 상황 및 데이터 한계
+- docs/AUTO_TRADING_SYSTEM.md – 전체 시스템 아키텍처와 모듈 설명

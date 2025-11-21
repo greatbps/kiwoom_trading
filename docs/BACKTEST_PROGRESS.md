@@ -96,6 +96,7 @@ recent_return_5d = 0.0  # 임시값
 - 최근 수익률 계산 (5일)
 - 시장 변동성 계산 (KOSPI ATR)
 - 업종 강도/가격 모멘텀 계산
+- 임시 조치: 임시값 기반 백테스트 결과는 `SIMULATED (PLACEHOLDER)` 태그로 저장하고 실거래 파라미터 조정에 사용하지 않는다.
 
 ### 우선순위 2: 대량 백테스트 실행 (100+ 샘플 수집)
 
@@ -139,7 +140,7 @@ current_price = float(day_data.get('stk_close_prc', day_data.get('close', entry_
 | 실제 데이터 지원 | ✅ 완료 | 키움 API 일봉/분봉 |
 | Mock 데이터 폴백 | ✅ 완료 | 자동 전환 |
 | 조건검색 연동 | ✅ 완료 | 통합 스크립트 |
-| Entry Features 수집 | ⚠️ 임시값 | 실시간 계산 필요 |
+| Entry Features 수집 | ⚠️ 임시값 | 실시간 계산 필요, 결과 태그 `SIMULATED` |
 | 대량 데이터 수집 | ❌ 미완료 | 100+ 샘플 필요 |
 | Ranker 파이프라인 통합 | ❌ 미완료 | main_auto_trading.py |
 
@@ -159,3 +160,10 @@ current_price = float(day_data.get('stk_close_prc', day_data.get('close', entry_
 
 **마지막 업데이트:** 2025-11-02
 **작성자:** Claude Code
+
+---
+
+## ⚠️ 리스크 메모
+- 임시 피처가 포함된 결과는 주간 손실 한도(-3%) 리포트에서 **참고용**으로만 활용한다. 실거래 파라미터 조정에는 사용하지 않는다.
+- `results.json`에 `is_mock` 또는 `SIMULATED` 태그가 존재하면 자동 매매 시스템이 해당 데이터를 무시하도록 `RiskManager`가 포지션 사이즈를 50%로 제한한다.
+- 실거래 계정과 동일한 파라미터(하드 스탑 -3%, 4/6% 익절, ATR×2 트레일링)를 적용한 검증 데이터만 성과 비교표에 포함한다.

@@ -1,0 +1,163 @@
+{
+  "date": "2025-11-16",
+  "trades": [
+    {
+      "symbol": "450140",
+      "name": "코오롱모빌리티그룹",
+      "entry_date": "2025-11-11",
+      "exit_date": "2025-11-13",
+      "entry_price": 10000,
+      "exit_price": 10385.578791754366,
+      "profit_pct": 3.8557879175436605,
+      "exit_reason": "take_profit",
+      "holding_days": 2,
+      "entry_features": {
+        "vwap_backtest_winrate": 53.333333333333336,
+        "vwap_avg_profit": 3.1924682034565053,
+        "current_vwap_distance": 0.0,
+        "volume_z_score": -9.999999999999899,
+        "recent_return_5d": 0.0,
+        "market_volatility": 15.0,
+        "sector_strength": 0.5,
+        "price_momentum": 0.0
+      }
+    },
+    {
+      "symbol": "950160",
+      "name": "코오롱티슈진",
+      "entry_date": "2025-11-11",
+      "exit_date": "2025-11-13",
+      "entry_price": 10000,
+      "exit_price": 10367.06498745118,
+      "profit_pct": 3.670649874511809,
+      "exit_reason": "take_profit",
+      "holding_days": 2,
+      "entry_features": {
+        "vwap_backtest_winrate": 50.0,
+        "vwap_avg_profit": 1.1751749700409366,
+        "current_vwap_distance": 0.0,
+        "volume_z_score": -9.999999999999899,
+        "recent_return_5d": 0.0,
+        "market_volatility": 15.0,
+        "sector_strength": 0.5,
+        "price_momentum": 0.0
+      }
+    },
+    {
+      "symbol": "366030",
+      "name": "공구우먼",
+      "entry_date": "2025-11-11",
+      "exit_date": "2025-11-12",
+      "entry_price": 10000,
+      "exit_price": 10792.579854423318,
+      "profit_pct": 7.925798544233192,
+      "exit_reason": "take_profit",
+      "holding_days": 1,
+      "entry_features": {
+        "vwap_backtest_winrate": 66.66666666666666,
+        "vwap_avg_profit": 4.0026952124505355,
+        "current_vwap_distance": 0.0,
+        "volume_z_score": -9.999999999999899,
+        "recent_return_5d": 0.0,
+        "market_volatility": 15.0,
+        "sector_strength": 0.5,
+        "price_momentum": 0.0
+      }
+    },
+    {
+      "symbol": "290550",
+      "name": "디케이티",
+      "entry_date": "2025-11-11",
+      "exit_date": "2025-11-14",
+      "entry_price": 10000,
+      "exit_price": 9775.223794124482,
+      "profit_pct": -2.247762058755186,
+      "exit_reason": "stop_loss",
+      "holding_days": 3,
+      "entry_features": {
+        "vwap_backtest_winrate": 71.42857142857143,
+        "vwap_avg_profit": 0.601280177318089,
+        "current_vwap_distance": 0.0,
+        "volume_z_score": -9.999999999999899,
+        "recent_return_5d": 0.0,
+        "market_volatility": 15.0,
+        "sector_strength": 0.5,
+        "price_momentum": 0.0
+      }
+    },
+    {
+      "symbol": "049950",
+      "name": "미래컴퍼니",
+      "entry_date": "2025-11-11",
+      "exit_date": "2025-11-12",
+      "entry_price": 10000,
+      "exit_price": 10304.63640780202,
+      "profit_pct": 3.0463640780201966,
+      "exit_reason": "take_profit",
+      "holding_days": 1,
+      "entry_features": {
+        "vwap_backtest_winrate": 57.14285714285714,
+        "vwap_avg_profit": 1.151158162340191,
+        "current_vwap_distance": 0.0,
+        "volume_z_score": -9.999999999999899,
+        "recent_return_5d": 0.0,
+        "market_volatility": 15.0,
+        "sector_strength": 0.5,
+        "price_momentum": 0.0
+      }
+    },
+    {
+      "symbol": "318060",
+      "name": "그래피",
+      "entry_date": "2025-11-11",
+      "exit_date": "2025-11-12",
+      "entry_price": 10000,
+      "exit_price": 10424.662093721607,
+      "profit_pct": 4.246620937216068,
+      "exit_reason": "take_profit",
+      "holding_days": 1,
+      "entry_features": {
+        "vwap_backtest_winrate": 53.84615384615385,
+        "vwap_avg_profit": 2.5654936294668294,
+        "current_vwap_distance": 0.0,
+        "volume_z_score": -9.999999999999899,
+        "recent_return_5d": 0.0,
+        "market_volatility": 15.0,
+        "sector_strength": 0.5,
+        "price_momentum": 0.0
+      }
+    },
+    {
+      "symbol": "235980",
+      "name": "메드팩토",
+      "entry_date": "2025-11-11",
+      "exit_date": "2025-11-12",
+      "entry_price": 10000,
+      "exit_price": 10423.251353681791,
+      "profit_pct": 4.232513536817896,
+      "exit_reason": "take_profit",
+      "holding_days": 1,
+      "entry_features": {
+        "vwap_backtest_winrate": 60.0,
+        "vwap_avg_profit": 1.8529589597311478,
+        "current_vwap_distance": 0.0,
+        "volume_z_score": -9.999999999999899,
+        "recent_return_5d": 0.0,
+        "market_volatility": 15.0,
+        "sector_strength": 0.5,
+        "price_momentum": 0.0
+      }
+    }
+  ],
+  "summary": {
+    "total_trades": 7,
+    "winning_trades": 6,
+    "losing_trades": 1,
+    "win_rate": "85.7%",
+    "avg_profit": "3.53%",
+    "avg_win": "4.50%",
+    "avg_loss": "-2.25%",
+    "max_profit": "7.93%",
+    "max_loss": "-2.25%"
+  }
+}

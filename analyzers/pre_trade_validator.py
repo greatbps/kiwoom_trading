@@ -25,8 +25,8 @@ class PreTradeValidator:
     def __init__(
         self,
         config: ConfigLoader,
-        lookback_days: int = 10,        # 5 → 10 (표본 확대)
-        min_trades: int = 6,            # 2 → 6 (통계적 유의성 확보)
+        lookback_days: int = 5,         # 🔧 FIX: 문서 명세 복원 (10 → 5)
+        min_trades: int = 2,            # 🔧 FIX: 문서 명세 복원 (6 → 2)
         min_win_rate: float = 40.0,    # 50 → 40 (VWAP 전략 현실 승률)
         min_avg_profit: float = 0.3,   # 0.5 → 0.3 (완화)
         min_profit_factor: float = 1.15 # 1.2 → 1.15 (완화)
@@ -36,8 +36,8 @@ class PreTradeValidator:
 
         Args:
             config: 전략 설정
-            lookback_days: 검증 기간 (일) - 기본 10일
-            min_trades: 최소 거래 횟수 - 기본 6회
+            lookback_days: 검증 기간 (일) - 기본 5일 (문서 명세)
+            min_trades: 최소 거래 횟수 - 기본 2회 (문서 명세)
             min_win_rate: 최소 승률 (%) - 기본 40%
             min_avg_profit: 최소 평균 수익률 (%) - 기본 +0.3%
             min_profit_factor: 최소 Profit Factor - 기본 1.15
@@ -55,7 +55,8 @@ class PreTradeValidator:
         stock_name: str,
         historical_data: pd.DataFrame,
         current_price: float,
-        current_time: datetime
+        current_time: datetime,
+        historical_data_30m: Optional[pd.DataFrame] = None  # 🔧 FIX: 30분봉 fallback 데이터 (문서 명세)
     ) -> Tuple[bool, str, Dict]:
         """
         매수 전 검증
@@ -66,6 +67,7 @@ class PreTradeValidator:
             historical_data: 과거 데이터 (5분봉)
             current_price: 현재가
             current_time: 현재 시간
+            historical_data_30m: 과거 데이터 (30분봉, optional) - Stage 2 fallback용
 
         Returns:
             (allowed, reason, validation_stats)
@@ -80,10 +82,99 @@ class PreTradeValidator:
         # 3. 통계 계산
         stats = self._calculate_stats(trades)
 
-        # 4. 검증 기준 체크
+        # 4. 샘플 부족 시 3단계 폴백 로직 (문서 명세)
+        if stats['total_trades'] < self.min_trades:
+            return self._handle_insufficient_samples(stock_code, historical_data, stats, historical_data_30m)
+
+        # 5. 검증 기준 체크
         validation_result = self._check_validation_criteria(stats)
 
         return validation_result
+
+    def _handle_insufficient_samples(
+        self,
+        stock_code: str,
+        historical_data: pd.DataFrame,
+        stats: Dict,
+        historical_data_30m: Optional[pd.DataFrame] = None  # 🔧 FIX: 30분봉 fallback 데이터
+    ) -> Tuple[bool, str, Dict]:
+        """
+        샘플 부족 시 3단계 폴백 로직 (문서 명세, 30분봉 검증 추가)
+
+        Stage 1: 진입 비중 50% 축소 (entry_ratio=0.5)
+        Stage 2: 30분봉으로 보조 검증 (구현 예정)
+        Stage 3: RiskManager 주의 플래그 + 후보 제외
+
+        Args:
+            stock_code: 종목코드
+            historical_data: 과거 데이터
+            stats: 5분봉 시뮬레이션 통계
+
+        Returns:
+            (allowed, reason, validation_stats)
+        """
+        # Stage 1: 진입 비중 50% 축소
+        stats['fallback_stage'] = 1
+        stats['entry_ratio'] = 0.5
+        stats['warning_flag'] = False
+
+        reason = f"⚠️ Stage 1 Fallback: 샘플 부족 ({stats['total_trades']}/{self.min_trades}회)\n"
+        reason += "→ 진입 비중 50% 축소 (entry_ratio=0.5)"
+
+        # 샘플이 전혀 없는 경우 (0건)
+        if stats['total_trades'] == 0:
+            # Stage 3: 완전 차단
+            stats['fallback_stage'] = 3
+            stats['entry_ratio'] = 0.0
+            stats['warning_flag'] = True
+
+            reason = f"❌ Stage 3 Fallback: 샘플 전무 (0회)\n"
+            reason += "→ RiskManager 주의 플래그 설정 + 후보 제외"
+            return False, reason, stats
+
+        # 샘플이 1건만 있는 경우
+        elif stats['total_trades'] == 1:
+            # PF와 수익률이 매우 좋으면 Stage 1 허용
+            if (stats['profit_factor'] >= self.min_profit_factor * 1.3 and
+                stats['avg_profit_pct'] >= self.min_avg_profit * 2.0):
+                # Stage 1: 50% 진입 허용
+                return True, reason, stats
+            else:
+                # 🔧 FIX: Stage 2 - 30분봉 검증 (문서 명세)
+                if historical_data_30m is not None and len(historical_data_30m) >= 50:
+                    # 30분봉으로 백테스트
+                    trades_30m = self._run_quick_simulation(historical_data_30m)
+                    stats_30m = self._calculate_stats(trades_30m)
+
+                    # 30분봉에서 좋은 결과면 entry_ratio 상향
+                    if (stats_30m['total_trades'] >= 2 and
+                        stats_30m['win_rate'] >= self.min_win_rate and
+                        stats_30m['avg_profit_pct'] >= self.min_avg_profit):
+                        stats['fallback_stage'] = 2
+                        stats['entry_ratio'] = 0.5  # 30분봉 검증 통과 시 50%로 상향
+                        stats['stage2_verified'] = True
+                        reason = f"✓ Stage 2 Fallback: 30분봉 검증 통과\n"
+                        reason += f"→ 30분봉 백테스트 {stats_30m['total_trades']}회, 승률 {stats_30m['win_rate']:.1f}%, 진입 비중 50%"
+                        return True, reason, stats
+                    else:
+                        # 30분봉에서도 불량 → Stage 3
+                        stats['fallback_stage'] = 3
+                        stats['entry_ratio'] = 0.3
+                        stats['stage2_verified'] = False
+                        reason = f"⚠️ Stage 2 → Stage 3: 30분봉 검증 실패\n"
+                        reason += f"→ 30분봉도 샘플 부족/품질 미달, 진입 비중 30% 축소"
+                        return True, reason, stats
+                else:
+                    # 30분봉 데이터 없음 → 기존 로직 (Stage 2, 30% 축소)
+                    stats['fallback_stage'] = 2
+                    stats['entry_ratio'] = 0.3
+                    stats['stage2_verified'] = False
+                    reason = f"⚠️ Stage 2 Fallback: 샘플 1건 + 품질 부족\n"
+                    reason += "→ 30분봉 데이터 없음, 진입 비중 30% 축소"
+                    return True, reason, stats
+
+        # 정상적으로 Stage 1 적용
+        return True, reason, stats
 
     def _run_quick_simulation(self, df: pd.DataFrame) -> List[Dict]:
         """빠른 시뮬레이션 실행"""
@@ -95,6 +186,12 @@ class PreTradeValidator:
         # Signal generation config
         signal_config = self.config.get_signal_generation_config()
         trailing_config = self.config.get_trailing_config()
+        trailing_kwargs = {
+            'use_atr_based': trailing_config.get('use_atr_based', False),
+            'atr_multiplier': trailing_config.get('atr_multiplier', 1.5),
+            'use_profit_tier': trailing_config.get('use_profit_tier', False),
+            'profit_tier_threshold': trailing_config.get('profit_tier_threshold', 3.0)
+        }
         partial_config = self.config.get_partial_exit_config()
 
         # 데이터 복사
@@ -160,7 +257,7 @@ class PreTradeValidator:
                 exit_reason = ""
 
                 # 1. Hard Stop (실거래와 동일)
-                stop_loss_pct = trailing_config.get('stop_loss_pct', 1.3)
+                stop_loss_pct = trailing_config.get('stop_loss_pct', getattr(analyzer, 'stop_loss_pct', 3.0))
                 if profit_pct <= -stop_loss_pct:
                     should_exit = True
                     exit_reason = f"Hard Stop (-{stop_loss_pct}%)"
@@ -215,7 +312,7 @@ class PreTradeValidator:
                         highest_price=position['highest_price'],
                         trailing_active=position['trailing_active'],
                         atr=atr,
-                        **trailing_config
+                        **trailing_kwargs
                     )
 
                     position['trailing_active'] = trailing_active

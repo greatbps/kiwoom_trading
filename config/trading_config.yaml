@@ -1,0 +1,173 @@
+# Kiwoom Trading System - 설정 파일
+# 모든 매직 넘버와 설정값을 중앙 관리
+
+# ==========================================
+# 거래 설정 (Trading Settings)
+# ==========================================
+trading:
+  # VWAP 검증 설정
+  vwap_validation:
+    lookback_days: 10        # 과거 N일 시뮬레이션 기간
+    min_trades: 6            # 최소 거래 횟수 (통계적 유의성 확보)
+    min_win_rate: 40.0       # 최소 승률 (%) - VWAP 전략의 현실적 기준
+    min_avg_profit: 0.3      # 최소 평균 수익률 (%)
+    min_profit_factor: 1.15  # 최소 수익 팩터 (총수익/총손실)
+    max_drawdown: 5.0        # 최대 낙폭 (%)
+
+  # 리스크 관리
+  risk_management:
+    max_position_size: 0.1   # 계좌 대비 최대 포지션 비율 (10%)
+    max_daily_loss: 0.05     # 일일 최대 손실 비율 (5%)
+    stop_loss: 0.03          # 손절 비율 (3%)
+    take_profit: 0.05        # 익절 비율 (5%)
+    trailing_stop: 0.02      # 트레일링 스탑 비율 (2%)
+    max_positions: 5         # 최대 동시 보유 종목 수
+
+  # 진입 조건
+  entry_conditions:
+    min_volume: 1000         # 최소 거래량
+    min_price: 100           # 최소 주가 (원)
+    max_price: 1000000       # 최대 주가 (원)
+    min_market_cap: 1000     # 최소 시가총액 (억원)
+
+  # 청산 조건
+  exit_conditions:
+    profit_target: 5.0       # 목표 수익률 (%)
+    stop_loss: 3.0           # 손절 비율 (%)
+    holding_period: 5        # 최대 보유 기간 (일)
+    close_before_market_end: 10  # 장 마감 N분 전 청산
+
+# ==========================================
+# 데이터 설정 (Data Settings)
+# ==========================================
+data:
+  # 데이터 수집
+  fetching:
+    default_days: 7          # 기본 조회 일수
+    min_data_points: 100     # 최소 데이터 포인트
+    cache_ttl: 300           # 캐시 유지 시간 (초)
+    max_retries: 3           # 최대 재시도 횟수
+    retry_delay: 1           # 재시도 대기 시간 (초)
+
+  # Yahoo Finance
+  yahoo:
+    suffixes: ['.KS', '.KQ'] # 시도할 suffix 순서 (KOSPI → KOSDAQ)
+    retry_delay: 1           # 재시도 대기 시간 (초)
+    timeout: 30              # 타임아웃 (초)
+    interval: '5m'           # 데이터 간격
+
+  # Kiwoom API
+  kiwoom:
+    tick_range: '5'          # 분봉 간격 (5분)
+    default_count: 546       # 기본 조회 개수 (7일 * 78개)
+    timeout: 30              # API 타임아웃 (초)
+
+# ==========================================
+# 검증 설정 (Validation Settings)
+# ==========================================
+validation:
+  stock:
+    min_data_points: 100     # 최소 데이터 포인트
+    min_volume: 1000         # 최소 평균 거래량
+    min_price: 100           # 최소 가격 (원)
+    max_price: 1000000       # 최대 가격 (원)
+
+  vwap:
+    lookback_period: 10      # VWAP 계산 기간
+    threshold: 0.5           # VWAP 편차 임계값 (%)
+
+# ==========================================
+# 모니터링 설정 (Monitoring Settings)
+# ==========================================
+monitoring:
+  # 실시간 모니터링
+  realtime:
+    check_interval: 60       # 체크 주기 (초)
+    price_update_interval: 1 # 가격 업데이트 주기 (초)
+
+  # 알림
+  notifications:
+    telegram_enabled: true   # Telegram 알림 사용
+    order_notification: true # 주문 알림
+    error_notification: true # 오류 알림
+    daily_report: true       # 일일 리포트
+
+# ==========================================
+# 데이터베이스 설정 (Database Settings)
+# ==========================================
+database:
+  path: './database/kiwoom_trading.db'
+  backup_interval: 3600      # 백업 주기 (초) - 1시간
+  backup_path: './backups/database'
+  max_backups: 30            # 최대 백업 개수
+
+# ==========================================
+# 로깅 설정 (Logging Settings)
+# ==========================================
+logging:
+  level: 'INFO'              # 로그 레벨 (DEBUG, INFO, WARNING, ERROR)
+  format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+  file: './logs/trading.log'
+  max_size: 10485760         # 최대 파일 크기 (10MB)
+  backup_count: 5            # 백업 파일 개수
+  console_output: true       # 콘솔 출력 여부
+
+# ==========================================
+# 백테스트 설정 (Backtest Settings)
+# ==========================================
+backtest:
+  initial_capital: 10000000  # 초기 자본금 (1천만원)
+  commission: 0.0015         # 거래 수수료 (0.15%)
+  slippage: 0.001            # 슬리피지 (0.1%)
+  test_period_days: 30       # 백테스트 기간 (일)
+
+# ==========================================
+# API 설정 (API Settings)
+# ==========================================
+api:
+  # WebSocket
+  websocket:
+    url: 'wss://api.kiwoom.com:10000/api/dostk/websocket'
+    timeout: 30              # 연결 타임아웃 (초)
+    ping_interval: 60        # Ping 간격 (초)
+    max_retries: 3           # 최대 재연결 시도
+
+  # REST API
+  rest:
+    base_url: 'https://openapi.kiwoom.com'
+    timeout: 30              # 타임아웃 (초)
+    max_retries: 3           # 최대 재시도
+
+# ==========================================
+# 환경별 설정 (Environment Settings)
+# ==========================================
+environments:
+  development:
+    debug: true
+    max_positions: 2         # 개발 환경에서는 포지션 제한
+    paper_trading: true      # 모의 거래
+
+  production:
+    debug: false
+    max_positions: 5
+    paper_trading: false     # 실전 거래
+
+# ==========================================
+# 조건식 설정 (Condition Settings)
+# ==========================================
+conditions:
+  # 사용할 조건식 목록
+  names:
+    - '급등주'
+    - '거래량급증'
+    - '돌파매매'
+    - '단기상승'
+    - '모멘텀강세'
+    - '볼린저밴드'
+
+  # 조건식 필터링
+  filtering:
+    max_candidates: 100      # 최대 후보 종목 수
+    min_market_cap: 1000     # 최소 시가총액 (억원)
+    exclude_etf: true        # ETF 제외
+    exclude_spac: true       # SPAC 제외

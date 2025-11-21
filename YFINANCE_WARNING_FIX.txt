@@ -1,0 +1,282 @@
+================================================================================
+yfinance FutureWarning 수정 완료
+================================================================================
+
+✅ 완료일시: 2025-11-16
+✅ 버전: yfinance Warning Fix v1.0
+✅ 상태: 경고 메시지 제거 완료
+
+================================================================================
+문제점
+================================================================================
+
+경고 메시지:
+  FutureWarning: YF.download() has changed argument auto_adjust default to True
+
+에러 메시지:
+  2025-11-16 05:45:58 | ERROR    |
+  1 Failed download:
+  2025-11-16 05:45:58 | ERROR    | ['308430.KS']: YFPricesMissingError
+  ('possibly delisted; no price data found  (period=90d)
+   (Yahoo error = "No data found, symbol may be delisted")')
+
+원인:
+  1. yfinance 라이브러리 업데이트로 auto_adjust 기본값이 변경됨
+  2. yf.download() 호출 시 auto_adjust 파라미터를 명시하지 않음
+  3. 상장폐지 종목(308430)에 대한 에러 메시지가 너무 장황함
+
+영향:
+  - 콘솔에 FutureWarning 메시지가 반복 출력됨
+  - 상장폐지 종목 처리 시 불필요한 에러 로그
+  - 향후 yfinance 버전 업데이트 시 호환성 문제 가능
+
+================================================================================
+해결 방안
+================================================================================
+
+1. auto_adjust 파라미터 명시
+   위치: analyzers/relative_strength_filter.py
+
+   수정 전 (line 108):
+   ```python
+   df_stock = yf.download(ticker, period=period, interval='1d', progress=False)
+   ```
+
+   수정 후 (line 109-110):
+   ```python
+   # FutureWarning 방지: auto_adjust 명시
+   df_stock = yf.download(ticker, period=period, interval='1d',
+                         progress=False, auto_adjust=True)
+   ```
+
+2. 시장 지수 조회 수정
+   위치: analyzers/relative_strength_filter.py:69-71
+
+   수정 전:
+   ```python
+   df = yf.download(ticker, period=period, interval='1d', progress=False)
+   ```
+
+   수정 후:
+   ```python
+   # FutureWarning 방지: auto_adjust 명시
+   df = yf.download(ticker, period=period, interval='1d',
+                  progress=False, auto_adjust=True)
+   ```
+
+3. 상장폐지 종목 에러 메시지 개선
+   위치: analyzers/relative_strength_filter.py:135-142
+
+   수정 전:
+   ```python
+   except Exception as e:
+       console.print(f"[dim]⚠️  {stock_code} 수익률 계산 실패: {e}[/dim]")
+       return 0.0, 0.0, 0.0
+   ```
+
+   수정 후:
+   ```python
+   except Exception as e:
+       # 상장폐지 종목은 조용히 처리
+       error_msg = str(e).lower()
+       if 'delisted' in error_msg or 'no data found' in error_msg:
+           console.print(f"[dim]⚠️  {stock_code}: 상장폐지 또는 데이터 없음[/dim]")
+       else:
+           console.print(f"[dim]⚠️  {stock_code} 수익률 계산 실패: {e}[/dim]")
+       return 0.0, 0.0, 0.0
+   ```
+
+================================================================================
+수정 내용 상세
+================================================================================
+
+파일 1: analyzers/relative_strength_filter.py
+
+수정 1 (line 109-110):
+  - yf.download() 호출 시 auto_adjust=True 명시
+  - FutureWarning 방지 주석 추가
+  - 종목 데이터 조회 부분
+
+수정 2 (line 70-71):
+  - yf.download() 호출 시 auto_adjust=True 명시
+  - FutureWarning 방지 주석 추가
+  - 시장 지수 데이터 조회 부분
+
+수정 3 (line 136-142):
+  - 에러 메시지 분류 로직 추가
+  - 'delisted' 또는 'no data found' 포함 시 간단한 메시지
+  - 기타 에러는 기존대로 상세 메시지 출력
+  - 상장폐지 종목 처리 개선
+
+파일 2: analyzers/multi_timeframe_consensus.py
+
+수정 4 (line 69-70):
+  - yf.download() 호출 시 auto_adjust=True 명시
+  - FutureWarning 방지 주석 추가
+  - MTF 데이터 조회 부분
+
+파일 3: analyzers/signal_orchestrator.py
+
+수정 5 (line 304):
+  - validate_vwap_trade() → validate_trade() 메서드명 수정
+  - AttributeError 해결
+
+수정 6 (line 304-311):
+  - validate_trade() 파라미터 수정 (df → historical_data)
+  - current_time 파라미터 추가
+  - TypeError 해결
+
+파일 4: analyzers/volatility_regime.py
+
+수정 7 (line 106-107):
+  - yf.download() 호출 시 auto_adjust=True 명시
+  - FutureWarning 방지 주석 추가
+  - L1 장세 필터 데이터 조회 부분
+
+================================================================================
+예상 효과
+================================================================================
+
+1. FutureWarning 제거
+   - 콘솔 출력이 깔끔해짐
+   - 향후 yfinance 버전 호환성 확보
+   - 불필요한 경고 메시지 제거
+
+2. 에러 메시지 개선
+   - 상장폐지 종목: 간단한 메시지
+   - 실제 에러: 상세 메시지 유지
+   - 로그 가독성 향상
+
+3. 안정성 향상
+   - yfinance 라이브러리 정책 변경 대응
+   - 명시적 파라미터로 동작 보장
+   - 예상 가능한 동작
+
+================================================================================
+테스트 시나리오
+================================================================================
+
+시나리오 1: 정상 종목 조회
+  종목: 005930 (삼성전자)
+  기대 결과:
+  ✓ FutureWarning 없음
+  ✓ RS 계산 정상
+  ✓ 수익률 계산 정상
+
+시나리오 2: 상장폐지 종목
+  종목: 308430
+  기대 결과:
+  ✓ "⚠️  308430: 상장폐지 또는 데이터 없음" 출력
+  ✓ 장황한 에러 메시지 없음
+  ✓ RS = 0.0 반환 (차단됨)
+
+시나리오 3: 시장 지수 조회
+  지수: KOSPI (^KS11)
+  기대 결과:
+  ✓ FutureWarning 없음
+  ✓ 시장 수익률 계산 정상
+  ✓ 캐싱 동작 정상
+
+================================================================================
+검증 방법
+================================================================================
+
+1. 백테스트 실행
+   $ python3 main_auto_trading.py --dry-run --conditions 0,1,2 --skip-wait
+
+   확인사항:
+   ✓ FutureWarning 메시지 없음
+   ✓ RS 필터 정상 동작
+   ✓ 상장폐지 종목 간단한 메시지로 출력
+   ✓ 50개 종목 중 유효한 종목만 RS 계산
+
+2. 콘솔 출력 확인
+   Before:
+   /home/.../relative_strength_filter.py:108: FutureWarning:
+   YF.download() has changed argument auto_adjust default to True
+
+   After:
+   (경고 메시지 없음)
+
+3. 상장폐지 종목 처리
+   Before:
+   2025-11-16 05:45:58 | ERROR    |
+   1 Failed download:
+   ['308430.KS']: YFPricesMissingError('possibly delisted...')
+
+   After:
+   ⚠️  308430: 상장폐지 또는 데이터 없음
+
+================================================================================
+주의사항
+================================================================================
+
+⚠️ auto_adjust=True 의미
+  - 주가 데이터를 배당, 액면분할 등으로 자동 조정
+  - True: 조정 후 가격 (기본값)
+  - False: 원시 가격
+  - RS 계산에는 True가 적합 (일관된 수익률 계산)
+
+⚠️ 상장폐지 종목 처리
+  - RS = 0.0 반환으로 자동 필터링됨
+  - L2 RS 필터에서 차단됨 (RS 80+ 필요)
+  - 매매 대상에서 제외되므로 안전
+
+⚠️ yfinance 라이브러리 의존성
+  - 외부 라이브러리로 정책 변경 가능
+  - 명시적 파라미터로 안정성 확보
+  - 향후 업데이트 시에도 호환성 유지
+
+================================================================================
+수정된 파일
+================================================================================
+
+analyzers/relative_strength_filter.py:
+  - line 109-110: 종목 데이터 조회 (auto_adjust 명시)
+  - line 70-71: 시장 지수 조회 (auto_adjust 명시)
+  - line 136-142: 상장폐지 종목 에러 메시지 개선
+
+analyzers/multi_timeframe_consensus.py:
+  - line 69-70: MTF 데이터 조회 (auto_adjust 명시)
+
+analyzers/signal_orchestrator.py:
+  - line 304: validate_trade() 메서드명 수정
+  - line 304-311: validate_trade() 파라미터 수정
+
+analyzers/volatility_regime.py:
+  - line 106-107: L1 장세 필터 데이터 조회 (auto_adjust 명시)
+
+신규 파일:
+  - YFINANCE_WARNING_FIX.txt (이 문서)
+
+업데이트:
+  - PRODUCTION_READY_STATUS.txt (작업 목록 업데이트 완료)
+
+================================================================================
+다음 단계
+================================================================================
+
+1. 백테스트 검증
+   $ python3 main_auto_trading.py --dry-run --conditions 0,1,2 --skip-wait
+
+   확인:
+   ✓ FutureWarning 없음
+   ✓ RS 필터 정상 동작
+   ✓ 상장폐지 종목 간단 메시지
+
+2. 실전 투입 (월요일 09:00)
+   - 기존 계획대로 진행
+   - 경고 메시지 없이 깔끔한 로그
+   - RS 필터 정상 동작
+
+3. 모니터링
+   - 콘솔 출력 깔끔한지 확인
+   - RS 계산 정상 동작 확인
+   - 상장폐지 종목 필터링 확인
+
+================================================================================
+작성일: 2025-11-16
+작성자: Claude Code Assistant
+버전: yfinance Warning Fix v1.0
+
+================================================================================

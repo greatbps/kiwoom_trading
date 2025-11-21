@@ -65,6 +65,11 @@ class TradingDatabase:
                     profit_rate REAL,
                     holding_duration INTEGER,
 
+                    -- 매매 컨텍스트 (ML 학습용)
+                    entry_context TEXT,  -- JSON: 진입 시점 전체 지표 (price, vwap, ma, rsi, williams_r, volume_ratio, candle 등)
+                    exit_context TEXT,   -- JSON: 청산 시점 전체 지표 (price, highest_price, trailing_info, indicators 등)
+                    filter_scores TEXT,  -- JSON: 진입 필터 점수 (각 필터별 통과/차단 사유)
+
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
@@ -346,8 +351,9 @@ class TradingDatabase:
                     vwap_validation_score, sim_win_rate, sim_avg_profit,
                     sim_trade_count, sim_profit_factor,
                     news_sentiment, news_impact, news_keywords, news_titles,
-                    realized_profit, profit_rate, holding_duration
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    realized_profit, profit_rate, holding_duration,
+                    entry_context, exit_context, filter_scores
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 trade_data['stock_code'],
                 trade_data['stock_name'],
@@ -371,7 +377,10 @@ class TradingDatabase:
                 json.dumps(trade_data.get('news_titles', []), ensure_ascii=False),
                 trade_data.get('realized_profit'),
                 trade_data.get('profit_rate'),
-                trade_data.get('holding_duration')
+                trade_data.get('holding_duration'),
+                trade_data.get('entry_context'),  # JSON string or None
+                trade_data.get('exit_context'),   # JSON string or None
+                trade_data.get('filter_scores')   # JSON string or None
             ))
 
             conn.commit()
@@ -387,13 +396,15 @@ class TradingDatabase:
                     exit_reason = ?,
                     realized_profit = ?,
                     profit_rate = ?,
-                    holding_duration = ?
+                    holding_duration = ?,
+                    exit_context = ?
                 WHERE trade_id = ?
             """, (
                 exit_data.get('exit_reason'),
                 exit_data.get('realized_profit'),
                 exit_data.get('profit_rate'),
                 exit_data.get('holding_duration'),
+                exit_data.get('exit_context'),  # JSON string or None
                 trade_id
             ))
 
@@ -426,6 +437,46 @@ class TradingDatabase:
 
             cursor.execute(query, params)
             return [dict(row) for row in cursor.fetchall()]
+
+    def get_recent_stock_name(self, stock_code: str) -> Optional[str]:
+        """DB에 저장된 최신 종목명을 반환 (숫자 코드만 있는 경우 제외)."""
+
+        def is_valid(name: Any) -> bool:
+            if not isinstance(name, str):
+                return False
+            text = name.strip()
+            return bool(text) and not text.isdigit()
+
+        tables = [
+            ("filtered_candidates", "date_detected"),
+            ("validation_scores", "validation_time"),
+            ("trades", "trade_time"),
+            ("simulations", "simulation_time")
+        ]
+
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            for table, column in tables:
+                try:
+                    cursor.execute(
+                        f"""
+                        SELECT {column}, stock_name
+                        FROM {table}
+                        WHERE stock_code = ?
+                        ORDER BY {column} DESC
+                        LIMIT 20
+                        """,
+                        (stock_code,)
+                    )
+                except sqlite3.OperationalError:
+                    continue
+
+                rows = cursor.fetchall()
+                for _, name in rows:
+                    if is_valid(name):
+                        return name.strip()
+
+        return None
 
     # ==================== 필터링 이력 관리 ====================
 
@@ -599,6 +650,49 @@ class TradingDatabase:
             return [dict(row) for row in cursor.fetchall()]
 
     # ==================== 통계 분석 ====================
+
+    def get_trades_with_context(self, stock_code: Optional[str] = None,
+                                 start_date: Optional[str] = None,
+                                 end_date: Optional[str] = None,
+                                 parse_context: bool = True) -> List[Dict]:
+        """
+        거래 이력 조회 (컨텍스트 포함, JSON 파싱 옵션)
+
+        Args:
+            stock_code: 종목코드 필터 (optional)
+            start_date: 시작일 필터 (optional)
+            end_date: 종료일 필터 (optional)
+            parse_context: True면 JSON을 dict로 파싱, False면 원본 string 유지
+
+        Returns:
+            거래 이력 리스트 (entry_context, exit_context, filter_scores가 dict 형태)
+        """
+        trades = self.get_trades(stock_code=stock_code, start_date=start_date, end_date=end_date)
+
+        if not parse_context:
+            return trades
+
+        # JSON 파싱
+        for trade in trades:
+            if trade.get('entry_context'):
+                try:
+                    trade['entry_context'] = json.loads(trade['entry_context'])
+                except (json.JSONDecodeError, TypeError):
+                    trade['entry_context'] = {}
+
+            if trade.get('exit_context'):
+                try:
+                    trade['exit_context'] = json.loads(trade['exit_context'])
+                except (json.JSONDecodeError, TypeError):
+                    trade['exit_context'] = {}
+
+            if trade.get('filter_scores'):
+                try:
+                    trade['filter_scores'] = json.loads(trade['filter_scores'])
+                except (json.JSONDecodeError, TypeError):
+                    trade['filter_scores'] = {}
+
+        return trades
 
     def get_trade_statistics(self, start_date: Optional[str] = None,
                             end_date: Optional[str] = None) -> Dict:
