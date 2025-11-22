@@ -9,7 +9,7 @@
     "avg_profit_pct": 4.2539267015706805,
     "total_trades": 2,
     "profit_factor": 158000.0,
-    "last_check_time": "2025-11-21T16:23:49.040672"
+    "last_check_time": "2025-11-22T15:40:11.874895"
   },
   {
     "stock_code": "290550",
@@ -21,7 +21,7 @@
     "avg_profit_pct": 0.601280177318089,
     "total_trades": 7,
     "profit_factor": 2.7777777777777777,
-    "last_check_time": "2025-11-21T16:23:49.040692"
+    "last_check_time": "2025-11-22T15:40:11.874915"
   },
   {
     "stock_code": "366030",
@@ -33,7 +33,7 @@
     "avg_profit_pct": 4.0026952124505355,
     "total_trades": 12,
     "profit_factor": 4.792631578947368,
-    "last_check_time": "2025-11-21T16:23:49.040708"
+    "last_check_time": "2025-11-22T15:40:11.874920"
   },
   {
     "stock_code": "323280",
@@ -45,7 +45,7 @@
     "avg_profit_pct": 0.6429791431880214,
     "total_trades": 8,
     "profit_factor": 2.676470588235294,
-    "last_check_time": "2025-11-21T16:23:49.040711"
+    "last_check_time": "2025-11-22T15:40:11.874924"
   },
   {
     "stock_code": "235980",
@@ -57,7 +57,7 @@
     "avg_profit_pct": 1.8529589597311478,
     "total_trades": 10,
     "profit_factor": 1.3926666666666667,
-    "last_check_time": "2025-11-21T16:23:49.040715"
+    "last_check_time": "2025-11-22T15:40:11.874927"
   },
   {
     "stock_code": "049950",
@@ -69,7 +69,7 @@
     "avg_profit_pct": 1.151158162340191,
     "total_trades": 7,
     "profit_factor": 2.2654545454545456,
-    "last_check_time": "2025-11-21T16:23:49.040718"
+    "last_check_time": "2025-11-22T15:40:11.874930"
   },
   {
     "stock_code": "226330",
@@ -81,7 +81,7 @@
     "avg_profit_pct": 1.4058319862327444,
     "total_trades": 13,
     "profit_factor": 1.1621114369501466,
-    "last_check_time": "2025-11-21T16:23:49.040722"
+    "last_check_time": "2025-11-22T15:40:11.874933"
   },
   {
     "stock_code": "318060",
@@ -93,7 +93,7 @@
     "avg_profit_pct": 2.5654936294668294,
     "total_trades": 13,
     "profit_factor": 1.7860869565217392,
-    "last_check_time": "2025-11-21T16:23:49.040725"
+    "last_check_time": "2025-11-22T15:40:11.874937"
   },
   {
     "stock_code": "450140",
@@ -105,7 +105,7 @@
     "avg_profit_pct": 3.1924682034565053,
     "total_trades": 15,
     "profit_factor": 1.7001739130434783,
-    "last_check_time": "2025-11-21T16:23:49.040728"
+    "last_check_time": "2025-11-22T15:40:11.874940"
   },
   {
     "stock_code": "950160",
@@ -117,7 +117,7 @@
     "avg_profit_pct": 1.1751749700409366,
     "total_trades": 10,
     "profit_factor": 1.536,
-    "last_check_time": "2025-11-21T16:23:49.040731"
+    "last_check_time": "2025-11-22T15:40:11.874944"
   },
   {
     "stock_code": "448900",
@@ -129,6 +129,6 @@
     "avg_profit_pct": 2.683335323936226,
     "total_trades": 14,
     "profit_factor": 1.6814814814814816,
-    "last_check_time": "2025-11-21T16:23:49.040735"
+    "last_check_time": "2025-11-22T15:40:11.874947"
   }
 ]
