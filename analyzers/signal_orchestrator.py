@@ -23,10 +23,16 @@ sys.path.insert(0, str(project_root))
 
 from analyzers.volatility_regime import VolatilityRegimeDetector
 from analyzers.relative_strength_filter import RelativeStrengthFilter
-from analyzers.multi_timeframe_consensus import MultiTimeframeConsensus
-from analyzers.liquidity_shift_detector import LiquidityShiftDetector
-from analyzers.squeeze_momentum import SqueezeMomentumPro
-from analyzers.pre_trade_validator import PreTradeValidator
+
+# V2 Filters (Confidence-based)
+from analyzers.multi_timeframe_consensus_v2 import MultiTimeframeConsensusV2
+from analyzers.liquidity_shift_detector_v2 import LiquidityShiftDetectorV2
+from analyzers.squeeze_momentum_v2 import SqueezeMomentumProV2
+from analyzers.pre_trade_validator_v2 import PreTradeValidatorV2
+
+# Confidence Aggregator
+from trading.confidence_aggregator import ConfidenceAggregator
+
 from rich.console import Console
 
 console = Console()
@@ -66,11 +72,11 @@ class SignalOrchestrator:
             min_rs_rating=80  # 초기 30%, 실전 20%로 조정
         )
 
-        # L3: MTF
-        self.mtf_consensus = MultiTimeframeConsensus(config)
+        # L3: MTF V2 (Confidence-based)
+        self.mtf_consensus = MultiTimeframeConsensusV2(config)
 
-        # L4: Liquidity Shift
-        self.liquidity_detector = LiquidityShiftDetector(
+        # L4: Liquidity Shift V2 (Confidence-based)
+        self.liquidity_detector = LiquidityShiftDetectorV2(
             api=api,
             inst_z_threshold=1.0,
             foreign_z_threshold=1.0,
@@ -78,8 +84,8 @@ class SignalOrchestrator:
             lookback_days=20
         )
 
-        # L5: Squeeze Momentum
-        self.squeeze = SqueezeMomentumPro(
+        # L5: Squeeze Momentum V2 (Confidence-based)
+        self.squeeze = SqueezeMomentumProV2(
             bb_period=20,
             bb_std=2.0,
             kc_period=20,
@@ -87,8 +93,8 @@ class SignalOrchestrator:
             momentum_period=20
         )
 
-        # L6: Pre-Trade Validator (문서 명세 복원)
-        self.validator = PreTradeValidator(
+        # L6: Pre-Trade Validator V2 (Confidence-based)
+        self.validator = PreTradeValidatorV2(
             config=config,
             lookback_days=5,         # 🔧 FIX: 문서 명세 복원 (10 → 5)
             min_trades=2,            # 🔧 FIX: 문서 명세 복원 (6 → 2)
@@ -96,6 +102,9 @@ class SignalOrchestrator:
             min_avg_profit=0.3,
             min_profit_factor=1.15
         )
+
+        # Confidence Aggregator
+        self.confidence_aggregator = ConfidenceAggregator()
 
         # 통계
         self.stats = {
@@ -378,7 +387,7 @@ class SignalOrchestrator:
         daily_pnl: float = 0
     ) -> Dict:
         """
-        전체 시그널 파이프라인 실행
+        전체 시그널 파이프라인 실행 (Confidence-based)
 
         Args:
             stock_code: 종목코드
@@ -394,21 +403,21 @@ class SignalOrchestrator:
         """
         result = {
             'allowed': False,
-            'tier': SignalTier.REJECTED,
+            'confidence': 0.0,
             'position_size_multiplier': 0.0,
             'rejection_level': None,
             'rejection_reason': None,
             'details': {}
         }
 
-        # L0: 시스템 필터
+        # L0: 시스템 필터 (Pass/Fail만)
         l0_pass, l0_reason = self.check_l0_system_filter(current_cash, daily_pnl)
         if not l0_pass:
             result['rejection_level'] = 'L0'
             result['rejection_reason'] = l0_reason
             return result
 
-        # L1: 장세 필터
+        # L1: 장세 필터 (Pass/Fail만, 향후 confidence 추가 가능)
         l1_pass, l1_reason, l1_confidence = self.check_l1_regime_filter(market)
         result['details']['l1_regime'] = l1_reason
         result['details']['l1_confidence'] = l1_confidence
@@ -418,62 +427,81 @@ class SignalOrchestrator:
             result['rejection_reason'] = l1_reason
             return result
 
-        # L3: MTF (L2는 조건검색 단계에서 이미 필터링됨)
-        l3_pass, l3_reason, l3_details = self.check_l3_mtf_consensus(stock_code, market, df)
-        result['details']['l3_mtf'] = l3_reason
+        # L3-L6: Confidence-based 필터링
+        from trading.filters.base_filter import FilterResult
 
-        if not l3_pass:
+        # L3: MTF Consensus (L2는 조건검색 단계에서 이미 필터링됨)
+        l3_result = self.mtf_consensus.check_with_confidence(stock_code, market, df)
+        result['details']['l3_mtf'] = l3_result.reason
+        result['details']['l3_confidence'] = l3_result.confidence
+
+        if not l3_result.passed:
             result['rejection_level'] = 'L3'
-            result['rejection_reason'] = l3_reason
+            result['rejection_reason'] = l3_result.reason
             return result
 
-        # L4: 수급
-        l4_strong, l4_strength, l4_reason = self.check_l4_liquidity_shift(stock_code)
-        result['details']['l4_liquidity'] = l4_reason
-        result['details']['l4_strength'] = l4_strength
+        # L4: Liquidity Shift
+        l4_result = self.liquidity_detector.check_with_confidence(stock_code)
+        result['details']['l4_liquidity'] = l4_result.reason
+        result['details']['l4_confidence'] = l4_result.confidence
 
-        # L5: 트리거
-        l5_triggered, l5_reason, l5_tier = self.check_l5_trigger(stock_code, current_price, df)
-        result['details']['l5_trigger'] = l5_reason
+        # L4는 선택사항 (낮은 수급이라도 진행 가능)
+        # 단, confidence가 0이면 경고
+        if not l4_result.passed:
+            console.print(f"[yellow]⚠️  {stock_code}: L4 수급 전환 없음 (진행 가능)[/yellow]")
 
-        if not l5_triggered:
-            result['rejection_level'] = 'L5'
-            result['rejection_reason'] = l5_reason
-            return result
+        # L5: Squeeze Momentum
+        l5_result = self.squeeze.check_with_confidence(df)
+        result['details']['l5_squeeze'] = l5_result.reason
+        result['details']['l5_confidence'] = l5_result.confidence
 
-        # L6: Validator (샘플 부족 폴백 지원)
-        l6_allowed, l6_reason, l6_entry_ratio, l6_fallback_stage = self.check_l6_validator(stock_code, stock_name, current_price, df)
-        result['details']['l6_validator'] = l6_reason
-        result['details']['l6_entry_ratio'] = l6_entry_ratio
-        result['details']['l6_fallback_stage'] = l6_fallback_stage  # 🔧 FIX: fallback_stage 기록
+        # L5도 선택사항 (Squeeze 없어도 VWAP 돌파만으로 진행 가능)
+        if not l5_result.passed:
+            console.print(f"[yellow]⚠️  {stock_code}: L5 Squeeze 없음 (진행 가능)[/yellow]")
 
-        if not l6_allowed:
+        # L6: Pre-Trade Validator
+        from datetime import datetime
+        l6_result = self.validator.check_with_confidence(
+            stock_code=stock_code,
+            stock_name=stock_name,
+            historical_data=df,
+            current_price=current_price,
+            current_time=datetime.now()
+        )
+        result['details']['l6_validator'] = l6_result.reason
+        result['details']['l6_confidence'] = l6_result.confidence
+
+        if not l6_result.passed:
             result['rejection_level'] = 'L6'
-            result['rejection_reason'] = l6_reason
+            result['rejection_reason'] = l6_result.reason
+            return result
+
+        # Confidence 결합
+        filter_results = {
+            "L3_MTF": l3_result,
+            "L4_LIQUIDITY": l4_result if l4_result.passed else FilterResult(True, 0.3, "L4 Default"),
+            "L5_SQUEEZE": l5_result if l5_result.passed else FilterResult(True, 0.3, "L5 Default"),
+            "L6_VALIDATOR": l6_result
+        }
+
+        final_confidence, should_pass, aggregation_reason = self.confidence_aggregator.aggregate(filter_results)
+
+        result['confidence'] = final_confidence
+        result['aggregation_reason'] = aggregation_reason
+
+        if not should_pass:
+            # Confidence 부족 (< 0.5)
+            result['rejection_level'] = 'CONFIDENCE'
+            result['rejection_reason'] = aggregation_reason
             return result
 
         # 모든 레벨 통과!
         self.stats['total_accepted'] += 1
-
-        # Tier 및 포지션 사이즈 결정
         result['allowed'] = True
-        result['tier'] = l5_tier
 
-        # 🔧 FIX: Stage 기반 포지션 크기 결정 (문서 명세: Stage 1/2/3 → 100%/60%/30%)
-        stage, stage_multiplier = self.calculate_stage(l6_fallback_stage, l1_confidence, l5_tier)
-        result['stage'] = stage
-        result['stage_multiplier'] = stage_multiplier
-
-        # Stage 기반 기본 크기 설정
-        position_size = stage_multiplier
-
-        # L4 수급 강도로 미세 조정 (±20% 범위 내)
-        if l4_strong and l4_strength > 0.7:
-            position_size *= 1.2  # 최대 20% 증가
-        elif not l4_strong or l4_strength < 0.3:
-            position_size *= 0.8  # 20% 감소
-
-        result['position_size_multiplier'] = min(position_size, 1.0)
+        # Confidence 기반 포지션 크기 결정 (0.6 ~ 1.0)
+        position_multiplier = self.confidence_aggregator.calculate_position_multiplier(final_confidence)
+        result['position_size_multiplier'] = position_multiplier
 
         return result
 
