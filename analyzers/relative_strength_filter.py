@@ -40,6 +40,10 @@ class RelativeStrengthFilter:
         self.market_data_cache: Dict[str, pd.DataFrame] = {}
         self.cache_expiry: Dict[str, datetime] = {}
 
+        # 🔧 개별 종목 데이터 캐시 (성능 개선)
+        self.stock_data_cache: Dict[str, pd.DataFrame] = {}
+        self.stock_cache_expiry: Dict[str, datetime] = {}
+
     def _get_market_index_ticker(self, market: str) -> str:
         """시장별 지수 티커 반환"""
         if market == 'KOSPI':
@@ -93,6 +97,50 @@ class RelativeStrengthFilter:
             return float(series_or_value.values[0])
         return float(series_or_value)
 
+    def _get_stock_data(self, stock_code: str, market: str) -> pd.DataFrame:
+        """
+        종목 데이터 조회 (캐싱 사용)
+
+        Args:
+            stock_code: 종목코드
+            market: 시장 구분
+
+        Returns:
+            종목 가격 데이터
+        """
+        # 캐시 키
+        cache_key = f"{stock_code}_{market}"
+
+        # 캐시 확인 (30분간 유효)
+        now = datetime.now()
+        if cache_key in self.stock_data_cache:
+            if cache_key in self.stock_cache_expiry and self.stock_cache_expiry[cache_key] > now:
+                return self.stock_data_cache[cache_key]
+
+        # 종목 티커
+        ticker_suffix = '.KS' if market == 'KOSPI' else '.KQ'
+        ticker = f"{stock_code}{ticker_suffix}"
+
+        # 데이터 조회
+        period = f"{int(self.lookback_days * 1.5)}d"
+        try:
+            df_stock = yf.download(ticker, period=period, interval='1d',
+                                  progress=False, auto_adjust=True)
+
+            if df_stock is not None and len(df_stock) >= self.lookback_days:
+                # 캐시 저장
+                self.stock_data_cache[cache_key] = df_stock
+                self.stock_cache_expiry[cache_key] = now + timedelta(minutes=30)
+                return df_stock
+            else:
+                return None
+
+        except Exception as e:
+            error_msg = str(e).lower()
+            if 'delisted' not in error_msg and 'no data found' not in error_msg:
+                console.print(f"[dim]⚠️  {stock_code} 데이터 조회 실패: {e}[/dim]")
+            return None
+
     def calculate_return(self, stock_code: str, market: str = 'KOSPI') -> Tuple[float, float, float]:
         """
         종목의 수익률과 시장 수익률, RS 계산
@@ -104,17 +152,9 @@ class RelativeStrengthFilter:
         Returns:
             (stock_return, market_return, rs_strength)
         """
-        # 종목 티커
-        ticker_suffix = '.KS' if market == 'KOSPI' else '.KQ'
-        ticker = f"{stock_code}{ticker_suffix}"
-
-        # 종목 데이터 조회
-        period = f"{int(self.lookback_days * 1.5)}d"
         try:
-            # FutureWarning 방지: auto_adjust 명시
-            df_stock = yf.download(ticker, period=period, interval='1d',
-                                  progress=False, auto_adjust=True)
-
+            # 🔧 캐싱된 데이터 사용
+            df_stock = self._get_stock_data(stock_code, market)
             if df_stock is None or len(df_stock) < self.lookback_days:
                 return 0.0, 0.0, 0.0
 
@@ -139,43 +179,26 @@ class RelativeStrengthFilter:
             return stock_return, market_return, rs_strength
 
         except Exception as e:
-            # 상장폐지 종목은 조용히 처리
-            error_msg = str(e).lower()
-            if 'delisted' in error_msg or 'no data found' in error_msg:
-                console.print(f"[dim]⚠️  {stock_code}: 상장폐지 또는 데이터 없음[/dim]")
-            else:
-                console.print(f"[dim]⚠️  {stock_code} 수익률 계산 실패: {e}[/dim]")
+            console.print(f"[dim]⚠️  {stock_code} 수익률 계산 실패: {e}[/dim]")
             return 0.0, 0.0, 0.0
 
-    def calculate_rs_rating(self, stock_code: str, market: str = 'KOSPI',
-                           all_candidates: List[str] = None) -> float:
+    def calculate_rs_rating(self, rs_strength: float, all_rs_values: List[float] = None) -> float:
         """
         IBD-RS 등급 계산 (0-100)
 
         Args:
-            stock_code: 종목코드
-            market: 시장 구분
-            all_candidates: 전체 후보군 (백분위 계산용)
+            rs_strength: 현재 종목의 RS 값 (stock_return - market_return)
+            all_rs_values: 전체 후보군의 RS 값 리스트 (백분위 계산용)
 
         Returns:
             RS 등급 (0-100)
         """
-        stock_return, market_return, rs_strength = self.calculate_return(stock_code, market)
-
         # 전체 후보군이 있으면 백분위 계산
-        # 주의: 각 종목의 시장이 다를 수 있으므로 동일 market 사용
-        if all_candidates and len(all_candidates) > 1:
-            rs_values = []
-            for code in all_candidates:
-                # 모든 종목을 같은 market으로 비교 (공정한 비교를 위해)
-                _, _, rs = self.calculate_return(code, market)
-                rs_values.append(rs)
-
+        if all_rs_values and len(all_rs_values) > 1:
             # 백분위 계산
-            rs_values_sorted = sorted(rs_values)
+            rs_values_sorted = sorted(all_rs_values)
             rank = rs_values_sorted.index(rs_strength) if rs_strength in rs_values_sorted else 0
             percentile = (rank / len(rs_values_sorted)) * 100
-
             return percentile
         else:
             # 단순 RS 값 반환 (임계값으로 판단)
@@ -195,7 +218,7 @@ class RelativeStrengthFilter:
         market: str = 'KOSPI'
     ) -> List[Dict]:
         """
-        RS 필터링으로 상위 종목만 선택
+        RS 필터링으로 상위 종목만 선택 (2-Pass 알고리즘으로 성능 최적화)
 
         Args:
             candidates: 후보 종목 리스트 [{'stock_code': '...', 'stock_name': '...', ...}, ...]
@@ -207,35 +230,50 @@ class RelativeStrengthFilter:
         console.print(f"\n[cyan]📊 IBD-RS 필터링 시작 (최소 RS: {self.min_rs_rating})[/cyan]")
         console.print(f"  입력: {len(candidates)}개 종목")
 
-        # 전체 종목 코드 추출
-        all_codes = [c['stock_code'] for c in candidates]
-
-        # RS 계산
-        results = []
+        # 🔧 Pass 1: 모든 종목의 RS 값 계산 (캐싱 사용, O(N))
+        console.print(f"[dim]  Pass 1: RS 값 계산 중...[/dim]")
+        rs_data = []
         for candidate in candidates:
+            stock_code = candidate['stock_code']
+            stock_market = candidate.get('market', market)
+
+            # RS 값 계산 (캐싱됨)
+            stock_return, market_return, rs_strength = self.calculate_return(stock_code, stock_market)
+
+            rs_data.append({
+                'candidate': candidate,
+                'stock_return': stock_return,
+                'market_return': market_return,
+                'rs_strength': rs_strength
+            })
+
+        # 전체 RS 값 리스트 추출
+        all_rs_values = [d['rs_strength'] for d in rs_data]
+
+        # 🔧 Pass 2: 백분위 계산 및 필터링 (O(N))
+        console.print(f"[dim]  Pass 2: 백분위 계산 중...[/dim]")
+        results = []
+        for data in rs_data:
+            candidate = data['candidate']
             stock_code = candidate['stock_code']
             stock_name = candidate.get('stock_name', stock_code)
 
-            # 종목별 시장 정보 사용 (없으면 기본값 사용)
-            stock_market = candidate.get('market', market)
-
-            # RS 등급 계산
-            rs_rating = self.calculate_rs_rating(stock_code, stock_market, all_codes)
-            stock_return, market_return, rs_strength = self.calculate_return(stock_code, stock_market)
+            # 백분위 기반 RS 등급 계산 (캐시된 데이터 사용)
+            rs_rating = self.calculate_rs_rating(data['rs_strength'], all_rs_values)
 
             # 결과 저장
             result = {
                 **candidate,
                 'rs_rating': rs_rating,
-                'stock_return_60d': stock_return,
-                'market_return_60d': market_return,
-                'rs_strength': rs_strength
+                'stock_return_60d': data['stock_return'],
+                'market_return_60d': data['market_return'],
+                'rs_strength': data['rs_strength']
             }
             results.append(result)
 
             console.print(
                 f"  [dim]{stock_name:15} RS:{rs_rating:>5.1f} "
-                f"({stock_return:+6.2f}% vs {market_return:+6.2f}%)[/dim]"
+                f"({data['stock_return']:+6.2f}% vs {data['market_return']:+6.2f}%)[/dim]"
             )
 
         # RS 등급 기준 필터링
