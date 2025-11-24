@@ -2663,6 +2663,14 @@ class IntegratedTradingSystem:
         console.print(f"[dim]   - 포지션비율: {position_calc['position_ratio']:.1f}%[/dim]")
         console.print(f"[dim]   - 포지션 조정 배수: {position_size_mult*100:.0f}%[/dim]")
 
+        # 🔧 CRITICAL FIX: 수량 검증 (0주 주문 방지)
+        if quantity <= 0:
+            console.print(f"[yellow]⚠️  매수 불가: 계산된 수량이 0주입니다.[/yellow]")
+            console.print(f"[yellow]   잔고: {self.current_cash:,.0f}원, 가격: {price:,.0f}원[/yellow]")
+            console.print(f"[yellow]   계산된 수량: {position_calc['quantity']:.2f} × {position_size_mult:.2f} = {quantity}주[/yellow]")
+            console.print("=" * 80, style="yellow")
+            return
+
         # Dry-run 모드 체크
         if self.dry_run_mode:
             console.print()
