@@ -106,6 +106,24 @@ class SignalOrchestrator:
         # Confidence Aggregator
         self.confidence_aggregator = ConfidenceAggregator()
 
+        # Phase 2: Multi-Alpha Engine
+        from trading.alpha_engine import SimonsStyleAlphaEngine
+        from trading.alphas.vwap_alpha import VWAPAlpha
+        from trading.alphas.volume_spike_alpha import VolumeSpikeAlpha
+        from trading.alphas.obv_trend_alpha import OBVTrendAlpha
+        from trading.alphas.institutional_flow_alpha import InstitutionalFlowAlpha
+        from trading.alphas.news_score_alpha import NewsScoreAlpha
+
+        self.alpha_engine = SimonsStyleAlphaEngine(
+            alphas=[
+                VWAPAlpha(weight=2.0),
+                VolumeSpikeAlpha(weight=1.5, lookback=40),
+                OBVTrendAlpha(weight=1.2, fast=5, slow=20),
+                InstitutionalFlowAlpha(weight=1.0),
+                NewsScoreAlpha(weight=0.8),
+            ]
+        )
+
         # 통계
         self.stats = {
             'l0_blocked': 0,
@@ -115,7 +133,8 @@ class SignalOrchestrator:
             'l4_weak': 0,
             'l5_triggered': 0,
             'l6_blocked': 0,
-            'total_accepted': 0
+            'total_accepted': 0,
+            'alpha_rejected': 0  # Phase 2: Multi-Alpha 차단
         }
 
     def check_l0_system_filter(self, current_cash: float = 0, daily_pnl: float = 0) -> Tuple[bool, str]:
@@ -495,6 +514,28 @@ class SignalOrchestrator:
             result['rejection_reason'] = aggregation_reason
             return result
 
+        # Phase 2: Multi-Alpha Engine 실행
+        state = {
+            "df": df,
+            "df_5m": df,  # 5분봉 (없으면 1분봉 재사용)
+            "institutional_flow": self._get_institutional_flow(stock_code),
+            "ai_analysis": None  # 나중에 AI 분석 통합 시 사용
+        }
+
+        alpha_result = self.alpha_engine.compute(stock_code, state)
+        aggregate_score = alpha_result["aggregate_score"]
+
+        result['aggregate_score'] = aggregate_score
+        result['alpha_breakdown'] = alpha_result["alphas"]
+
+        # Multi-Alpha 임계값 체크
+        if aggregate_score <= 1.0:
+            # aggregate_score가 1.0 이하면 매수 조건 미달
+            self.stats['alpha_rejected'] += 1
+            result['rejection_level'] = 'ALPHA'
+            result['rejection_reason'] = f"Multi-Alpha 점수 부족 ({aggregate_score:+.2f} <= 1.0)"
+            return result
+
         # 모든 레벨 통과!
         self.stats['total_accepted'] += 1
         result['allowed'] = True
@@ -504,6 +545,28 @@ class SignalOrchestrator:
         result['position_size_multiplier'] = position_multiplier
 
         return result
+
+    def _get_institutional_flow(self, stock_code: str) -> Optional[Dict]:
+        """
+        기관/외인 수급 데이터 조회 (L4 Liquidity Detector 활용)
+
+        Returns:
+            {
+                "inst_net_buy": int,
+                "foreign_net_buy": int,
+                "total_traded_value": int
+            }
+        """
+        if not self.api:
+            return None
+
+        try:
+            # L4 Liquidity Detector가 이미 수급 데이터를 수집하고 있음
+            # 해당 데이터를 재사용
+            return self.liquidity_detector.get_flow_data(stock_code)
+        except Exception as e:
+            console.print(f"[yellow]⚠️  수급 데이터 조회 실패: {e}[/yellow]")
+            return None
 
     def get_stats(self) -> Dict:
         """통계 조회"""
