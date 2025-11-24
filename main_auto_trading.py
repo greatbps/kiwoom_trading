@@ -316,9 +316,9 @@ class IntegratedTradingSystem:
         )
         console.print("[dim]✓ SignalOrchestrator 초기화 완료 (L0-L6 파이프라인)[/dim]")
 
-        # 데이터베이스 초기화
-        self.db = TradingDatabase("data/trading.db")
-        console.print("[dim]✓ 데이터베이스 초기화 완료[/dim]")
+        # 데이터베이스 초기화 (PostgreSQL)
+        self.db = TradingDatabase()
+        console.print("[dim]✓ 데이터베이스 초기화 완료 (PostgreSQL)[/dim]")
 
         # VWAP 검증기 (문서 명세 복원)
         self.validator = PreTradeValidator(

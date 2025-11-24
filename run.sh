@@ -79,11 +79,12 @@ echo -e "${BLUE}  모든 준비 완료!${NC}"
 echo -e "${BLUE}=====================================${NC}"
 echo ""
 
-# 5. 메인 메뉴 실행
-echo -e "${GREEN}메인 메뉴를 시작합니다...${NC}"
+# 5. 실전 자동매매 실행
+echo -e "${GREEN}실전 자동매매를 시작합니다...${NC}"
+echo -e "${RED}※ 실제 계좌로 거래합니다! 주의하세요!${NC}"
 echo -e "${YELLOW}※ 종료하려면 Ctrl+C를 누르세요${NC}"
 echo ""
-python main_menu.py
+python3 main_auto_trading.py --conditions 17,18,19,20,21,22
 
 # 종료 코드 확인
 EXIT_CODE=$?
