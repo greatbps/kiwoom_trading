@@ -2929,11 +2929,13 @@ class IntegratedTradingSystem:
         try:
             account_info = self.api.get_account_info()
             if account_info and account_info.get('return_code') == 0:
-                holdings = account_info.get('holdings', [])
+                # 🔧 CRITICAL FIX: 올바른 API 응답 키 사용 (ka01690 명세)
+                holdings = account_info.get('day_bal_rt', [])  # 'holdings' → 'day_bal_rt'
                 actual_qty = 0
                 for holding in holdings:
-                    if holding.get('stock_code') == stock_code:
-                        actual_qty = int(holding.get('quantity', 0))
+                    # 🔧 FIX: 올바른 필드명 사용
+                    if holding.get('stk_cd') == stock_code:  # 'stock_code' → 'stk_cd'
+                        actual_qty = int(holding.get('rmnd_qty', 0))  # 'quantity' → 'rmnd_qty'
                         break
 
                 if actual_qty > 0 and actual_qty != position['quantity']:
