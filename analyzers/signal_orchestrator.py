@@ -114,13 +114,16 @@ class SignalOrchestrator:
         from trading.alphas.institutional_flow_alpha import InstitutionalFlowAlpha
         from trading.alphas.news_score_alpha import NewsScoreAlpha
 
+        # Phase 3-1: Optimized Alpha Weights (Grid Search Results)
+        # Baseline: [2.0, 1.5, 1.2, 1.0, 0.8] → 90.91% win rate, 2.89% avg return, Sharpe 2.03
+        # Optimal:  [1.5, 1.0, 0.5, 0.5, 1.0] → 100.0% win rate, 3.27% avg return, Sharpe 4.07
         self.alpha_engine = SimonsStyleAlphaEngine(
             alphas=[
-                VWAPAlpha(weight=2.0),
-                VolumeSpikeAlpha(weight=1.5, lookback=40),
-                OBVTrendAlpha(weight=1.2, fast=5, slow=20),
-                InstitutionalFlowAlpha(weight=1.0),
-                NewsScoreAlpha(weight=0.8),
+                VWAPAlpha(weight=1.5),                      # 2.0 → 1.5 (-25%)
+                VolumeSpikeAlpha(weight=1.0, lookback=40),  # 1.5 → 1.0 (-33%)
+                OBVTrendAlpha(weight=0.5, fast=5, slow=20), # 1.2 → 0.5 (-58%)
+                InstitutionalFlowAlpha(weight=0.5),         # 1.0 → 0.5 (-50%)
+                NewsScoreAlpha(weight=1.0),                 # 0.8 → 1.0 (+25%)
             ]
         )
 
