@@ -317,6 +317,58 @@ class LiquidityShiftDetector:
 
         return shift_detected, strength, reason
 
+    def get_flow_data(self, stock_code: str) -> Optional[Dict]:
+        """
+        기관/외인 수급 데이터 조회 (InstitutionalFlowAlpha용)
+
+        Returns:
+            {
+                "inst_net_buy": int,      # 기관 순매수 (원)
+                "foreign_net_buy": int,   # 외인 순매수 (원)
+                "total_traded_value": int # 총 거래대금 (원)
+            }
+        """
+        if not self.api:
+            return None
+
+        try:
+            # 투자자별 매매 동향 조회
+            df = self._get_investor_trend_data(stock_code)
+
+            if df is None or len(df) == 0:
+                return None
+
+            # 최근 1일 데이터 (가장 최근)
+            latest = df.iloc[0] if len(df) > 0 else None
+            if latest is None:
+                return None
+
+            # 키움 API 응답 구조에 따라 필드명 조정 필요
+            # 예상 필드: orgn (기관), frgnr_invsr (외국인), etc.
+            # 여기서는 일반적인 구조로 작성
+
+            inst_net_buy = int(latest.get('orgn', 0)) if 'orgn' in latest else 0
+            foreign_net_buy = int(latest.get('frgnr_invsr', 0)) if 'frgnr_invsr' in latest else 0
+
+            # 총 거래대금 추정 (기관+외인+개인의 절대값 합)
+            # 실제 API 응답에 total_traded_value가 있으면 그것 사용
+            if 'total_traded_value' in latest:
+                total_traded_value = int(latest['total_traded_value'])
+            else:
+                # 추정: 순매수의 절대값으로 대략적인 거래대금 계산
+                individual = int(latest.get('indvdl', 0)) if 'indvdl' in latest else 0
+                total_traded_value = abs(inst_net_buy) + abs(foreign_net_buy) + abs(individual)
+
+            return {
+                "inst_net_buy": inst_net_buy,
+                "foreign_net_buy": foreign_net_buy,
+                "total_traded_value": max(total_traded_value, 1)  # 0 방지
+            }
+
+        except Exception as e:
+            console.print(f"[dim]⚠️  {stock_code} 수급 데이터 조회 실패: {e}[/dim]")
+            return None
+
 
 if __name__ == "__main__":
     """테스트 코드"""
