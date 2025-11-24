@@ -2430,21 +2430,12 @@ class IntegratedTradingSystem:
                 console.print(f"[yellow]⚠️  {stock_name} ({stock_code}): {level} 차단 - {reason}[/yellow]")
                 return
 
-            # 4. 매수 실행
-            tier = signal_result['tier']
-            position_size_mult = signal_result['position_size_multiplier']
-
-            # 🔧 FIX: Tier를 entry_confidence로 변환 (문서 명세)
-            # TIER_1=1.0 (100%), TIER_2=0.7 (70%), TIER_3=0.5 (50%)
-            tier_to_confidence = {
-                1: 1.0,  # TIER_1: STRONG_BUY
-                2: 0.7,  # TIER_2: BUY
-                3: 0.5   # TIER_3: WEAK_BUY
-            }
-            entry_confidence = tier_to_confidence.get(tier, 1.0)
+            # 4. 매수 실행 (Phase 1: Confidence-based)
+            entry_confidence = signal_result['confidence']  # 0.0 ~ 1.0
+            position_size_mult = signal_result['position_size_multiplier']  # 0.6 ~ 1.0
 
             console.print(f"[green]✅ {stock_name} ({stock_code}): 매수 시그널 발생![/green]")
-            console.print(f"  Tier: {tier}, 진입 신뢰도: {entry_confidence*100:.0f}%, 포지션 조정: {position_size_mult*100:.0f}%")
+            console.print(f"  신뢰도: {entry_confidence*100:.0f}%, 포지션 조정: {position_size_mult*100:.0f}%")
 
             # execute_buy 호출 (포지션 사이즈 + 진입 신뢰도 반영)
             self.execute_buy(stock_code, stock_name, current_price, df, position_size_mult, entry_confidence)
