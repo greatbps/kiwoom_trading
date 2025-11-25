@@ -106,26 +106,29 @@ class SignalOrchestrator:
         # Confidence Aggregator
         self.confidence_aggregator = ConfidenceAggregator()
 
-        # Phase 2: Multi-Alpha Engine
+        # Phase 4: 8-Alpha System + Dynamic Weight Adjuster
         from trading.alpha_engine import SimonsStyleAlphaEngine
         from trading.alphas.vwap_alpha import VWAPAlpha
         from trading.alphas.volume_spike_alpha import VolumeSpikeAlpha
         from trading.alphas.obv_trend_alpha import OBVTrendAlpha
         from trading.alphas.institutional_flow_alpha import InstitutionalFlowAlpha
         from trading.alphas.news_score_alpha import NewsScoreAlpha
+        # Phase 4: 신규 알파
+        from trading.alphas.momentum_alpha import MomentumAlpha
+        from trading.alphas.mean_reversion_alpha import MeanReversionAlpha
+        from trading.alphas.volatility_alpha import VolatilityAlpha
+        # Phase 4: 동적 가중치 조정기
+        from trading.dynamic_weight_adjuster import DynamicWeightAdjuster
 
-        # Phase 3-1: Optimized Alpha Weights (Grid Search Results)
-        # Baseline: [2.0, 1.5, 1.2, 1.0, 0.8] → 90.91% win rate, 2.89% avg return, Sharpe 2.03
-        # Optimal:  [1.5, 1.0, 0.5, 0.5, 1.0] → 100.0% win rate, 3.27% avg return, Sharpe 4.07
-        self.alpha_engine = SimonsStyleAlphaEngine(
-            alphas=[
-                VWAPAlpha(weight=1.5),                      # 2.0 → 1.5 (-25%)
-                VolumeSpikeAlpha(weight=1.0, lookback=40),  # 1.5 → 1.0 (-33%)
-                OBVTrendAlpha(weight=0.5, fast=5, slow=20), # 1.2 → 0.5 (-58%)
-                InstitutionalFlowAlpha(weight=0.5),         # 1.0 → 0.5 (-50%)
-                NewsScoreAlpha(weight=1.0),                 # 0.8 → 1.0 (+25%)
-            ]
-        )
+        # Dynamic Weight Adjuster 초기화
+        self.weight_adjuster = DynamicWeightAdjuster()
+
+        # 현재 Market Regime (초기값: NORMAL)
+        self.current_regime = "NORMAL"
+        self.current_weights = self.weight_adjuster.adjust_weights(self.current_regime)
+
+        # Alpha Engine 초기화 (8 alphas with dynamic weights)
+        self._create_alpha_engine()
 
         # 통계
         self.stats = {
@@ -439,6 +442,11 @@ class SignalOrchestrator:
             result['rejection_reason'] = l0_reason
             return result
 
+        # Phase 4: Market Regime 업데이트 및 가중치 동적 조정
+        regime, weights_changed = self.update_regime(market)
+        result['details']['market_regime'] = regime
+        result['details']['weights_updated'] = weights_changed
+
         # L1: 장세 필터 (Pass/Fail만, 향후 confidence 추가 가능)
         l1_pass, l1_reason, l1_confidence = self.check_l1_regime_filter(market)
         result['details']['l1_regime'] = l1_reason
@@ -571,9 +579,82 @@ class SignalOrchestrator:
             console.print(f"[yellow]⚠️  수급 데이터 조회 실패: {e}[/yellow]")
             return None
 
+    def _create_alpha_engine(self):
+        """
+        Alpha Engine 생성 (현재 가중치 기반)
+
+        Phase 4: 8개 알파 (기존 5 + 신규 3) + 동적 가중치
+        """
+        from trading.alpha_engine import SimonsStyleAlphaEngine
+        from trading.alphas.vwap_alpha import VWAPAlpha
+        from trading.alphas.volume_spike_alpha import VolumeSpikeAlpha
+        from trading.alphas.obv_trend_alpha import OBVTrendAlpha
+        from trading.alphas.institutional_flow_alpha import InstitutionalFlowAlpha
+        from trading.alphas.news_score_alpha import NewsScoreAlpha
+        from trading.alphas.momentum_alpha import MomentumAlpha
+        from trading.alphas.mean_reversion_alpha import MeanReversionAlpha
+        from trading.alphas.volatility_alpha import VolatilityAlpha
+
+        weights = self.current_weights
+
+        self.alpha_engine = SimonsStyleAlphaEngine(
+            alphas=[
+                # Phase 2-3: 기존 5개 알파
+                VWAPAlpha(weight=weights["VWAP"]),
+                VolumeSpikeAlpha(weight=weights["VolumeSpike"], lookback=40),
+                OBVTrendAlpha(weight=weights["OBV"], fast=5, slow=20),
+                InstitutionalFlowAlpha(weight=weights["Institutional"]),
+                NewsScoreAlpha(weight=weights["News"]),
+                # Phase 4: 신규 3개 알파
+                MomentumAlpha(weight=weights["Momentum"]),
+                MeanReversionAlpha(weight=weights["MeanReversion"]),
+                VolatilityAlpha(weight=weights["Volatility"]),
+            ]
+        )
+
+    def update_regime(self, market: str = 'KOSPI'):
+        """
+        Market Regime 감지 및 가중치 업데이트
+
+        Args:
+            market: 시장 구분 ('KOSPI', 'KOSDAQ')
+
+        Returns:
+            (regime, weights_changed)
+        """
+        # L1 Regime Detector로 변동성 체제 파악
+        regime, rv_percentile, details = self.regime_detector.get_market_regime(market)
+
+        # Regime이 변경되었는지 확인
+        weights_changed = False
+
+        if regime != self.current_regime:
+            console.print(f"\n[bold yellow]🔄 Market Regime 변경: {self.current_regime} → {regime}[/bold yellow]")
+            self.current_regime = regime
+
+            # 가중치 재조정
+            old_weights = self.current_weights.copy()
+            self.current_weights = self.weight_adjuster.adjust_weights(regime, rv_percentile)
+
+            # 변경 사항 출력
+            self.weight_adjuster.print_weight_comparison(regime, self.current_weights)
+
+            # Alpha Engine 재생성
+            self._create_alpha_engine()
+
+            weights_changed = True
+
+            console.print(f"[green]✅ Alpha Engine이 새로운 가중치로 업데이트되었습니다.[/green]")
+            console.print()
+
+        return regime, weights_changed
+
     def get_stats(self) -> Dict:
         """통계 조회"""
-        return self.stats.copy()
+        stats = self.stats.copy()
+        # Phase 4: Regime 정보 추가
+        stats['current_regime'] = self.current_regime
+        return stats
 
 
 if __name__ == "__main__":
