@@ -66,8 +66,9 @@ class ConfidenceAggregator:
         # 최종 confidence
         final_confidence = numerator / denominator if denominator > 0 else 0.0
 
-        # 최소 임계값 체크 (0.5)
-        MIN_CONFIDENCE = 0.5
+        # 📊 ML 개선 (2025-12-15): 승률 33.3% → MIN_CONFIDENCE 상향 조정
+        # 이번주 분석: 조기 손절 5건 빈발 → 진입 품질 강화 필요
+        MIN_CONFIDENCE = 0.5  # 0.4 → 0.5
 
         if final_confidence < MIN_CONFIDENCE:
             return final_confidence, False, f"Low confidence ({final_confidence:.2f} < {MIN_CONFIDENCE})"
@@ -83,14 +84,19 @@ class ConfidenceAggregator:
             confidence: 0.0 ~ 1.0
 
         Returns:
-            position_multiplier: 0.6 ~ 1.0
+            position_multiplier: 0.4 ~ 1.0
+            - < 0.4: 진입 불가 (MIN_CONFIDENCE에서 차단)
+            - 0.4 ~ 0.5: 탐색적 소액 진입 (40%)
+            - 0.5 이상: 정상 진입 (60%~100%)
         """
-        # 선형 스케일링: 0.5 → 0.6, 1.0 → 1.0
-        if confidence < 0.5:
-            return 0.6
-
-        # 0.5 ~ 1.0 → 0.6 ~ 1.0
-        return 0.6 + (confidence - 0.5) * 0.8
+        if confidence < 0.4:
+            return 0.0  # MIN_CONFIDENCE와 함께 사용
+        elif confidence < 0.5:
+            # 탐색 모드: 기본 포지션의 40%
+            return 0.4
+        else:
+            # 기존: 0.5~1.0 → 0.6~1.0 선형 스케일링
+            return 0.6 + (confidence - 0.5) * 0.8
 
 
 # 전역 인스턴스 (기본 가중치)

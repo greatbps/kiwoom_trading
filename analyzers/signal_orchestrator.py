@@ -34,8 +34,18 @@ from analyzers.pre_trade_validator_v2 import PreTradeValidatorV2
 from trading.confidence_aggregator import ConfidenceAggregator
 
 from rich.console import Console
+import logging
 
 console = Console()
+
+# 파일 로거 설정
+signal_logger = logging.getLogger('signal_orchestrator')
+signal_logger.setLevel(logging.INFO)
+log_file = Path(__file__).parent.parent / 'logs' / 'signal_orchestrator.log'
+log_file.parent.mkdir(exist_ok=True)
+file_handler = logging.FileHandler(log_file, mode='a', encoding='utf-8')
+file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+signal_logger.addHandler(file_handler)
 
 
 class SignalTier:
@@ -154,16 +164,16 @@ class SignalOrchestrator:
         Returns:
             (pass, reason)
         """
-        # 1. 진입 시간 체크 (문서 명세: 09:30~14:59)
+        # 1. 진입 시간 체크 (10:00~14:59)
         now = datetime.now()
         current_time = now.time()
 
-        entry_start = time(9, 30, 0)  # 🔧 FIX: 09:00 → 09:30 (문서 명세)
+        entry_start = time(10, 0, 0)  # 10시 이후 매수 (장초반 가격 불안정)
         entry_end = time(14, 59, 0)   # 🔧 FIX: 15:30 → 14:59 (문서 명세)
 
         if not (entry_start <= current_time <= entry_end):
             self.stats['l0_blocked'] += 1
-            return False, f"진입 시간 외 ({current_time.strftime('%H:%M')}, 허용: 09:30~14:59)"
+            return False, f"진입 시간 외 ({current_time.strftime('%H:%M')}, 허용: 10:00~14:59)"
 
         # 2. 요일 체크 (토요일=5, 일요일=6)
         if now.weekday() >= 5:
@@ -440,6 +450,10 @@ class SignalOrchestrator:
         if not l0_pass:
             result['rejection_level'] = 'L0'
             result['rejection_reason'] = l0_reason
+            import os
+            msg = f"❌ REJECT {stock_code} | PID:{os.getpid()} | L0 | {l0_reason}"
+            console.print(f"[red]{msg}[/red]")
+            signal_logger.info(msg)
             return result
 
         # Phase 4: Market Regime 업데이트 및 가중치 동적 조정
@@ -455,6 +469,7 @@ class SignalOrchestrator:
         if not l1_pass:
             result['rejection_level'] = 'L1'
             result['rejection_reason'] = l1_reason
+            console.print(f"[red]❌ REJECT[/red] {stock_code} | L1 | {l1_reason}")
             return result
 
         # L3-L6: Confidence-based 필터링
@@ -468,6 +483,7 @@ class SignalOrchestrator:
         if not l3_result.passed:
             result['rejection_level'] = 'L3'
             result['rejection_reason'] = l3_result.reason
+            console.print(f"[red]❌ REJECT[/red] {stock_code} @{current_price:.0f}원 | L3 | {l3_result.reason[:60]}")
             return result
 
         # L4: Liquidity Shift
@@ -504,6 +520,7 @@ class SignalOrchestrator:
         if not l6_result.passed:
             result['rejection_level'] = 'L6'
             result['rejection_reason'] = l6_result.reason
+            console.print(f"[red]❌ REJECT[/red] {stock_code} @{current_price:.0f}원 | L6 | {l6_result.reason[:60]}")
             return result
 
         # Confidence 결합
@@ -520,9 +537,12 @@ class SignalOrchestrator:
         result['aggregation_reason'] = aggregation_reason
 
         if not should_pass:
-            # Confidence 부족 (< 0.5)
+            # Confidence 부족 (< 0.4)
             result['rejection_level'] = 'CONFIDENCE'
             result['rejection_reason'] = aggregation_reason
+            msg = f"❌ REJECT {stock_code} @{current_price:.0f}원 | CONFIDENCE | {aggregation_reason}"
+            console.print(f"[red]{msg}[/red]")
+            signal_logger.info(msg)
             return result
 
         # Phase 2: Multi-Alpha Engine 실행
@@ -539,12 +559,14 @@ class SignalOrchestrator:
         result['aggregate_score'] = aggregate_score
         result['alpha_breakdown'] = alpha_result["alphas"]
 
-        # Multi-Alpha 임계값 체크
-        if aggregate_score <= 1.0:
-            # aggregate_score가 1.0 이하면 매수 조건 미달
+        # Multi-Alpha 임계값 체크 (임시 완화: 1.0 → 0.8)
+        ALPHA_THRESHOLD = 0.8
+        if aggregate_score <= ALPHA_THRESHOLD:
+            # aggregate_score가 임계값 이하면 매수 조건 미달
             self.stats['alpha_rejected'] += 1
             result['rejection_level'] = 'ALPHA'
-            result['rejection_reason'] = f"Multi-Alpha 점수 부족 ({aggregate_score:+.2f} <= 1.0)"
+            result['rejection_reason'] = f"Multi-Alpha 점수 부족 ({aggregate_score:+.2f} <= {ALPHA_THRESHOLD})"
+            console.print(f"[red]❌ REJECT[/red] {stock_code} @{current_price:.0f}원 | ALPHA | score={aggregate_score:+.2f} (threshold={ALPHA_THRESHOLD})")
             return result
 
         # 모든 레벨 통과!
@@ -554,6 +576,12 @@ class SignalOrchestrator:
         # Confidence 기반 포지션 크기 결정 (0.6 ~ 1.0)
         position_multiplier = self.confidence_aggregator.calculate_position_multiplier(final_confidence)
         result['position_size_multiplier'] = position_multiplier
+
+        # ✅ 승인 로그 (프로세스 ID 포함)
+        import os
+        msg = f"✅ ACCEPT {stock_code} @{current_price:.0f}원 | PID:{os.getpid()} | conf={final_confidence:.2f} alpha={aggregate_score:+.2f} pos_mult={position_multiplier:.2f}"
+        console.print(f"[green]{msg}[/green]")
+        signal_logger.info(msg)
 
         return result
 

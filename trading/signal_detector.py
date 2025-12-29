@@ -109,15 +109,35 @@ class SignalDetector:
             if latest_signal == 1:  # 매수 신호
                 console.print(f"[yellow]🔔 {stock_name} ({stock_code}): 매수 신호 감지![/yellow]")
 
-                # 신뢰도 계산 (간단한 로직)
+                # 🔴 GPT 개선: VWAP 이격도 + 기울기 필터 (Noise Zone 회피)
                 price_vs_vwap_pct = ((current_price - current_vwap) / current_vwap) * 100
+
+                # 이격도 필터: VWAP에서 충분히 떨어져 있는가?
+                MIN_VWAP_DISTANCE = 0.4  # 최소 0.4% 이격
+                if abs(price_vs_vwap_pct) < MIN_VWAP_DISTANCE:
+                    console.print(f"[dim]❌ {stock_code}: VWAP 이격도 부족 ({price_vs_vwap_pct:.2f}% < {MIN_VWAP_DISTANCE}%)[/dim]")
+                    return None
+
+                # 기울기 필터: VWAP이 상승 추세인가?
+                if len(df) >= 5:
+                    vwap_5bars_ago = df['vwap'].iloc[-5]
+                    vwap_slope_pct = ((current_vwap - vwap_5bars_ago) / vwap_5bars_ago) * 100
+                    MIN_VWAP_SLOPE = 0.05  # 5봉(5분) 동안 최소 +0.05% 상승
+
+                    if vwap_slope_pct < MIN_VWAP_SLOPE:
+                        console.print(f"[dim]❌ {stock_code}: VWAP 기울기 부족 ({vwap_slope_pct:.3f}% < {MIN_VWAP_SLOPE}%)[/dim]")
+                        return None
+
+                    console.print(f"[green]✓ {stock_code}: VWAP 필터 통과 (이격 {price_vs_vwap_pct:.2f}%, 기울기 {vwap_slope_pct:.3f}%)[/green]")
+
+                # 신뢰도 계산 (간단한 로직)
                 confidence = min(1.0, max(0.5, 1.0 - abs(price_vs_vwap_pct) / 10))  # 0.5~1.0
 
                 return {
                     'signal': 1,
                     'current_price': float(current_price),
                     'current_vwap': float(current_vwap),
-                    'reason': f"VWAP 상향 돌파 (+{price_vs_vwap_pct:.2f}%)",
+                    'reason': f"VWAP 상향 돌파 (+{price_vs_vwap_pct:.2f}%, 기울기 {vwap_slope_pct:.3f}%)",
                     'confidence': confidence,
                     'dataframe': df  # 백테스트용
                 }

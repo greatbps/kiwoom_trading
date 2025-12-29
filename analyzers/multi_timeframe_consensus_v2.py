@@ -168,8 +168,16 @@ class MultiTimeframeConsensusV2(MultiTimeframeConsensus):
             else:
                 volume_conf = 0.0
 
-            # 합산 (0~1.0)
+            # 기본 confidence 합산
             confidence = vwap_conf + ema_conf + volume_conf
+
+            # 4. MTF met_count 보너스
+            met_count = details.get('met_count', 3)
+            if met_count == 3:
+                # 3개 모두 만족: 보너스 +0.1
+                confidence = min(confidence + 0.1, 1.0)
+            # met_count == 2: 보너스 없음 (기본값 사용)
+
             confidence = min(confidence, 1.0)
 
             # 상세 정보 추가

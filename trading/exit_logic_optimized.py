@@ -2,7 +2,7 @@
 최적화된 청산 로직 - 데이터 기반 손익비 개선
 
 주요 개선사항:
-1. 초기 실패 컷 추가 (15분 이내 -0.6%)
+1. 초기 실패 컷 추가 (30분 이내 -1.6%, 평균 손실 -2.03% 기반)
 2. VWAP 단독 청산 권한 약화 (다중 조건 필요)
 3. 트레일링 스탑 중심화
 4. 시간 비교 버그 수정
@@ -35,8 +35,13 @@ class OptimizedExitLogic:
         # 초기 실패 컷 설정
         self.early_failure = self.risk_control.get('early_failure', {})
         self.early_failure_enabled = self.early_failure.get('enabled', True)
-        self.early_failure_window = self.early_failure.get('window_minutes', 15)
-        self.early_failure_loss = self.early_failure.get('loss_cut_pct', -0.6)
+        self.early_failure_window = self.early_failure.get('window_minutes', 30)  # 🔧 FIX: 15→30분 (노이즈 견디기)
+        self.early_failure_loss = self.early_failure.get('loss_cut_pct', -1.6)    # 🔧 FIX: -0.6→-1.6% (평균 손실 -2.03%의 80%)
+
+        # 🔧 Phase 3: 최소 보유 시간 설정
+        self.min_hold_time = self.risk_control.get('min_hold_time', {})
+        self.min_hold_enabled = self.min_hold_time.get('enabled', False)
+        self.min_hold_minutes = self.min_hold_time.get('minutes', 30)
 
         # 부분 청산 설정
         self.partial_exit = config.get('partial_exit', {})
@@ -121,15 +126,28 @@ class OptimizedExitLogic:
         # 🔧 FIX: 문서 명세에 따른 청산 우선순위 재정렬
 
         # ========================================
-        # 0순위: Early Failure Cut (최우선!) - 15분 이내 -0.6%
+        # -1순위: 최소 보유 시간 체크 (Phase 3: 초단타 방지)
         # ========================================
-        if self.early_failure_enabled:
-            entry_time = position.get('entry_time')
-            if entry_time:
-                elapsed_minutes = (datetime.now() - entry_time).total_seconds() / 60
+        entry_time = position.get('entry_time')
+        elapsed_minutes = 0
+        if entry_time:
+            elapsed_minutes = (datetime.now() - entry_time).total_seconds() / 60
 
+        # 🔧 Phase 3: 최소 보유 시간 이전에는 손절 금지 (하드 스톱 제외)
+        below_min_hold = False
+        if self.min_hold_enabled and elapsed_minutes < self.min_hold_minutes:
+            below_min_hold = True
+
+        # ========================================
+        # 0순위: Early Failure Cut (최우선!) - 30분 이내 -1.6%
+        # ========================================
+        # 📊 ML 개선 (2025-12-16): min_hold 체크 제거 - 손실 방지가 우선
+        # 버그: min_hold로 인해 early_failure가 작동 안 함 (0-30분 동안 비활성화)
+        # 결과: -1.6% 컷이 작동 안 하고 -2.5% 하드스탑까지 손실 확대
+        if self.early_failure_enabled:  # min_hold 체크 제거!
+            if entry_time:
                 if elapsed_minutes <= self.early_failure_window:
-                    if profit_pct <= self.early_failure_loss:  # -0.6% 이하
+                    if profit_pct <= self.early_failure_loss:  # -1.6% 이하
                         return True, f"🚨 Early Failure Cut ({elapsed_minutes:.1f}분, {profit_pct:.2f}%)", {
                             'profit_pct': profit_pct,
                             'use_market_order': True,  # 시장가 즉시 청산
@@ -138,10 +156,20 @@ class OptimizedExitLogic:
                         }
 
         # ========================================
-        # 1순위: Hard Stop (-3%) → 전량 시장가 손절 (문서 명세)
+        # 1순위: Hard Stop → 전량 시장가 손절 (문서 명세)
+        # 🔴 GPT 개선: 부분 청산 후 손절가 상향 (BE 보호)
         # ========================================
-        if profit_pct <= -self.hard_stop_pct:
-            return True, f"Hard Stop (-3%, {profit_pct:.2f}%)", {
+        # 부분 청산 단계에 따라 손절가 조정
+        partial_stage = position.get('partial_exit_stage', 0)
+        adjusted_hard_stop = self.hard_stop_pct
+
+        if partial_stage >= 1:  # 1차 부분 청산 후
+            adjusted_hard_stop = 0.3  # -0.3% (사실상 BE)
+        if partial_stage >= 2:  # 2차 부분 청산 후
+            adjusted_hard_stop = -0.2  # +0.2% 보장 (손절 → 익절로 전환)
+
+        if profit_pct <= -adjusted_hard_stop:
+            return True, f"Hard Stop (-{adjusted_hard_stop}%, {profit_pct:.2f}%) [부분청산 {partial_stage}차]", {
                 'profit_pct': profit_pct,
                 'use_market_order': True,  # 시장가 플래그
                 'emergency': True
@@ -150,7 +178,8 @@ class OptimizedExitLogic:
         # ========================================
         # 2-3순위: 부분 청산 (문서 명세: +4%/40%, +6%/40%)
         # ========================================
-        if self.partial_exit_enabled:
+        # 🔧 FIX: 최소 보유 시간 체크 추가 (초단타 방지)
+        if self.partial_exit_enabled and not below_min_hold:
             partial_stage = position.get('partial_exit_stage', 0)
 
             # 역순으로 체크 (높은 수익부터)
@@ -168,9 +197,11 @@ class OptimizedExitLogic:
         # ========================================
         # 4순위: ATR 트레일링 스탑 (문서 명세: 고가 - ATR×2)
         # ========================================
+        # 🔧 FIX: 최소 보유 시간 체크 추가 (초단타 방지)
+        # 단, 이미 활성화된 경우는 계속 추적 (손실 방지)
 
         # 이미 트레일링이 활성화된 경우 OR 활성화 조건 충족 시
-        if position.get('trailing_active') or profit_pct >= self.trailing_activation:
+        if position.get('trailing_active') or (profit_pct >= self.trailing_activation and not below_min_hold):
             # 트레일링 활성화
             position['trailing_active'] = True
 
@@ -207,7 +238,13 @@ class OptimizedExitLogic:
         # ========================================
         current_time = datetime.now().time()
 
-        # 15:00 - 전량 강제 청산 (문서 명세)
+        # 🔥 CRITICAL FIX: EOD Manager 익일 보유 결정 존중
+        if position.get('allow_overnight_final_confirm', False):
+            # 익일 보유 승인된 종목은 시간 기반 청산 제외
+            console.print(f"[cyan]✓ 익일 보유 승인 종목 - 시간 청산 제외 (Score: {position.get('eod_score', 0):.2f})[/cyan]")
+            return False, None, None
+
+        # 15:00 - 전량 강제 청산 (익일 보유 제외)
         if current_time >= self.loss_exit_time:
             return True, f"시간 기반 청산 (15:00, {profit_pct:+.2f}%)", {'profit_pct': profit_pct}
 

@@ -192,9 +192,16 @@ class MultiTimeframeConsensus:
         trend_15m = close_15m > ema_15m
 
         # ========================================
-        # 3개 타임프레임 합의
+        # 3개 타임프레임 합의 (2개 이상으로 완화)
         # ========================================
-        consensus = entry_signal_1m and trend_5m and trend_15m
+        met_count = sum([
+            1 if entry_signal_1m else 0,
+            1 if trend_5m else 0,
+            1 if trend_15m else 0,
+        ])
+
+        # 2개 이상 만족 시 통과
+        consensus = met_count >= 2
 
         # 상세 정보
         details = {
@@ -207,6 +214,7 @@ class MultiTimeframeConsensus:
             '15m_trend': trend_15m,
             '15m_close': close_15m,
             '15m_ema20': ema_15m,
+            'met_count': met_count,  # 몇 개 만족했는지
         }
 
         # 이유 생성
@@ -216,7 +224,7 @@ class MultiTimeframeConsensus:
 
         reason = (
             f"MTF: {status_1m}1m(VWAP) {status_5m}5m(EMA) {status_15m}15m(EMA) "
-            f"| Price: {current_price:.0f} > VWAP: {vwap:.0f}"
+            f"({met_count}/3) | Price: {current_price:.0f} > VWAP: {vwap:.0f}"
         )
 
         return consensus, reason, details

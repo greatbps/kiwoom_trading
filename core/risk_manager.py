@@ -35,33 +35,65 @@ class RiskManager:
     trading_system의 검증된 리스크 관리 전략을 기반으로 합니다.
     """
 
-    # 문서 명세: 검증된 리스크 파라미터 (trading_system 실전 데이터)
-    RISK_PER_TRADE = 0.02          # 거래당 2% 리스크
-    MAX_POSITION_SIZE = 0.30       # 포지션당 최대 30%
+    # 🔧 REFACTOR: 기본값 (하위 호환성)
+    DEFAULT_RISK_PER_TRADE = 0.02
+    DEFAULT_MAX_POSITION_SIZE = 0.30
+    DEFAULT_HARD_MAX_POSITION = 200000
+    DEFAULT_HARD_MAX_DAILY_LOSS_PCT = 0.05
+    DEFAULT_HARD_MAX_WEEKLY_LOSS_PCT = 0.03
+    DEFAULT_HARD_MAX_DAILY_TRADES = 10
+    DEFAULT_MAX_POSITIONS = 5
+    DEFAULT_MIN_CASH_RESERVE = 0.20
+    DEFAULT_CONSECUTIVE_LOSS_LIMIT = 3
 
-    # 문서 명세: 하드 리밋 (절대 초과 불가)
-    HARD_MAX_POSITION = 200000     # 20만원
-    HARD_MAX_DAILY_LOSS_PCT = 0.05   # 🔧 FIX: 일일 손실 -5% (문서 명세) [변경: ₩500K → 자산 대비 -5%]
-    HARD_MAX_WEEKLY_LOSS_PCT = 0.03  # 🔧 FIX: 주간 손실 -3% (문서 명세)
-    HARD_MAX_DAILY_TRADES = 10     # 일일 최대 10회
-
-    # 문서 명세: 포트폴리오 제약
-    MAX_POSITIONS = 5              # 최대 5종목
-    MIN_CASH_RESERVE = 0.20        # 최소 현금 20%
-
-    # 🔧 FIX: 연속 손실 관리 (문서 명세)
-    CONSECUTIVE_LOSS_LIMIT = 3     # 연속 손실 3회면 쿨다운
-
-    def __init__(self, initial_balance: float, storage_path: str = 'data/risk_log.json'):
+    def __init__(
+        self,
+        initial_balance: float,
+        storage_path: str = 'data/risk_log.json',
+        config: dict = None
+    ):
         """
         초기화
 
         Args:
             initial_balance: 초기 잔고
             storage_path: 리스크 로그 저장 경로
+            config: 전략 설정 (strategy_hybrid.yaml)
         """
         self.initial_balance = initial_balance
         self.storage_path = storage_path
+
+        # 🔧 REFACTOR: 설정 파일 연동 (config 우선, 없으면 기본값)
+        if config:
+            risk_mgmt = config.get('risk_management', {})
+            risk_ctrl = config.get('risk_control', {})
+
+            self.MAX_POSITIONS = risk_mgmt.get('max_positions', self.DEFAULT_MAX_POSITIONS)
+            self.HARD_MAX_DAILY_TRADES = risk_mgmt.get('max_trades_per_day', self.DEFAULT_HARD_MAX_DAILY_TRADES)
+            self.HARD_MAX_DAILY_LOSS_PCT = risk_mgmt.get('daily_max_loss_pct', self.DEFAULT_HARD_MAX_DAILY_LOSS_PCT) / 100
+            self.HARD_MAX_WEEKLY_LOSS_PCT = risk_ctrl.get('max_weekly_loss_pct', self.DEFAULT_HARD_MAX_WEEKLY_LOSS_PCT * 100) / 100
+            self.CONSECUTIVE_LOSS_LIMIT = risk_mgmt.get('max_consecutive_losses', self.DEFAULT_CONSECUTIVE_LOSS_LIMIT)
+            self.MIN_CASH_RESERVE = risk_mgmt.get('min_cash_reserve_pct', self.DEFAULT_MIN_CASH_RESERVE * 100) / 100
+
+            # 🔧 Phase 3: 연속 손실 대응 정책
+            self.CONSECUTIVE_LOSS_ACTION = risk_mgmt.get('on_consecutive_loss_action', 'halt_day')
+            self.LOSS_SIZE_REDUCTION = risk_mgmt.get('loss_size_reduction', 0.5)
+
+            # 포지션 크기 제한
+            self.RISK_PER_TRADE = risk_mgmt.get('position_risk_pct', self.DEFAULT_RISK_PER_TRADE * 100) / 100
+            self.MAX_POSITION_SIZE = risk_mgmt.get('max_position_size_pct', self.DEFAULT_MAX_POSITION_SIZE * 100) / 100
+            self.HARD_MAX_POSITION = risk_mgmt.get('hard_max_position', self.DEFAULT_HARD_MAX_POSITION)
+        else:
+            # 기본값 사용 (하위 호환성)
+            self.MAX_POSITIONS = self.DEFAULT_MAX_POSITIONS
+            self.HARD_MAX_DAILY_TRADES = self.DEFAULT_HARD_MAX_DAILY_TRADES
+            self.HARD_MAX_DAILY_LOSS_PCT = self.DEFAULT_HARD_MAX_DAILY_LOSS_PCT
+            self.HARD_MAX_WEEKLY_LOSS_PCT = self.DEFAULT_HARD_MAX_WEEKLY_LOSS_PCT
+            self.CONSECUTIVE_LOSS_LIMIT = self.DEFAULT_CONSECUTIVE_LOSS_LIMIT
+            self.MIN_CASH_RESERVE = self.DEFAULT_MIN_CASH_RESERVE
+            self.RISK_PER_TRADE = self.DEFAULT_RISK_PER_TRADE
+            self.MAX_POSITION_SIZE = self.DEFAULT_MAX_POSITION_SIZE
+            self.HARD_MAX_POSITION = self.DEFAULT_HARD_MAX_POSITION
 
         # 일일 추적
         self.today = date.today().isoformat()
@@ -77,6 +109,7 @@ class RiskManager:
         # 🔧 FIX: 연속 손실 추적 (문서 명세)
         self.consecutive_losses = 0  # 연속 손실 카운터
         self.cooldown_until = None  # 쿨다운 종료 날짜
+        self.position_size_multiplier = 1.0  # 🔧 Phase 3: 포지션 사이즈 축소용 multiplier
 
         # 로그 로드
         self.load()
@@ -100,11 +133,61 @@ class RiskManager:
         Returns:
             (가능 여부, 사유)
         """
-        # 🔧 FIX: 0. 연속 손실 쿨다운 체크 (문서 명세)
+        # 🔧 CRITICAL FIX: 0-1. 날짜 롤오버 체크 (일일 거래 초기화)
+        from pathlib import Path
+        import json
+        from datetime import datetime, date
+
+        current_date = date.today().isoformat()
+        if current_date != self.today:
+            # 날짜가 바뀜 → 일일 거래 초기화
+            self.today = current_date
+            self.daily_trades = []
+            self.daily_realized_pnl = 0.0
+
+            # 주간 롤오버 체크
+            from datetime import timedelta
+            current_week_start = (date.today() - timedelta(days=date.today().weekday())).isoformat()
+            if current_week_start != self.week_start:
+                # 새로운 주 시작 → 주간 거래 초기화
+                self.week_start = current_week_start
+                self.weekly_trades = []
+                self.weekly_realized_pnl = 0.0
+
+            self.save()  # 즉시 저장
+
+        # 🔧 FIX: 0-2. 연속 손실 쿨다운 체크 (파일 기반 동기화)
+        cooldown_file = Path('data/cooldown.lock')
+
+        # 메모리 쿨다운도 체크 (하위 호환성)
         if self.cooldown_until:
-            from datetime import datetime
             if datetime.now().date() <= datetime.fromisoformat(self.cooldown_until).date():
                 return False, f"연속 손실 쿨다운 중 (해제: {self.cooldown_until})"
+
+        # 파일 기반 쿨다운 체크 (프로세스 간 공유)
+        if cooldown_file.exists():
+            try:
+                cooldown_data = json.loads(cooldown_file.read_text())
+                cooldown_until = cooldown_data.get('cooldown_until')
+
+                if cooldown_until:
+                    until_dt = datetime.fromisoformat(cooldown_until)
+
+                    if datetime.now() <= until_dt:
+                        return False, f"연속 손실 쿨다운 중 (해제: {cooldown_until[:10]})"
+                    else:
+                        # 쿨다운 기간 만료 → 파일 삭제
+                        cooldown_file.unlink()
+                        # 메모리 쿨다운도 해제
+                        self.cooldown_until = None
+
+            except Exception as e:
+                # 손상된 파일 삭제
+                print(f"⚠️  쿨다운 파일 읽기 실패: {e}")
+                try:
+                    cooldown_file.unlink()
+                except:
+                    pass
 
         # 1. 보유 종목 수 제한
         if position_count >= self.MAX_POSITIONS:
@@ -216,7 +299,8 @@ class RiskManager:
 
         # 4. 최종 수량 결정 (더 작은 값 선택)
         final_quantity = min(risk_based_quantity, max_quantity)
-        final_quantity = int(final_quantity * confidence_factor * weekly_adjustment)  # 🔧 FIX: 주간 손실 조정 적용
+        # 🔧 FIX: 주간 손실 조정 + Phase 3: 연속 손실 시 포지션 축소
+        final_quantity = int(final_quantity * confidence_factor * weekly_adjustment * self.position_size_multiplier)
 
         # 🔧 CRITICAL FIX: 최소 1주 보장 (잔고가 충분하고 시그널이 발생했으면)
         # confidence가 낮아서 0주가 되는 것을 방지
@@ -292,14 +376,25 @@ class RiskManager:
             # 🔧 FIX: 연속 손실 추적 (문서 명세)
             if pnl < 0:
                 self.consecutive_losses += 1
-                # 연속 손실 3회 도달 시 1거래일 쿨다운
+                # 연속 손실 한도 도달 시 정책 적용
                 if self.consecutive_losses >= self.CONSECUTIVE_LOSS_LIMIT:
-                    from datetime import timedelta
-                    self.cooldown_until = (date.today() + timedelta(days=1)).isoformat()
+                    if self.CONSECUTIVE_LOSS_ACTION == 'halt_day':
+                        # 🔧 Phase 3: 당일 거래 중지 (장 마감까지)
+                        self.cooldown_until = datetime.now().replace(hour=15, minute=30, second=0, microsecond=0).isoformat()
+                        print(f"🚫 3연패 발생 - 당일 거래 중지 (해제: 15:30)")
+                    elif self.CONSECUTIVE_LOSS_ACTION == 'reduce_size':
+                        # 🔧 Phase 3: 포지션 사이즈 축소
+                        self.position_size_multiplier = self.LOSS_SIZE_REDUCTION
+                        print(f"⏸ 3연패 발생 - 포지션 사이즈 {int(self.LOSS_SIZE_REDUCTION * 100)}% 축소")
+                    else:
+                        # 기본값: 다음 날까지 쿨다운 (하위 호환성)
+                        from datetime import timedelta
+                        self.cooldown_until = (date.today() + timedelta(days=1)).isoformat()
             else:
                 # 수익 거래 시 연속 손실 카운터 리셋
                 self.consecutive_losses = 0
                 self.cooldown_until = None
+                self.position_size_multiplier = 1.0  # 포지션 사이즈 복구
 
         self.save()
 

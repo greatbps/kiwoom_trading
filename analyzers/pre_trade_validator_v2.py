@@ -19,6 +19,9 @@ from trading.filters.base_filter import FilterResult
 from utils.config_loader import ConfigLoader
 from rich.console import Console
 
+# Phase 1: RSVI Integration (2025-11-30)
+from analyzers.volume_indicators import attach_rsvi_indicators, calculate_rsvi_score
+
 console = Console()
 
 
@@ -137,7 +140,13 @@ class PreTradeValidatorV2(PreTradeValidator):
         historical_data_30m: Optional[pd.DataFrame] = None
     ) -> FilterResult:
         """
-        L6 Pre-Trade Validation + Confidence 계산
+        L6 Pre-Trade Validation + RSVI + Confidence 계산 (Phase 1)
+
+        Phase 1 개선사항 (2025-11-30):
+        - RSVI 하드컷: vol_z20 < -1.0 AND vroc10 < -0.5 → 즉시 차단
+        - RSVI 점수 계산 (0.0 ~ 1.0)
+        - 최종 confidence = 0.3 * backtest + 0.7 * rsvi
+        - Threshold: 0.4
 
         Args:
             stock_code: 종목코드
@@ -150,14 +159,67 @@ class PreTradeValidatorV2(PreTradeValidator):
         Returns:
             FilterResult(passed, confidence, reason)
         """
-        # 기존 validate_trade() 호출
+        if historical_data is None or historical_data.empty:
+            reason = "L6: 과거 데이터 없음"
+            return FilterResult(False, 0.0, reason)
+
+        # ========================
+        # Phase 1: RSVI 통합
+        # ========================
+        try:
+            df = historical_data.copy()
+
+            # ChatGPT 제안: DataFrame 정렬 (Yahoo 역순 대비)
+            if 'datetime' in df.columns:
+                df = df.sort_values(by='datetime')
+            elif df.index.name == 'datetime' or hasattr(df.index, 'tz'):
+                df = df.sort_index()
+
+            # 1. RSVI 지표 추가
+            if "vol_z20" not in df.columns or "vroc10" not in df.columns:
+                df = attach_rsvi_indicators(df)
+
+            latest = df.iloc[-1]
+            vol_z20 = float(latest.get("vol_z20", 0.0))
+            vroc10 = float(latest.get("vroc10", 0.0))
+
+            if np.isnan(vol_z20):
+                vol_z20 = 0.0
+            if np.isnan(vroc10):
+                vroc10 = 0.0
+
+            # 2. RSVI 하드컷: 완전히 죽은 거래량은 진입 불가
+            if vol_z20 < -1.0 and vroc10 < -0.5:
+                reason = (
+                    f"L6 RSVI 하드컷: 거래량 매우 약함 | "
+                    f"vol_z20={vol_z20:.2f}, vroc10={vroc10:.2f}"
+                )
+                return FilterResult(False, 0.0, reason)
+
+            # 3. RSVI 점수 계산
+            rsvi_score = calculate_rsvi_score(vol_z20, vroc10)
+
+        except Exception as e:
+            # ChatGPT 제안: 에러 로깅 강화
+            console.print(
+                f"[yellow]⚠️  RSVI 계산 오류 ({stock_code}): {e} "
+                f"→ Default Score 0.5 적용[/yellow]"
+            )
+            # RSVI 실패 시 기본값 0.5 (중간)
+            vol_z20 = 0.0
+            vroc10 = 0.0
+            rsvi_score = 0.5
+
+        # ========================
+        # 기존 백테스트 검증
+        # ========================
         allowed, reason, stats = self.validate_trade(
-            stock_code, stock_name, historical_data,
+            stock_code, stock_name, df,
             current_price, current_time, historical_data_30m
         )
 
         if not allowed:
-            # 검증 실패 시 confidence = 0
+            # 백테스트 검증 실패 시 confidence = 0
             return FilterResult(False, 0.0, f"L6 검증 실패: {reason}")
 
         # Confidence 계산
@@ -175,24 +237,58 @@ class PreTradeValidatorV2(PreTradeValidator):
             avg_profit_pct = stats.get('avg_profit_pct', 0)
             avg_profit_conf = self.calculate_avg_profit_confidence(avg_profit_pct)
 
-            # 합산 (0~1.0)
-            confidence = pf_conf + win_rate_conf + avg_profit_conf
-            confidence = min(confidence, 1.0)
+            # 백테스트 confidence (0~1.0)
+            backtest_conf = pf_conf + win_rate_conf + avg_profit_conf
+            backtest_conf = min(backtest_conf, 1.0)
+
+            # ChatGPT 제안: backtest_conf None 처리
+            backtest_conf = backtest_conf or 0.0
 
             # Fallback Stage 패널티 적용
             fallback_stage = stats.get('fallback_stage', 0)
             if fallback_stage > 0:
                 # Stage 1: -10%, Stage 2: -20%, Stage 3: -30%
                 penalty = fallback_stage * 0.1
-                confidence = max(confidence - penalty, 0.2)  # 최소 0.2 유지
+                backtest_conf = max(backtest_conf - penalty, 0.2)  # 최소 0.2 유지
+
+            # ========================
+            # ChatGPT Safety Gate 추가
+            # ========================
+            # 백테스트 신뢰도가 너무 낮으면(0.1 미만) RSVI가 좋아도 진입 차단
+            # (과거에 무조건 손실을 봤던 패턴은 거래량 터져도 위험)
+            BACKTEST_MIN_THRESHOLD = 0.1
+            if backtest_conf < BACKTEST_MIN_THRESHOLD:
+                reason = (
+                    f"L6 Safety Gate: 백테스트 점수 과락 "
+                    f"(BT={backtest_conf:.2f} < {BACKTEST_MIN_THRESHOLD:.2f}) | "
+                    f"RSVI={rsvi_score:.2f} (무시)"
+                )
+                console.print(f"[red]🚫 {stock_code}: {reason}[/red]")
+                return FilterResult(False, backtest_conf, reason)
+
+            # ========================
+            # Phase 1: RSVI + Backtest 결합
+            # ========================
+            # 최종 confidence = 0.3 * backtest + 0.7 * rsvi
+            final_confidence = (0.3 * backtest_conf) + (0.7 * rsvi_score)
+            final_confidence = max(0.0, min(1.0, final_confidence))
+
+            # Threshold 체크 (0.4)
+            threshold = 0.4
+            if final_confidence < threshold:
+                reason = (
+                    f"L6+RSVI: Confidence 부족 ({final_confidence:.2f} < {threshold:.2f}) | "
+                    f"BT={backtest_conf:.2f}, RSVI={rsvi_score:.2f}"
+                )
+                return FilterResult(False, final_confidence, reason)
 
             # 상세 정보
             wlb = self._wilson_lower_bound(win_count, total_trades) * 100.0 if total_trades > 0 else 0
 
             detailed_reason = (
-                f"L6 검증 통과 | "
-                f"Conf={confidence:.2f} "
-                f"(PF:{pf_conf:.2f} 승률:{win_rate_conf:.2f} 수익:{avg_profit_conf:.2f})\n"
+                f"L6+RSVI 통과 | "
+                f"Conf={final_confidence:.2f} (BT:{backtest_conf:.2f} RSVI:{rsvi_score:.2f})\n"
+                f"  └ RSVI: vol_z20={vol_z20:+.2f}, vroc10={vroc10:+.2f}\n"
                 f"  └ 백테스트 {total_trades}회, 승률(윌슨하한) {wlb:.1f}%, "
                 f"PF {pf:.2f}, 평균 {avg_profit_pct:+.2f}%"
             )
@@ -200,7 +296,7 @@ class PreTradeValidatorV2(PreTradeValidator):
             if fallback_stage > 0:
                 detailed_reason += f"\n  └ Stage {fallback_stage} Fallback (conf -{penalty*100:.0f}%)"
 
-            return FilterResult(True, confidence, detailed_reason)
+            return FilterResult(True, final_confidence, detailed_reason)
 
         except Exception as e:
             console.print(f"[dim]⚠️  L6 Confidence 계산 실패: {e}[/dim]")

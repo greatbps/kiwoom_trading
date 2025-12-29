@@ -39,6 +39,14 @@ from rich.panel import Panel
 from rich.live import Live
 from rich import box
 from trading.exit_logic_optimized import OptimizedExitLogic
+from trading.eod_manager import EODManager  # ✅ EOD Manager Phase 1
+from trading.bottom_pullback_manager import BottomPullbackManager  # ✅ Bottom Pullback 전략
+from trading.trade_state_manager import (  # ✅ Trade State Manager (중복 진입 방지)
+    TradeStateManager,
+    TradeAction,
+    InvalidationReason
+)
+from core.trade_reconciliation import TradeReconciliation  # ✅ 거래 검증 및 동기화
 
 # 환경변수 로드
 load_dotenv()
@@ -309,6 +317,51 @@ class IntegratedTradingSystem:
         # 최적화된 청산 로직 초기화
         self.exit_logic = OptimizedExitLogic(self.config)
 
+        # ✅ EOD Manager 초기화 (Phase 1: 익일 보유 관리)
+        self.eod_manager = EODManager(self.config)
+        console.print("[dim]✓ EODManager 초기화 완료 (익일 보유 관리)[/dim]")
+
+        # ✅ TradeStateManager 초기화 (중복 진입/손절 재진입 방지)
+        self.state_manager = TradeStateManager()
+        console.print("[green]✓ TradeStateManager 초기화 완료 (중복 진입 방지)[/green]")
+
+        # ✅ Bottom Pullback Manager 초기화 (state_manager 연동)
+        try:
+            condition_strategies = self.config.get_section('condition_strategies')
+            bottom_config = condition_strategies.get('bottom_pullback', {}) if condition_strategies else {}
+        except (KeyError, AttributeError):
+            bottom_config = {}
+        self.bottom_manager = BottomPullbackManager(bottom_config, state_manager=self.state_manager)
+
+        # ✅ 조건 인덱스 → 전략 태그 매핑 생성 (하드코딩 제거)
+        self.condition_to_strategy_map = {}
+        self.default_strategy_tag = 'momentum'  # 기본값 (fallback용)
+
+        try:
+            condition_strategies = self.config.get_section('condition_strategies')
+            if condition_strategies:
+                for strategy_name, strategy_config in condition_strategies.items():
+                    if isinstance(strategy_config, dict):
+                        condition_indices = strategy_config.get('condition_indices', [])
+                        strategy_tag = strategy_config.get('strategy_tag', strategy_name)
+
+                        # 조건 인덱스 → 전략 태그 매핑
+                        for idx in condition_indices:
+                            self.condition_to_strategy_map[idx] = strategy_tag
+
+                        console.print(f"[dim]✓ 전략 '{strategy_tag}': 조건 {condition_indices}[/dim]")
+
+                # 기본 전략 태그 설정 (첫 번째 전략)
+                if condition_strategies:
+                    first_strategy = list(condition_strategies.values())[0]
+                    if isinstance(first_strategy, dict):
+                        self.default_strategy_tag = first_strategy.get('strategy_tag', 'momentum')
+
+        except (KeyError, AttributeError) as e:
+            console.print(f"[yellow]⚠️  전략 매핑 생성 실패, 기본값 사용: {e}[/yellow]")
+
+        console.print(f"[green]✓ 전략 매핑 완료 (기본값: {self.default_strategy_tag})[/green]")
+
         # SignalOrchestrator 초기화 (L0-L6 시그널 파이프라인)
         self.signal_orchestrator = SignalOrchestrator(
             config=self.config,
@@ -368,11 +421,16 @@ class IntegratedTradingSystem:
         self.dry_run_mode = False
 
         # 🔧 FIX: 쿨다운 + 연속 손실 차단 (거래 내역 분석 기반)
-        self.stock_cooldown: Dict[str, datetime] = {}  # {stock_code: last_exit_time}
+        # 🔴 GPT 개선: (datetime, is_loss) 저장하여 손절/익절 구분
+        self.stock_cooldown: Dict[str, Tuple[datetime, bool]] = {}  # {stock_code: (last_exit_time, is_loss)}
         self.stock_loss_streak: Dict[str, int] = {}  # {stock_code: consecutive_losses}
         self.stock_ban_list: Set[str] = set()  # 당일 진입 금지 종목
-        self.cooldown_minutes = 20  # 쿨다운 시간 (분)
+        self.cooldown_minutes = 20  # 일반 청산 쿨다운 (분)
+        self.loss_cooldown_minutes = 30  # 🔴 GPT 개선: 손절 쿨다운 30분 (VWAP 재탈환 대기)
         self.max_consecutive_losses = 3  # 연속 손실 상한
+        # 🔴 GPT 개선: 종목별 일일 거래 제한 (과도한 집중 방지)
+        self.daily_trade_count: Dict[str, int] = {}  # {stock_code: count}
+        self.max_trades_per_stock_per_day = 2  # 종목당 하루 최대 2회 거래
 
     def _get_stock_info_with_cache(self, stock_code: str) -> Optional[Dict]:
         """
@@ -658,26 +716,176 @@ class IntegratedTradingSystem:
             console.print(f"[yellow]⚠️  응답 대기 시간 초과 ({timeout}초)[/yellow]")
             return None
 
-    async def login(self):
-        """WebSocket 로그인"""
-        console.print(f"[{datetime.now().strftime('%H:%M:%S')}] WebSocket 로그인")
+    def refresh_access_token(self):
+        """
+        Access Token 강제 재발급
 
-        login_packet = {'trnm': 'LOGIN', 'token': self.access_token}
-        await self.websocket.send(json.dumps(login_packet))
+        Returns:
+            bool: 재발급 성공 여부
+        """
+        try:
+            console.print("[yellow]🔄 Access Token 재발급 시도 중...[/yellow]")
 
-        response = await self.receive_message()
+            # 기존 토큰 정보 초기화 (재발급 강제)
+            self.api.access_token = None
+            self.api.token_expires_at = None
 
-        if response.get("return_code") == 0:
-            console.print("✅ 로그인 성공", style="green")
-            # 인증 완료 대기 (조건검색 등 API 호출 전에 필수!)
-            console.print("[yellow]⏳ 서버 인증 처리 대기 중... (3초)[/yellow]")
-            await asyncio.sleep(3.0)
-            console.print("[green]✅ 인증 완료[/green]")
-            console.print()
-            return True
-        else:
-            console.print(f"[red]❌ 로그인 실패: {response.get('return_msg')}[/red]")
+            # 새 토큰 발급
+            new_token = self.api.get_access_token()
+
+            if new_token:
+                self.access_token = new_token
+                console.print("[green]✅ Access Token 재발급 성공[/green]")
+                return True
+            else:
+                console.print("[red]❌ Access Token 재발급 실패[/red]")
+                return False
+
+        except Exception as e:
+            console.print(f"[red]❌ Access Token 재발급 중 오류: {e}[/red]")
             return False
+
+    async def validate_token(self):
+        """
+        Access Token 유효성 검증 (REST API 호출 테스트)
+
+        Returns:
+            bool: 토큰 유효 여부
+        """
+        try:
+            console.print("[cyan]🔍 Token 유효성 검증 중...[/cyan]")
+
+            # 간단한 API 호출로 토큰 테스트 (계좌 잔고 조회)
+            balance_info = self.api.get_balance()
+
+            # return_code가 0이면 성공
+            return_code = balance_info.get('return_code', -1)
+
+            if return_code == 0:
+                console.print("[green]✅ Token 유효성 확인 완료[/green]")
+                return True
+            elif return_code == 8005:  # Token invalid
+                console.print("[yellow]⚠️  Token이 유효하지 않음 (Code: 8005)[/yellow]")
+                return False
+            else:
+                console.print(f"[yellow]⚠️  API 응답 코드: {return_code} - {balance_info.get('return_msg')}[/yellow]")
+                return False
+
+        except Exception as e:
+            console.print(f"[yellow]⚠️  Token 검증 실패: {e}[/yellow]")
+            return False
+
+    async def login(self, max_retries=3):
+        """
+        WebSocket 로그인 (재시도 및 토큰 갱신 포함)
+
+        Args:
+            max_retries: 최대 재시도 횟수 (기본값: 3)
+
+        Returns:
+            bool: 로그인 성공 여부
+        """
+        for attempt in range(1, max_retries + 1):
+            try:
+                console.print()
+                console.print(f"[{datetime.now().strftime('%H:%M:%S')}] WebSocket 로그인 시도 ({attempt}/{max_retries})")
+
+                # 로그인 패킷 전송
+                login_packet = {'trnm': 'LOGIN', 'token': self.access_token}
+                await self.websocket.send(json.dumps(login_packet))
+
+                # 응답 수신
+                response = await self.receive_message(timeout=10.0)
+
+                if not response:
+                    console.print(f"[yellow]⚠️  응답 없음 (시도 {attempt}/{max_retries})[/yellow]")
+                    if attempt < max_retries:
+                        console.print("[cyan]💤 5초 후 재시도...[/cyan]")
+                        await asyncio.sleep(5)
+                        continue
+                    else:
+                        return False
+
+                return_code = response.get("return_code")
+                return_msg = response.get("return_msg", "")
+
+                # 로그인 성공
+                if return_code == 0:
+                    console.print("✅ 로그인 성공", style="green")
+                    # 인증 완료 대기 (조건검색 등 API 호출 전에 필수!)
+                    console.print("[yellow]⏳ 서버 인증 처리 대기 중... (3초)[/yellow]")
+                    await asyncio.sleep(3.0)
+                    console.print("[green]✅ 인증 완료[/green]")
+                    console.print()
+                    return True
+
+                # 토큰 오류 (8005)
+                elif return_code == 8005:
+                    console.print(f"[red]❌ 로그인 실패: 토큰 인증 오류 [CODE={return_code}][/red]")
+                    console.print(f"[red]   메시지: {return_msg}[/red]")
+
+                    if attempt < max_retries:
+                        # 토큰 재발급 시도
+                        console.print(f"[yellow]🔄 토큰 재발급 후 재시도 ({attempt}/{max_retries})...[/yellow]")
+
+                        # WebSocket 재연결 (기존 연결 종료)
+                        if self.websocket:
+                            try:
+                                await self.websocket.close()
+                            except:
+                                pass
+
+                        # 토큰 재발급
+                        if self.refresh_access_token():
+                            console.print("[cyan]💤 3초 대기 후 WebSocket 재연결...[/cyan]")
+                            await asyncio.sleep(3)
+
+                            # WebSocket 재연결
+                            try:
+                                await self.connect()
+                                console.print("[green]✅ WebSocket 재연결 완료[/green]")
+                                await asyncio.sleep(2)  # 안정화 대기
+                                continue  # 다음 로그인 시도
+                            except Exception as e:
+                                console.print(f"[red]❌ WebSocket 재연결 실패: {e}[/red]")
+                                if attempt < max_retries:
+                                    await asyncio.sleep(5)
+                                    continue
+                        else:
+                            console.print("[red]❌ 토큰 재발급 실패[/red]")
+                            if attempt < max_retries:
+                                await asyncio.sleep(5)
+                                continue
+                    else:
+                        console.print(f"[red]💀 최대 재시도 횟수 초과 ({max_retries}회)[/red]")
+                        return False
+
+                # 기타 오류
+                else:
+                    console.print(f"[red]❌ 로그인 실패: [CODE={return_code}] {return_msg}[/red]")
+
+                    if attempt < max_retries:
+                        console.print(f"[cyan]💤 5초 후 재시도 ({attempt}/{max_retries})...[/cyan]")
+                        await asyncio.sleep(5)
+                        continue
+                    else:
+                        return False
+
+            except Exception as e:
+                console.print(f"[red]❌ 로그인 중 예외 발생: {e}[/red]")
+                import traceback
+                traceback.print_exc()
+
+                if attempt < max_retries:
+                    console.print(f"[cyan]💤 5초 후 재시도 ({attempt}/{max_retries})...[/cyan]")
+                    await asyncio.sleep(5)
+                    continue
+                else:
+                    return False
+
+        # 모든 시도 실패
+        console.print(f"[red]💀 로그인 실패: 모든 재시도 소진 ({max_retries}회)[/red]")
+        return False
 
     async def initialize_account(self):
         """계좌 정보 초기화 (시스템 시작 시)"""
@@ -743,6 +951,32 @@ class IntegratedTradingSystem:
                     current_price = int(pos.get('cur_prc', 0)) if pos.get('cur_prc') else 0
                     profit_rate = float(pos.get('prft_rt', 0)) if pos.get('prft_rt') else 0.0
 
+                    # 🔧 FIX: DB에서 실제 매수일자 조회
+                    entry_date = None
+                    try:
+                        from database.trading_db import TradingDatabase
+                        db = TradingDatabase()
+                        # 완료된 매수 거래에서 해당 종목의 최근 매수일자 조회
+                        trades = db.get_trades(stock_code=stock_code)
+                        if trades and len(trades) > 0:
+                            # 최근 매수 거래 찾기 (DESC 정렬이므로 첫 번째가 최신)
+                            for trade in trades:
+                                if trade.get('trade_type') == 'BUY':
+                                    trade_time = trade.get('trade_time') or trade.get('created_at')
+                                    if trade_time:
+                                        if isinstance(trade_time, str):
+                                            entry_date = datetime.fromisoformat(trade_time.replace(' ', 'T'))
+                                        else:
+                                            entry_date = trade_time
+                                        break
+                    except Exception as e:
+                        console.print(f"[yellow]  ⚠️  {stock_code} 매수일자 조회 실패: {e}[/yellow]")
+                        pass
+
+                    # DB에서 못 가져왔으면 현재 시간으로 설정 (신규 감시 종목일 가능성)
+                    if not entry_date:
+                        entry_date = datetime.now()
+
                     self.positions[stock_code] = {
                         'stock_name': stock_name,
                         'name': stock_name,  # 하위 호환성
@@ -752,20 +986,110 @@ class IntegratedTradingSystem:
                         'current_price': current_price,
                         'profit_rate': profit_rate,
                         'eval_amount': quantity * current_price,
-                        'entry_date': datetime.now()  # 보유일 계산용 (초기 로드 시)
+                        'entry_date': entry_date  # 🔧 FIX: DB에서 조회한 실제 매수일자
                     }
 
                     console.print(f"  • {stock_name}({stock_code}): {quantity}주 @ {current_price:,}원 "
                                 f"[{'green' if profit_rate >= 0 else 'red'}]{profit_rate:+.2f}%[/]")
                 console.print()
 
-            # 6. 리스크 관리자 초기화 (실제 잔고 기반)
+                # 🔧 CRITICAL FIX: 기존 포지션 재평가 (allow_overnight 설정)
+                console.print("[bold cyan]🔍 기존 포지션 익일 보유 재평가 중...[/bold cyan]")
+                for stock_code, position in self.positions.items():
+                    try:
+                        # OHLCV 데이터 조회 (5분봉)
+                        result = self.api.get_minute_chart(
+                            stock_code=stock_code,
+                            tic_scope="5",
+                            upd_stkpc_tp="1"
+                        )
+
+                        df = None
+                        if result.get('return_code') == 0:
+                            # 응답 데이터 추출
+                            data = None
+                            for key in ['stk_min_pole_chart_qry', 'stk_mnut_pole_chart_qry', 'output', 'output1', 'data']:
+                                if key in result and result[key]:
+                                    data = result[key]
+                                    break
+
+                            if data and len(data) > 0:
+                                import pandas as pd
+                                df = pd.DataFrame(data)
+
+                                # 컬럼 매핑 (ka10080 API 기준)
+                                column_mapping = {
+                                    'cur_prc': 'close',
+                                    'open_pric': 'open',
+                                    'high_pric': 'high',
+                                    'low_pric': 'low',
+                                    'trd_qty': 'volume',
+                                    'trd_dt': 'date',
+                                    'trd_tm': 'time'
+                                }
+                                df.rename(columns=column_mapping, inplace=True)
+
+                                # 숫자 변환
+                                for col in ['close', 'open', 'high', 'low', 'volume']:
+                                    if col in df.columns:
+                                        df[col] = pd.to_numeric(df[col], errors='coerce')
+
+                        if df is not None and not df.empty:
+                            # 재평가 수행
+                            allow_overnight, overnight_score = self.should_allow_overnight(
+                                stock_code=stock_code,
+                                df=df,
+                                signal_result={},  # 기존 포지션이므로 빈 dict 전달
+                                entry_confidence=0.6  # 기존 포지션은 진입 시 승인되었다고 가정
+                            )
+
+                            # 포지션에 플래그 설정
+                            position['allow_overnight'] = allow_overnight
+                            position['overnight_score'] = overnight_score
+
+                            status = "✅ 익일보유승인" if allow_overnight else "⚠️  익일보유불가"
+                            console.print(
+                                f"  {position['name']:15s} | {status} | "
+                                f"Score: {overnight_score:.2f} (기준: 0.6)"
+                            )
+                        else:
+                            # 데이터 조회 실패 시 보수적으로 False 설정
+                            position['allow_overnight'] = False
+                            position['overnight_score'] = 0.0
+                            console.print(
+                                f"  {position['name']:15s} | ⚠️  데이터 없음 → 익일보유불가"
+                            )
+
+                    except Exception as e:
+                        # 오류 발생 시 보수적으로 False 설정
+                        position['allow_overnight'] = False
+                        position['overnight_score'] = 0.0
+                        console.print(
+                            f"  {position['name']:15s} | ❌ 재평가 오류 → 익일보유불가"
+                        )
+                        console.print(f"[dim red]     오류: {str(e)}[/dim red]")
+                        import traceback
+                        console.print(f"[dim]{traceback.format_exc()}[/dim]")
+
+                console.print()
+
+            # 6. 리스크 관리자 초기화 (실제 잔고 기반 + 설정 파일 연동)
             self.risk_manager = RiskManager(
                 initial_balance=self.current_cash,
-                storage_path='data/risk_log.json'
+                storage_path='data/risk_log.json',
+                config=self.config.config  # 🔧 REFACTOR: 설정 파일 전달 (수정: _config → config)
             )
 
             console.print(f"[green]✓ 리스크 관리자 초기화 완료 (초기 잔고: {self.current_cash:,.0f}원)[/green]")
+
+            # 거래 내역 검증 및 동기화 시스템 (누락 방지)
+            self.reconciliation = TradeReconciliation(
+                api=self.api,
+                risk_manager=self.risk_manager,
+                db=self.db
+            )
+            console.print("[dim]✓ TradeReconciliation 초기화 완료 (자동 검증 & 동기화)[/dim]")
+
             console.print()
 
         except Exception as e:
@@ -779,8 +1103,18 @@ class IntegratedTradingSystem:
 
             self.risk_manager = RiskManager(
                 initial_balance=self.current_cash,
-                storage_path='data/risk_log.json'
+                storage_path='data/risk_log.json',
+                config=self.config.config  # 🔧 REFACTOR: 설정 파일 전달 (수정: _config → config)
             )
+
+            # 거래 내역 검증 및 동기화 시스템 (누락 방지) - 기본값 경로
+            self.reconciliation = TradeReconciliation(
+                api=self.api,
+                risk_manager=self.risk_manager,
+                db=self.db
+            )
+            console.print("[dim]✓ TradeReconciliation 초기화 완료 (자동 검증 & 동기화)[/dim]")
+
             console.print()
 
     async def update_account_balance(self):
@@ -952,11 +1286,28 @@ class IntegratedTradingSystem:
         console.print()
 
         try:
+            # 🔧 FIX: 기존 감시 목록 초기화 (오래된 종목 제거)
+            self.watchlist.clear()
+            self.validated_stocks.clear()
+            console.print("[dim]✓ 기존 감시 목록 초기화 (최신 종목으로 교체)[/dim]")
+            console.print()
+
             # 1차 필터: 조건검색
             console.print("[bold cyan]1차 필터: 조건검색 실행[/bold cyan]")
             console.print()
 
+            # ✅ Bottom Pullback 조건 인덱스 확인
+            try:
+                condition_strategies = self.config.get_section('condition_strategies')
+                bottom_pullback = condition_strategies.get('bottom_pullback', {}) if condition_strategies else {}
+                bottom_indices = bottom_pullback.get('condition_indices', [])
+            except (KeyError, AttributeError):
+                bottom_indices = []
+
             all_stocks = set()
+            bottom_stocks = {}  # {stock_code: condition_idx} (backward compatibility)
+            stock_to_condition_map = {}  # ✅ 모든 종목의 조건 인덱스 추적
+
             for idx in self.condition_indices:
                 if idx < len(self.condition_list):
                     condition = self.condition_list[idx]
@@ -966,7 +1317,21 @@ class IntegratedTradingSystem:
                     console.print(f"[yellow]조건식 [{idx}] {name} 검색 중...[/yellow]")
                     stocks = await self.search_condition(seq, name)
                     console.print(f"  ✅ {len(stocks)}개 종목 발견")
-                    all_stocks.update(stocks)
+
+                    # ✅ Bottom 전략 분기 처리
+                    if idx in bottom_indices:
+                        # Bottom 전략: 별도 저장 (L2/L3 필터 이후 신호 등록)
+                        console.print(f"  [cyan]→ Bottom Pullback 전략: Pullback 대기 모드[/cyan]")
+                        for stock_code in stocks:
+                            bottom_stocks[stock_code] = idx  # backward compatibility
+                            stock_to_condition_map[stock_code] = idx  # ✅ 조건 인덱스 저장
+                            all_stocks.add(stock_code)  # L2/L3 필터 적용 위해 추가
+                    else:
+                        # 기존 Momentum 전략: 즉시 매수 대상
+                        for stock_code in stocks:
+                            stock_to_condition_map[stock_code] = idx  # ✅ 조건 인덱스 저장
+                        all_stocks.update(stocks)
+
                     await asyncio.sleep(0.5)
 
             console.print()
@@ -1077,21 +1442,73 @@ class IntegratedTradingSystem:
                     stats = validation_result.get('stats', {})
                     df = validation_result.get('data')
 
-                    self.watchlist.add(stock_code)
+                    # ✅ 조건 인덱스로 전략 태그 동적 결정 (하드코딩 제거)
+                    condition_idx = stock_to_condition_map.get(stock_code)
+                    strategy_tag = self.condition_to_strategy_map.get(condition_idx, self.default_strategy_tag)
 
-                    # 🔧 CRITICAL FIX: AI점수 추가 (간소화 버전: win_rate * 1.2)
-                    # win_rate 기반으로 간단한 점수 계산 (0~100 범위)
-                    win_rate = stats.get('win_rate', 0)
-                    simplified_ai_score = min(100, win_rate * 1.2)
+                    # ✅ Bottom 전략 vs Momentum 전략 분기
+                    if stock_code in bottom_stocks:
+                        # Bottom 전략: Bottom Manager에 신호 등록 (watchlist에는 추가 X)
+                        # 현재가, 저가, VWAP 필요 → df에서 추출
+                        if df is not None and len(df) > 0:
+                            # ✅ FIX: VWAP 계산 (Bottom 신호 등록 전 필수)
+                            vwap_config = self.config.get_section('vwap')
+                            df = self.analyzer.calculate_vwap(
+                                df,
+                                use_rolling=vwap_config.get('use_rolling', True),
+                                rolling_window=vwap_config.get('rolling_window', 20)
+                            )
 
-                    self.validated_stocks[stock_code] = {
-                        'name': stock_name,
-                        'market': market,
-                        'rs_rating': rs_rating,
-                        'stats': stats,
-                        'data': df,
-                        'analysis': {'total_score': simplified_ai_score}  # AI점수 필드 추가
-                    }
+                            signal_price = df['close'].iloc[-1] if 'close' in df.columns else 0
+                            signal_low = df['low'].iloc[-1] if 'low' in df.columns else 0
+                            signal_vwap = df['vwap'].iloc[-1] if 'vwap' in df.columns else 0
+
+                            # ✅ FIX: 신호 등록 return value 체크 (중복 방지)
+                            signal_registered = self.bottom_manager.register_signal(
+                                stock_code=stock_code,
+                                stock_name=stock_name,
+                                signal_price=signal_price,
+                                signal_low=signal_low,
+                                signal_vwap=signal_vwap,
+                                market=market
+                            )
+
+                            # 신호 등록 실패 시 (중복 등) validated_stocks에 추가하지 않음
+                            if not signal_registered:
+                                rejected_count += 1
+                                continue  # 다음 종목으로
+
+                            # validated_stocks에도 저장 (분석 정보 보존)
+                            win_rate = stats.get('win_rate', 0)
+                            simplified_ai_score = min(100, win_rate * 1.2)
+
+                            self.validated_stocks[stock_code] = {
+                                'name': stock_name,
+                                'market': market,
+                                'rs_rating': rs_rating,
+                                'stats': stats,
+                                'data': df,
+                                'analysis': {'total_score': simplified_ai_score},
+                                'strategy': strategy_tag  # ✅ 동적 전략 태그
+                            }
+                    else:
+                        # Momentum 전략: watchlist에 추가 (기존 로직)
+                        self.watchlist.add(stock_code)
+
+                        # 🔧 CRITICAL FIX: AI점수 추가 (간소화 버전: win_rate * 1.2)
+                        # win_rate 기반으로 간단한 점수 계산 (0~100 범위)
+                        win_rate = stats.get('win_rate', 0)
+                        simplified_ai_score = min(100, win_rate * 1.2)
+
+                        self.validated_stocks[stock_code] = {
+                            'name': stock_name,
+                            'market': market,
+                            'rs_rating': rs_rating,
+                            'stats': stats,
+                            'data': df,
+                            'analysis': {'total_score': simplified_ai_score},  # AI점수 필드 추가
+                            'strategy': strategy_tag  # ✅ 동적 전략 태그
+                        }
 
                     console.print(
                         f"[green]✅ {validated_count}. {stock_name} ({stock_code}) - "
@@ -1459,28 +1876,6 @@ class IntegratedTradingSystem:
 
         return market_open <= now <= market_close
 
-    def _is_valid_entry_time(self, current_time: datetime = None) -> Tuple[bool, str]:
-        """
-        진입 시간 필터 강제 체크 (모든 진입 경로에서 사용)
-        - 문서 기반의 안전 장치
-        """
-        if current_time is None:
-            current_time = datetime.now()
-
-        t = current_time.time()
-
-        # Hard-coded 시간 체크 (설정 파일 무관)
-        ENTRY_START = time(9, 30, 0)
-        ENTRY_END = time(14, 59, 0)
-
-        if t < ENTRY_START:
-            return False, f"❌ 09:30 이전 진입 차단 ({t.strftime('%H:%M:%S')})"
-
-        if t > ENTRY_END:
-            return False, f"❌ 14:59 이후 진입 차단 ({t.strftime('%H:%M:%S')})"
-
-        return True, ""
-
     async def rescan_and_add_stocks(self):
         """조건검색 재실행 및 리밸런싱 (새 종목 추가 + 오래된 종목 제거)"""
         try:
@@ -1563,14 +1958,34 @@ class IntegratedTradingSystem:
 
         last_check = datetime.now()
         last_rescan = datetime.now()
+        last_sync = datetime.now()  # 거래 내역 동기화 마지막 시간
         last_status_update = datetime.now()
+        eod_executed = False  # ✅ EOD 프로세스 실행 여부 플래그
 
         try:
             while self.running:
                 current_time = datetime.now()
 
+                # 🔧 CRITICAL FIX: 15:30 이후 자동 종료 (장마감 후 불필요한 활동 방지)
+                shutdown_time = current_time.replace(hour=15, minute=30, second=0, microsecond=0)
+                if current_time >= shutdown_time:
+                    console.print()
+                    console.print("[yellow]=" * 80 + "[/yellow]")
+                    console.print(f"[bold yellow]🕐 15:30 장 종료 - 오늘 모니터링 종료[/bold yellow]")
+                    console.print("[yellow]=" * 80 + "[/yellow]")
+                    console.print()
+                    console.print(f"[cyan]✅ 오늘 거래 완료 ({current_time.strftime('%Y-%m-%d %H:%M:%S')})[/cyan]")
+                    console.print(f"[dim cyan]💤 내일 08:50에 자동으로 다시 시작됩니다.[/dim cyan]")
+                    console.print()
+                    break  # 모니터링 루프만 종료 (run() 루프는 계속)
+
                 # 장 시간인지 체크
                 if self.is_market_open():
+                    # ✅ EOD 프로세스 체크 (14:55-14:59 사이에 1회 실행)
+                    if not eod_executed and current_time.hour == 14 and 55 <= current_time.minute <= 59:
+                        await self.handle_eod()
+                        eod_executed = True
+
                     # 5분마다 조건검색 재실행
                     if (current_time - last_rescan).seconds >= rescan_interval:
                         console.print()
@@ -1579,6 +1994,27 @@ class IntegratedTradingSystem:
                         last_rescan = current_time
                         console.print(f"[green]✅ 현재 모니터링 종목: {len(self.watchlist)}개[/green]")
                         console.print()
+
+                    # 5분마다 거래 내역 동기화 (누락 체결 자동 복구)
+                    if (current_time - last_sync).seconds >= 300:
+                        today = current_time.strftime('%Y%m%d')
+                        sync_result = await self.reconciliation.reconcile_trades(today)
+
+                        if sync_result.get('synced'):
+                            missing_count = sync_result.get('missing_trades', 0)
+                            if missing_count > 0:
+                                console.print(f"[yellow]⚠️  {missing_count}건 누락 거래 자동 동기화됨[/yellow]")
+                                # 알림 생성
+                                self.reconciliation.create_alert(
+                                    missing_count=missing_count,
+                                    trades=sync_result.get('synced_trades', [])
+                                )
+
+                        if sync_result.get('errors'):
+                            for error in sync_result['errors']:
+                                console.print(f"[red]❌ 동기화 오류: {error}[/red]")
+
+                        last_sync = current_time
 
                     # 1분마다 종목 체크
                     elif (current_time - last_check).seconds >= check_interval:
@@ -1908,10 +2344,10 @@ class IntegratedTradingSystem:
                 conditions_met = sum([condition_vwap, condition_ma20, condition_volume])
 
                 if conditions_met == 3:
-                    signal = "✅ 시그널"  # 변경: "매수" → "시그널" (혼동 방지)
+                    signal = "📊 기술조건"  # 기술적 조건만 만족 (실제 매수 아님!)
                     signal_color = "green"
                 elif conditions_met >= 2:
-                    signal = "⏳ 대기"
+                    signal = "⏳ 대기중"
                     signal_color = "yellow"
                 else:
                     signal = "❌ 제외"
@@ -1919,6 +2355,38 @@ class IntegratedTradingSystem:
 
                 # 보유 여부 표시
                 holding_status = "🔵 보유" if stock_code in self.positions else ""
+
+                # SignalOrchestrator로 실제 필터 상태 확인 (보유 종목 제외)
+                orchestrator_status = ""
+                rejection_info = ""
+                if stock_code not in self.positions and conditions_met >= 2:
+                    # 기술적 조건을 만족하면 SignalOrchestrator 체크
+                    try:
+                        # market 정보 가져오기
+                        stock_info = self.validated_stocks.get(stock_code)
+                        market_info = stock_info.get('market', 'KOSPI') if stock_info else 'KOSPI'
+
+                        signal_result = self.signal_orchestrator.evaluate_signal(
+                            stock_code=stock_code,
+                            stock_name=stock_name,
+                            current_price=current_price,
+                            df=df,
+                            market=market_info,
+                            current_cash=self.current_cash,
+                            daily_pnl=self.calculate_daily_pnl()
+                        )
+
+                        if signal_result['allowed']:
+                            orchestrator_status = "✅통과"
+                            rejection_info = f"Score:{signal_result['aggregate_score']:+.1f}"
+                        else:
+                            level = signal_result['rejection_level']
+                            reason = signal_result['rejection_reason']
+                            orchestrator_status = f"{level}❌"
+                            rejection_info = reason[:30]  # 30자로 제한
+                    except Exception as e:
+                        orchestrator_status = "오류"
+                        rejection_info = str(e)[:30]
 
                 stock_data.append({
                     'code': stock_code,
@@ -1940,6 +2408,8 @@ class IntegratedTradingSystem:
                     'signal': signal,
                     'signal_color': signal_color,
                     'conditions_met': conditions_met,
+                    'orchestrator_status': orchestrator_status,  # L0-L6 상태
+                    'rejection_info': rejection_info,  # 차단 이유
                     'time': current_time,
                     'historical_df': df  # 백테스트용 히스토리 데이터 추가
                 })
@@ -1948,6 +2418,9 @@ class IntegratedTradingSystem:
                 if stock_code in self.positions:
                     self.check_exit_signal(stock_code, df)  # historical_df 전달
                 else:
+                    # 디버그: check_entry_signal 호출 전 로그
+                    if orchestrator_status == "✅통과":
+                        console.print(f"[cyan]→ {stock_code} ({stock_name}): ✅통과 확인 → check_entry_signal 호출[/cyan]")
                     await self.check_entry_signal(stock_code, df)  # 키움 데이터 전달 (async)
 
             except Exception as e:
@@ -2260,14 +2733,16 @@ class IntegratedTradingSystem:
         table = Table(title=table_title, box=box.ROUNDED, show_header=True, header_style="bold magenta")
         table.add_column("순번", style="cyan", justify="right", width=4)
         table.add_column("코드", style="yellow", width=8)
-        table.add_column("종목명", style="white", width=16)
+        table.add_column("종목명", style="white", width=14)
         table.add_column("보유", justify="center", width=6)
-        table.add_column("현재가", justify="right", width=10)
-        table.add_column("VWAP", justify="right", width=10)
-        table.add_column("MA20", justify="right", width=10)
-        table.add_column("거래량증감", justify="right", width=10)
-        table.add_column("관심도", justify="center", width=10)  # 변경: "시그널" → "관심도" (실제 매수 아님 명확히)
-        table.add_column("체크시간", style="dim", width=10)
+        table.add_column("현재가", justify="right", width=9)
+        table.add_column("VWAP", justify="right", width=9)
+        table.add_column("MA20", justify="right", width=9)
+        table.add_column("거래량", justify="right", width=8)
+        table.add_column("기술", justify="center", width=8)  # 기술적 조건
+        table.add_column("필터상태", justify="center", width=9)  # L0-L6 상태
+        table.add_column("차단이유", style="dim", width=20)  # 상세 이유
+        table.add_column("시간", style="dim", width=8)
 
         for i, data in enumerate(stock_data, 1):
             # VWAP 조건 색상
@@ -2291,14 +2766,31 @@ class IntegratedTradingSystem:
             else:
                 vol_change_str = f"[red]{vol_change_str} ✗[/red]"
 
-            # 시그널 색상
-            signal_color = data['signal_color']
-            signal_str = f"[{signal_color}]{data['signal']}[/{signal_color}]"
-
             # 보유 종목일 때 종목명 강조
             stock_name = data['name']
             if data['holding']:
                 stock_name = f"[bold green]{stock_name}[/bold green]"
+
+            # 기술적 조건 (간단히)
+            tech_str = f"{data['conditions_met']}/3"
+            if data['conditions_met'] == 3:
+                tech_str = f"[green]{tech_str}[/green]"
+            elif data['conditions_met'] >= 2:
+                tech_str = f"[yellow]{tech_str}[/yellow]"
+            else:
+                tech_str = f"[red]{tech_str}[/red]"
+
+            # 필터 상태
+            filter_status = data.get('orchestrator_status', '')
+            if filter_status == "✅통과":
+                filter_str = f"[green]{filter_status}[/green]"
+            elif filter_status:
+                filter_str = f"[red]{filter_status}[/red]"
+            else:
+                filter_str = "[dim]-[/dim]"
+
+            # 차단 이유
+            rejection = data.get('rejection_info', '')
 
             table.add_row(
                 str(i),
@@ -2309,16 +2801,130 @@ class IntegratedTradingSystem:
                 vwap_str,
                 ma20_str,
                 vol_change_str,
-                signal_str,
+                tech_str,
+                filter_str,
+                rejection,
                 data['time']
             )
 
         # 실시간 모니터링 테이블 출력
         console.print(table)
         console.print()
-        # 🔧 설명 추가: 혼동 방지
-        console.print(f"[dim]💡 관심도: 기술적 조건만 체크 (VWAP/MA20/거래량) | 실제 매수: L0-L6 필터 통과 후 '보유' 표시[/dim]")
-        console.print(f"[dim]다음 체크: 60초 후 | Ctrl+C: 종료[/dim]")
+
+        # ========================================
+        # ✅ Bottom Pullback 신호 모니터링
+        # ========================================
+        signal_watchlist = self.bottom_manager.get_signal_watchlist()
+        if signal_watchlist:
+            console.print()
+            console.print("=" * 120, style="bold cyan")
+            console.print(f"{'🎯 Bottom Pullback 신호 대기 중':^120}", style="bold cyan")
+            console.print("=" * 120, style="bold cyan")
+            console.print()
+
+            for stock_code, signal_info in signal_watchlist.items():
+                stock_name = signal_info['stock_name']
+                state = signal_info['state']
+
+                try:
+                    # 키움 API로 실시간 데이터 조회
+                    result = self._get_stock_info_with_cache(stock_code)
+                    if not result:
+                        continue
+
+                    current_price = result.get('price', 0)
+                    current_low = result.get('day_low', 0)
+
+                    # ✅ FIX: 가격 데이터 유효성 검증 (0이면 current_price로 fallback)
+                    if current_low <= 0:
+                        current_low = current_price
+
+                    # 여전히 0이면 스킵 (유효하지 않은 데이터)
+                    if current_price <= 0 or current_low <= 0:
+                        console.print(f"[yellow]⚠️  {stock_name} ({stock_code}): 유효하지 않은 가격 데이터 (price={current_price}, low={current_low})[/yellow]")
+                        continue
+
+                    # DataFrame 조회 (VWAP 계산용)
+                    stock_info = self.validated_stocks.get(stock_code)
+                    if not stock_info:
+                        continue
+
+                    df = stock_info.get('data')
+                    if df is None or len(df) < 10:
+                        continue
+
+                    # 컬럼명 소문자 변환
+                    if isinstance(df.columns, pd.MultiIndex):
+                        df.columns = [col[0].lower() if isinstance(col, tuple) else col.lower() for col in df.columns]
+                    else:
+                        df.columns = df.columns.str.lower()
+
+                    # VWAP 재계산
+                    vwap_config = self.config.get_section('vwap')
+                    df = self.analyzer.calculate_vwap(df,
+                                                       use_rolling=vwap_config.get('use_rolling', True),
+                                                       rolling_window=vwap_config.get('rolling_window', 20))
+
+                    current_vwap = df['vwap'].iloc[-1] if 'vwap' in df.columns else 0
+                    current_volume = df['volume'].iloc[-1] if 'volume' in df.columns else 0
+
+                    # 직전 5봉 평균 거래량
+                    avg_volume_5 = df['volume'].iloc[-6:-1].mean() if len(df) >= 6 else df['volume'].mean()
+
+                    # Pullback 조건 체크
+                    ready, reason = self.bottom_manager.check_pullback(
+                        stock_code=stock_code,
+                        current_price=current_price,
+                        current_vwap=current_vwap,
+                        current_low=current_low,
+                        recent_volume=current_volume,
+                        avg_volume_5=avg_volume_5,
+                        df=df
+                    )
+
+                    if ready:
+                        # ✅ Pullback 조건 충족 → 매수 진입
+                        console.print()
+                        console.print("=" * 120, style="bold green")
+                        console.print(
+                            f"{'🚀 Bottom Pullback 매수 신호 발생!':^120}",
+                            style="bold green"
+                        )
+                        console.print("=" * 120, style="bold green")
+                        console.print()
+
+                        # check_entry_signal 호출 (L0-L6 필터 체크)
+                        await self.check_entry_signal(stock_code, kiwoom_df=df)
+
+                        # 진입 표시
+                        self.bottom_manager.mark_entered(stock_code)
+
+                    else:
+                        # 상태 표시
+                        console.print(
+                            f"  [cyan]{stock_name} ({stock_code}): {state} - {reason}[/cyan]"
+                        )
+
+                except Exception as e:
+                    console.print(f"[yellow]⚠️  {stock_name} ({stock_code}): Bottom 체크 오류 - {e}[/yellow]")
+                    continue
+
+            console.print()
+
+        # 🔧 명확한 설명: 혼동 방지
+        console.print("=" * 120)
+        console.print("[bold yellow]💡 컬럼 설명 (중요!)[/bold yellow]")
+        console.print("=" * 120)
+        console.print("[cyan]기술[/cyan]:     기술적 조건 통과 개수 (VWAP/MA20/거래량 중 몇 개 만족)")
+        console.print("[yellow]필터상태[/yellow]: SignalOrchestrator L0-L6 필터 통과 여부")
+        console.print("          • [green]✅통과[/green]: 모든 필터 통과 → 매수 대기 중")
+        console.print("          • [red]L0❌/L3❌/ALPHA❌[/red]: 해당 필터에서 차단")
+        console.print("[dim]차단이유[/dim]: 왜 매수 못하는지 상세 이유")
+        console.print("[green]🔵 보유[/green]:   실제 매수 완료된 종목")
+        console.print()
+        console.print("[dim]※ 기술 3/3이어도 필터상태가 'L0❌'이면 매수 안 됨 (예: 장 마감 임박)[/dim]")
+        console.print("[dim]다음 체크: 60초 후 | Ctrl+C: 종료[/dim]")
+        console.print("=" * 120)
 
     async def check_entry_signal(self, stock_code: str, kiwoom_df: pd.DataFrame = None):
         """매수 신호 체크 (SignalOrchestrator 사용 - L0~L6 통합)"""
@@ -2327,10 +2933,10 @@ class IntegratedTradingSystem:
             time_ok, time_reason = self._is_valid_entry_time()
             if not time_ok:
                 # 장 시간이 아니면 조용히 종료 (로그 최소화)
-                # console.print(f"[dim]{time_reason}[/dim]")
+                console.print(f"[yellow]⏰ {stock_code}: {time_reason}[/yellow]")
                 return
 
-            console.print(f"[dim]🔍 {stock_code}: 매수 신호 체크 시작[/dim]")
+            console.print(f"[green]🔍 {stock_code}: 매수 신호 체크 시작[/green]")
 
             stock_info = self.validated_stocks.get(stock_code)
             if not stock_info:
@@ -2338,6 +2944,20 @@ class IntegratedTradingSystem:
 
             stock_name = stock_info.get('name', stock_code)
             market = stock_info.get('market', 'KOSPI')
+            strategy_tag = stock_info.get('strategy', self.default_strategy_tag)  # ✅ 동적 기본값
+
+            # ✅ TradeStateManager 진입 가능 여부 체크
+            can_enter, reason = self.state_manager.can_enter(
+                stock_code=stock_code,
+                strategy_tag=strategy_tag,
+                check_stoploss=True,
+                check_invalidated=True,
+                check_traded=True
+            )
+
+            if not can_enter:
+                console.print(f"[yellow]⚠️  {stock_name} ({stock_code}): {reason}[/yellow]")
+                return
 
             # 1. 데이터 조회 (키움 우선, Yahoo Finance 폴백)
             if kiwoom_df is not None and len(kiwoom_df) >= 50:
@@ -2521,6 +3141,9 @@ class IntegratedTradingSystem:
             profit_pct = ((current_price - position['entry_price']) / position['entry_price']) * 100
             console.print(f"[dim]  💰 {stock_code}: 현재가 {current_price:,.0f}원, 진입가 {position['entry_price']:,.0f}원, 수익률 {profit_pct:+.2f}%[/dim]")
 
+            # ✅ TradeStateManager에 최고 수익률 업데이트
+            self.state_manager.update_max_profit(stock_code, profit_pct)
+
             # 부분 청산 처리
             if exit_info and exit_info.get('partial_exit'):
                 self.execute_partial_sell(
@@ -2565,6 +3188,7 @@ class IntegratedTradingSystem:
     def _is_valid_entry_time(self, current_time: datetime = None) -> Tuple[bool, str]:
         """
         시간 필터 강제 체크 (모든 진입 경로에서 체크)
+        🔴 GPT 개선: 점심시간 완전 차단 (12:00-14:00)
 
         Returns:
             (허용 여부, 사유)
@@ -2576,14 +3200,22 @@ class IntegratedTradingSystem:
 
         # Hard-coded 시간 체크 (설정 파일 무관)
         from datetime import time as time_class
-        ENTRY_START = time_class(9, 30, 0)
+        ENTRY_START = time_class(10, 0, 0)  # 10시 이후 매수 (장초반 가격 불안정)
         ENTRY_END = time_class(14, 59, 0)
 
+        # 🔴 GPT 개선: 점심시간 완전 차단 (재진입 포함)
+        MIDDAY_START = time_class(12, 0, 0)
+        MIDDAY_END = time_class(14, 0, 0)
+
         if t < ENTRY_START:
-            return False, f"❌ 09:30 이전 진입 차단 ({t.strftime('%H:%M:%S')})"
+            return False, f"❌ 10:00 이전 진입 차단 ({t.strftime('%H:%M:%S')})"
 
         if t > ENTRY_END:
             return False, f"❌ 14:59 이후 진입 차단 ({t.strftime('%H:%M:%S')})"
+
+        # 🔴 점심시간 차단 (12:00-14:00) - 신규 진입 + 재진입 모두
+        if MIDDAY_START <= t < MIDDAY_END:
+            return False, f"🚫 점심시간 진입 차단 ({t.strftime('%H:%M:%S')})"
 
         return True, ""
 
@@ -2604,16 +3236,32 @@ class IntegratedTradingSystem:
             console.print(f"[red]🚫 {stock_name}: 3회 연속 손실로 당일 진입 금지[/red]")
             return
 
-        # 🔧 FIX: 쿨다운 체크 (손실 후 20분 대기)
+        # 🔧 FIX: 쿨다운 체크 (손절 30분, 일반 20분 대기)
+        # 🔴 GPT 개선: 손절/익절 구분하여 쿨다운 시간 다르게 적용
         if stock_code in self.stock_cooldown:
-            last_exit = self.stock_cooldown[stock_code]
+            last_exit, is_loss = self.stock_cooldown[stock_code]
+            cooldown_required = self.loss_cooldown_minutes if is_loss else self.cooldown_minutes
             elapsed = (datetime.now() - last_exit).total_seconds() / 60
-            if elapsed < self.cooldown_minutes:
-                remaining = self.cooldown_minutes - elapsed
-                console.print(f"[yellow]⏸️  {stock_name}: 쿨다운 {remaining:.1f}분 남음[/yellow]")
+            if elapsed < cooldown_required:
+                remaining = cooldown_required - elapsed
+                cooldown_type = "손절" if is_loss else "익절"
+                console.print(f"[yellow]⏸️  {stock_name}: {cooldown_type} 쿨다운 {remaining:.1f}분 남음 (총 {cooldown_required}분)[/yellow]")
                 return
             # 쿨다운 만료 → 제거
             del self.stock_cooldown[stock_code]
+
+        # 🔧 CRITICAL FIX: 이미 포지션이 있으면 추가 매수 금지 (중복 매수 방지)
+        if stock_code in self.positions:
+            existing_qty = self.positions[stock_code].get('quantity', 0)
+            if existing_qty > 0:
+                console.print(f"[yellow]⚠️  {stock_name}: 이미 보유 중 ({existing_qty}주) - 추가 매수 금지[/yellow]")
+                return
+
+        # 🔴 GPT 개선: 종목별 일일 거래 제한 (과도한 집중 방지)
+        today_trade_count = self.daily_trade_count.get(stock_code, 0)
+        if today_trade_count >= self.max_trades_per_stock_per_day:
+            console.print(f"[red]🚫 {stock_name}: 일일 거래 한도 초과 ({today_trade_count}/{self.max_trades_per_stock_per_day}회)[/red]")
+            return
 
         console.print()
         console.print("=" * 80, style="green")
@@ -2641,7 +3289,9 @@ class IntegratedTradingSystem:
         )
 
         # SignalOrchestrator의 포지션 조정 반영
-        quantity = int(position_calc['quantity'] * position_size_mult)
+        # 🔧 FIX: 최소 1주 보장 (이중 축소 방지)
+        raw_quantity = position_calc['quantity'] * position_size_mult
+        quantity = int(max(1, int(raw_quantity))) if position_calc['quantity'] >= 1 else 0  # Python int() 명시
         amount = position_calc['investment'] * position_size_mult
 
         # 진입 가능 여부 확인
@@ -2706,6 +3356,14 @@ class IntegratedTradingSystem:
             console.print(f"[red]❌ 매수 API 호출 실패: {e}[/red]")
             return
 
+        # ✅ EOD Manager Phase 1: 진입 시점 overnight 판단
+        allow_overnight, overnight_score = self.should_allow_overnight(
+            stock_code=stock_code,
+            df=df,
+            signal_result={},  # 필요 시 확장 가능
+            entry_confidence=entry_confidence
+        )
+
         # 포지션 생성
         entry_time = datetime.now()
         self.positions[stock_code] = {
@@ -2724,8 +3382,24 @@ class IntegratedTradingSystem:
             'trade_id': None,  # DB trade_id 저장용
             'partial_exit_stage': 0,  # 부분 청산 단계 (0: 미진행, 1: 1차 완료, 2: 2차 완료)
             'total_realized_profit': 0.0,  # 누적 실현 손익
-            'order_no': order_no  # 주문번호 저장
+            'order_no': order_no,  # 주문번호 저장
+
+            # ✅ Phase 3: 시장 정보 (갭업 재진입용)
+            'market': self.validated_stocks.get(stock_code, {}).get('market', 'KOSDAQ'),
+
+            # ✅ EOD Manager Phase 1: 익일 보유 관련 필드
+            'strategy_tag': self.validated_stocks.get(stock_code, {}).get('strategy', self.default_strategy_tag),  # ✅ 동적 전략 태그
+            'allow_overnight': allow_overnight,  # 익일 보유 허용 여부 (진입 시점 판단)
+            'allow_overnight_final_confirm': False,  # EOD 시점 최종 확인
+            'overnight_score': overnight_score,  # 진입 시점 overnight 점수 (0.0-1.0)
+            'eod_score': 0.0,  # EOD 시점 재계산 점수 (0.0-1.0)
+            'eod_forced_exit': False,  # EOD 강제 청산 여부 (분석/우선감시 리스트용)
+            'gap_reentered_today': False,  # 🔥 ChatGPT Fix: 갭업 재진입 중복 방지
         }
+
+        # 진입 시 overnight 판단 결과 로깅
+        if allow_overnight:
+            console.print(f"[cyan]✅ 익일 보유 허용 (점수: {overnight_score:.2f})[/cyan]")
 
         # DB에 매수 거래 저장
         stock_info = self.validated_stocks.get(stock_code, {})
@@ -2738,26 +3412,28 @@ class IntegratedTradingSystem:
             'stock_name': stock_name,
             'trade_type': 'BUY',
             'trade_time': entry_time.isoformat(),
-            'price': price,
-            'quantity': quantity,
-            'amount': amount,
+            'price': float(price),  # 🔧 numpy → Python
+            'quantity': int(quantity),  # 🔧 numpy → Python
+            'amount': float(amount),  # 🔧 numpy → Python
+            'process_id': os.getpid(),  # 🔧 프로세스 ID 추가
+            'order_no': order_no,  # 🔧 주문번호 추가
             'condition_name': 'VWAP+AI',
             'strategy_config': 'hybrid',
             'entry_reason': f"VWAP 상향 돌파 (종합점수: {analysis.get('total_score', 0):.1f})",
 
-            # VWAP 백테스트 결과
-            'vwap_validation_score': stats.get('avg_profit_pct', 0),
-            'sim_win_rate': stats.get('win_rate'),
-            'sim_avg_profit': stats.get('avg_profit_pct'),
-            'sim_trade_count': stats.get('total_trades'),
-            'sim_profit_factor': stats.get('profit_factor'),
+            # VWAP 백테스트 결과 (🔧 numpy → Python 변환)
+            'vwap_validation_score': float(stats.get('avg_profit_pct', 0)) if stats.get('avg_profit_pct') is not None else 0,
+            'sim_win_rate': float(stats.get('win_rate')) if stats.get('win_rate') is not None else None,
+            'sim_avg_profit': float(stats.get('avg_profit_pct')) if stats.get('avg_profit_pct') is not None else None,
+            'sim_trade_count': int(stats.get('total_trades')) if stats.get('total_trades') is not None else None,
+            'sim_profit_factor': float(stats.get('profit_factor')) if stats.get('profit_factor') is not None else None,
 
-            # 종합 분석 결과 (AI)
-            'total_score': analysis.get('total_score', 0),
-            'score_news': scores.get('news', 50),
-            'score_technical': scores.get('technical', 50),
-            'score_supply_demand': scores.get('supply_demand', 50),
-            'score_fundamental': scores.get('fundamental', 50),
+            # 종합 분석 결과 (AI) (🔧 numpy → Python 변환)
+            'total_score': float(analysis.get('total_score', 0)),
+            'score_news': float(scores.get('news', 50)),
+            'score_technical': float(scores.get('technical', 50)),
+            'score_supply_demand': float(scores.get('supply_demand', 50)),
+            'score_fundamental': float(scores.get('fundamental', 50)),
             'recommendation': analysis.get('recommendation', '관망'),
 
             # 뉴스 분석
@@ -2781,11 +3457,468 @@ class IntegratedTradingSystem:
         )
 
         console.print(f"✅ 매수 완료 (DB ID: {trade_id})")
+
+        # 🔴 GPT 개선: 종목별 일일 거래 카운트 증가
+        self.daily_trade_count[stock_code] = self.daily_trade_count.get(stock_code, 0) + 1
+        console.print(f"[dim]📊 {stock_name}: 오늘 {self.daily_trade_count[stock_code]}회 거래 (최대 {self.max_trades_per_stock_per_day}회)[/dim]")
+
+        # ✅ TradeStateManager에 매수 기록
+        strategy_tag = self.validated_stocks.get(stock_code, {}).get('strategy', self.default_strategy_tag)  # ✅ 동적 기본값
+        self.state_manager.mark_traded(
+            stock_code=stock_code,
+            stock_name=stock_name,
+            action=TradeAction.BUY,
+            price=price,
+            quantity=quantity,
+            strategy_tag=strategy_tag,
+            reason=f"VWAP 진입 (신뢰도: {entry_confidence*100:.0f}%)"
+        )
+
         console.print("=" * 80, style="green")
         console.print()
 
-        # 잔고 업데이트 (비동기 실행은 나중에)
-        # TODO: asyncio.create_task(self.update_account_balance())
+        # 잔고 업데이트 (비동기 실행)
+        asyncio.create_task(self.update_account_balance())
+
+    def should_allow_overnight(self, stock_code: str, df: pd.DataFrame, signal_result: Dict, entry_confidence: float) -> Tuple[bool, float]:
+        """
+        진입 시점에 익일 보유 허용 여부 판단
+
+        Args:
+            stock_code: 종목 코드
+            df: OHLCV + 지표 데이터프레임
+            signal_result: SignalOrchestrator 평가 결과
+            entry_confidence: 진입 신뢰도 (0.0-1.0)
+
+        Returns:
+            (allow_overnight, overnight_score): (보유 허용 여부, 0.0-1.0 점수)
+
+        판단 기준 (EOD 개선 계획 Phase 1):
+            1. 신뢰도: entry_confidence >= 0.6
+            2. 추세: 현재가 > EMA5
+            3. 거래량: vol_z20 >= 1.0
+            4. 뉴스: news_score >= 50
+        """
+        try:
+            # EOD 정책 설정 확인
+            eod_config = self.config.get_section('eod_policy')
+            if not eod_config or not eod_config.get('enabled', False):
+                return False, 0.0
+
+            overnight_criteria = eod_config.get('overnight_criteria', {})
+
+            # 기본 점수 초기화
+            score = 0.0
+            weights = {
+                'trend': overnight_criteria.get('trend_weight', 0.4),
+                'volume': overnight_criteria.get('volume_weight', 0.3),
+                'news': overnight_criteria.get('news_weight', 0.3),
+            }
+
+            # 1. 신뢰도 체크 (최소 0.6 이상)
+            if entry_confidence < 0.6:
+                return False, 0.0
+
+            # 2. 추세 점수 (price > EMA5)
+            trend_score = 0.0
+            if len(df) >= 5:
+                current_price = df['close'].iloc[-1]
+
+                # EMA5 체크
+                if 'ema_5' in df.columns:
+                    ema5 = df['ema_5'].iloc[-1]
+                    if current_price > ema5:
+                        trend_score = 1.0
+                    else:
+                        # 필수 조건 미달
+                        min_ema_state = overnight_criteria.get('min_ema_state', True)
+                        if min_ema_state:
+                            return False, 0.0
+                        trend_score = 0.5
+
+                # EMA20 추가 체크 (보너스)
+                if 'ema_20' in df.columns:
+                    ema20 = df['ema_20'].iloc[-1]
+                    if current_price > ema20:
+                        trend_score = min(1.0, trend_score + 0.2)
+
+            score += trend_score * weights['trend']
+
+            # 3. 거래량 점수 (vol_z20 >= 1.0)
+            volume_score = 0.0
+            min_vol_z20 = overnight_criteria.get('min_vol_z20', 1.0)
+
+            if 'volume_zscore' in df.columns:
+                vol_z20 = df['volume_zscore'].iloc[-1]
+                if vol_z20 >= min_vol_z20:
+                    # Z-score에 따라 점수 차등 부여
+                    if vol_z20 >= 2.5:
+                        volume_score = 1.0  # 매우 강한 거래량
+                    elif vol_z20 >= 2.0:
+                        volume_score = 0.9
+                    elif vol_z20 >= 1.5:
+                        volume_score = 0.7
+                    else:
+                        volume_score = 0.5
+                else:
+                    # 필수 조건 미달
+                    return False, 0.0
+            else:
+                # volume_zscore 없으면 기본 점수
+                volume_score = 0.5
+
+            score += volume_score * weights['volume']
+
+            # 4. 뉴스 점수 (>= 50)
+            news_score_value = 50  # 기본값
+            min_news_score = overnight_criteria.get('min_news_score', 50)
+
+            # validated_stocks에서 뉴스 점수 조회
+            stock_info = self.validated_stocks.get(stock_code, {})
+            analysis = stock_info.get('analysis', {})
+            scores = analysis.get('scores', {})
+
+            if 'news' in scores:
+                news_score_value = scores['news']
+
+            news_score = 0.0
+            if news_score_value >= min_news_score:
+                # 뉴스 점수에 따라 차등 부여
+                if news_score_value >= 80:
+                    news_score = 1.0  # 매우 긍정적
+                elif news_score_value >= 70:
+                    news_score = 0.9
+                elif news_score_value >= 60:
+                    news_score = 0.7
+                else:
+                    news_score = 0.5
+            else:
+                # 필수 조건 미달
+                return False, 0.0
+
+            score += news_score * weights['news']
+
+            # 5. 최종 점수 판단
+            min_overnight_score = eod_config.get('min_overnight_score', 0.6)
+            allow_overnight = score >= min_overnight_score
+
+            return allow_overnight, score
+
+        except Exception as e:
+            console.print(f"[yellow]⚠️  should_allow_overnight 오류: {e}[/yellow]")
+            import traceback
+            traceback.print_exc()
+            return False, 0.0
+
+    async def handle_eod(self):
+        """
+        EOD (End of Day) 프로세스 실행 (14:55)
+
+        1. allow_overnight=True 포지션 중 익일 보유 대상 선정
+        2. 나머지 포지션 청산 (15:05)
+        3. 우선 감시 리스트 생성 (다음날 갭업 재진입용)
+        """
+        try:
+            console.print()
+            console.print("=" * 80, style="bold yellow")
+            console.print("🌅 EOD 프로세스 시작 (14:55)", style="bold yellow")
+            console.print("=" * 80, style="bold yellow")
+
+            # 1. EOD 정책 활성화 체크
+            eod_config = self.config.get_section('eod_policy')
+            if not eod_config or not eod_config.get('enabled', False):
+                console.print("[dim]ℹ️  EOD 정책이 비활성화되어 있습니다.[/dim]")
+                return
+
+            # 2. 현재 포지션이 없으면 종료
+            if not self.positions:
+                console.print("[dim]ℹ️  보유 포지션이 없습니다.[/dim]")
+                return
+
+            # 3. 계좌 정보 조회
+            account_value = self.total_assets if self.total_assets > 0 else self.current_cash
+            console.print(f"[dim]📊 계좌 평가금액: {account_value:,.0f}원[/dim]")
+
+            # 4. EOD Manager 실행
+            to_hold, to_close, priority_watchlist = self.eod_manager.run_eod_check(
+                positions=self.positions,
+                api=self.api,
+                news_fetcher=None,  # TODO: 뉴스 조회 기능 추가 시 연동
+                account_value=account_value
+            )
+
+            # 5. 결과 출력
+            console.print()
+            console.print(f"[green]✅ 익일 보유 종목 ({len(to_hold)}개):[/green]")
+            for code in to_hold:
+                pos = self.positions[code]
+                console.print(
+                    f"  - {pos['stock_name']} ({code}): "
+                    f"EOD점수 {pos.get('eod_score', 0):.2f}, "
+                    f"진입점수 {pos.get('overnight_score', 0):.2f}"
+                )
+
+            console.print()
+            console.print(f"[yellow]⚠️  15:05 청산 예정 ({len(to_close)}개):[/yellow]")
+            for code in to_close:
+                pos = self.positions[code]
+                console.print(
+                    f"  - {pos['stock_name']} ({code}): "
+                    f"EOD점수 {pos.get('eod_score', 0):.2f} (기준 미달)"
+                )
+
+            console.print()
+            console.print(f"[cyan]📋 우선 감시 리스트 ({len(priority_watchlist)}개):[/cyan]")
+            for candidate in priority_watchlist:
+                console.print(
+                    f"  - {candidate['stock_name']} ({candidate['stock_code']}): "
+                    f"점수 {candidate['score']:.2f}"
+                )
+
+            # 6. 우선 감시 리스트 저장 (다음날 갭업 재진입용)
+            if priority_watchlist:
+                self._save_priority_watchlist(priority_watchlist)
+
+            console.print()
+            console.print("=" * 80, style="bold green")
+            console.print("✅ EOD 프로세스 완료", style="bold green")
+            console.print("=" * 80, style="bold green")
+            console.print()
+
+        except Exception as e:
+            console.print(f"[red]❌ EOD 프로세스 오류: {e}[/red]")
+            import traceback
+            traceback.print_exc()
+
+    def _save_priority_watchlist(self, watchlist: List[Dict]):
+        """우선 감시 리스트를 파일로 저장"""
+        try:
+            import json
+            from pathlib import Path
+
+            # data 디렉토리 생성
+            data_dir = Path("data")
+            data_dir.mkdir(exist_ok=True)
+
+            # 오늘 날짜로 파일명 생성
+            today = datetime.now().strftime("%Y-%m-%d")
+            filepath = data_dir / f"priority_watchlist_{today}.json"
+
+            # 저장
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(watchlist, f, ensure_ascii=False, indent=2)
+
+            console.print(f"[dim]✓ 우선 감시 리스트 저장: {filepath}[/dim]")
+
+        except Exception as e:
+            console.print(f"[yellow]⚠️  우선 감시 리스트 저장 실패: {e}[/yellow]")
+
+    def _load_priority_watchlist(self) -> List[Dict]:
+        """
+        전날 저장된 우선 감시 리스트 로딩 (갭업 재진입용)
+
+        Returns:
+            List[Dict]: 우선 감시 리스트 (없으면 빈 리스트)
+        """
+        try:
+            import json
+            from pathlib import Path
+            from datetime import timedelta
+
+            data_dir = Path("data")
+
+            # 전날 날짜로 파일명 생성 (장은 전날 저장된 것 사용)
+            yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+            filepath = data_dir / f"priority_watchlist_{yesterday}.json"
+
+            # 파일이 없으면 빈 리스트 반환
+            if not filepath.exists():
+                console.print(f"[dim]ℹ️  우선 감시 리스트 없음: {filepath}[/dim]")
+                return []
+
+            # 파일 로드
+            with open(filepath, 'r', encoding='utf-8') as f:
+                watchlist = json.load(f)
+
+            console.print(f"[green]✓ 우선 감시 리스트 로드: {len(watchlist)}개 종목[/green]")
+            for candidate in watchlist:
+                console.print(
+                    f"  - {candidate['stock_name']} ({candidate['stock_code']}): "
+                    f"EOD점수 {candidate['score']:.2f}"
+                )
+
+            return watchlist
+
+        except Exception as e:
+            console.print(f"[yellow]⚠️  우선 감시 리스트 로드 실패: {e}[/yellow]")
+            return []
+
+    async def check_gap_reentry_candidates(self, priority_watchlist: List[Dict]):
+        """
+        우선 감시 리스트에서 갭업 재진입 후보 체크
+
+        Args:
+            priority_watchlist: 전날 EOD에서 생성한 우선 감시 리스트
+
+        갭업 재진입 조건 (config/strategy_hybrid.yaml):
+            1. 갭업 >= 3.0%
+            2. 거래량 Z-score >= 2.0
+            3. 장 시작 후 30분 이내
+            4. 3-5분봉 고점 돌파
+        """
+        try:
+            # 갭업 재진입 설정 로드
+            gap_config = self.config.get_section('gap_reentry')
+            if not gap_config or not gap_config.get('enabled', False):
+                return
+
+            gap_threshold = gap_config.get('gap_threshold_pct', 3.0)
+            volume_z_threshold = gap_config.get('volume_z_threshold', 2.0)
+            check_window_minutes = gap_config.get('check_window_minutes', 30)
+            first_candle_window = gap_config.get('first_candle_window', 5)
+            reentry_confidence = gap_config.get('reentry_confidence', 0.7)
+
+            console.print()
+            console.print("=" * 80, style="bold cyan")
+            console.print("🔍 갭업 재진입 후보 체크", style="bold cyan")
+            console.print("=" * 80, style="bold cyan")
+
+            # 🔥 ChatGPT Fix: 장 시작 시간 체크 (09:05 이후부터 체크)
+            current_time = datetime.now()
+            market_open = current_time.replace(hour=9, minute=5, second=0)  # 09:00 → 09:05
+            check_end = current_time.replace(hour=9, minute=30, second=0)
+
+            # 09:05 이전이면 대기
+            if current_time < market_open:
+                console.print(f"[dim]ℹ️  갭업 체크 대기 중 (09:05 이후 시작)[/dim]")
+                return
+
+            # 09:30 이후면 종료
+            if current_time > check_end:
+                console.print(f"[dim]ℹ️  갭업 체크 시간 경과 (30분 제한)[/dim]")
+                return
+
+            reentry_candidates = []
+
+            for candidate in priority_watchlist:
+                stock_code = candidate['stock_code']
+                stock_name = candidate['stock_name']
+                prev_close = candidate.get('prev_close', 0)
+
+                # 🔥 ChatGPT Fix: 이미 보유 중이거나 오늘 재진입한 종목 제외
+                if stock_code in self.positions:
+                    pos = self.positions[stock_code]
+                    if pos.get('gap_reentered_today', False):
+                        console.print(f"[dim]  ⚠️  {stock_name}: 이미 오늘 갭업 재진입함[/dim]")
+                    continue
+
+                # 현재가 조회
+                try:
+                    # 5분봉 데이터 조회
+                    market = candidate.get('market', 'KOSDAQ')
+                    ticker_suffix = '.KS' if market == 'KOSPI' else '.KQ'
+                    ticker = f"{stock_code}{ticker_suffix}"
+
+                    import yfinance as yf
+                    df = yf.download(ticker, period='1d', interval='5m', progress=False)
+
+                    # 🔥 Fix: DataFrame empty/None 체크 강화
+                    if df is None or df.empty or len(df) < 2:
+                        console.print(f"[dim]  ⚠️  {stock_name}: 데이터 부족 ({len(df) if df is not None else 0}봉)[/dim]")
+                        continue
+
+                    # 첫 5분봉 데이터
+                    first_candle = df.iloc[0]
+                    current_candle = df.iloc[-1]
+
+                    open_price = first_candle['Open']
+                    current_price = current_candle['Close']
+                    first_high = first_candle['High']
+
+                    # 1. 갭업 % 계산
+                    if prev_close <= 0:
+                        continue
+
+                    gap_pct = ((open_price - prev_close) / prev_close) * 100
+
+                    if gap_pct < gap_threshold:
+                        continue  # 갭업 기준 미달
+
+                    console.print(f"[cyan]📈 {stock_name} ({stock_code}): 갭업 {gap_pct:+.2f}%[/cyan]")
+
+                    # 2. 거래량 체크 (volume_zscore 계산)
+                    df['volume_ma20'] = df['Volume'].rolling(window=20).mean()
+                    df['volume_std20'] = df['Volume'].rolling(window=20).std()
+                    df['volume_zscore'] = (df['Volume'] - df['volume_ma20']) / df['volume_std20']
+
+                    latest_vol_z = df['volume_zscore'].iloc[-1] if len(df) >= 20 else 0
+
+                    if latest_vol_z < volume_z_threshold:
+                        console.print(f"[dim]  ⚠️  거래량 부족 (Z-score: {latest_vol_z:.2f} < {volume_z_threshold})[/dim]")
+                        continue
+
+                    console.print(f"[green]  ✓ 거래량 양호 (Z-score: {latest_vol_z:.2f})[/green]")
+
+                    # 3. 3-5분봉 고점 돌파 체크
+                    # first_candle_window=5이면 첫 5분봉 (1개) 고점 사용
+                    breakout_high = first_high
+
+                    if current_price > breakout_high:
+                        console.print(f"[green]  ✓ 고점 돌파: {current_price:,.0f}원 > {breakout_high:,.0f}원[/green]")
+
+                        # 재진입 후보 추가
+                        reentry_candidates.append({
+                            'stock_code': stock_code,
+                            'stock_name': stock_name,
+                            'gap_pct': gap_pct,
+                            'current_price': current_price,
+                            'vol_z': latest_vol_z,
+                            'confidence': reentry_confidence,
+                            'df': df
+                        })
+                    else:
+                        console.print(f"[dim]  ⚠️  고점 미돌파: {current_price:,.0f}원 <= {breakout_high:,.0f}원[/dim]")
+
+                except Exception as e:
+                    console.print(f"[yellow]⚠️  {stock_code} 갭업 체크 실패: {e}[/yellow]")
+                    continue
+
+            # 4. 재진입 실행
+            if reentry_candidates:
+                console.print()
+                console.print(f"[green]✅ 갭업 재진입 후보: {len(reentry_candidates)}개[/green]")
+
+                for candidate in reentry_candidates:
+                    # 리스크 체크 후 매수
+                    can_buy, reason = self._is_valid_entry_time()
+                    if not can_buy:
+                        console.print(f"[yellow]⚠️  {candidate['stock_name']}: {reason}[/yellow]")
+                        continue
+
+                    # 🔥 ChatGPT Fix: 갭업 재진입 실행 및 플래그 설정
+                    console.print(f"[green]🚀 갭업 재진입: {candidate['stock_name']} ({candidate['stock_code']})[/green]")
+                    self.execute_buy(
+                        stock_code=candidate['stock_code'],
+                        stock_name=candidate['stock_name'],
+                        price=candidate['current_price'],
+                        df=candidate['df'],
+                        position_size_mult=1.0,
+                        entry_confidence=candidate['confidence']
+                    )
+
+                    # 재진입 플래그 설정 (중복 방지)
+                    if candidate['stock_code'] in self.positions:
+                        self.positions[candidate['stock_code']]['gap_reentered_today'] = True
+            else:
+                console.print("[dim]ℹ️  갭업 재진입 후보 없음[/dim]")
+
+            console.print("=" * 80, style="bold cyan")
+            console.print()
+
+        except Exception as e:
+            console.print(f"[red]❌ 갭업 재진입 체크 오류: {e}[/red]")
+            import traceback
+            traceback.print_exc()
 
     def _adjust_price_to_tick(self, price: float) -> int:
         """
@@ -2823,6 +3956,26 @@ class IntegratedTradingSystem:
         """
         position = self.positions.get(stock_code)
         if not position:
+            return
+
+        # 🔧 CRITICAL FIX: 장 시간 체크 (장 종료 후 주문 방지)
+        if not self.is_market_open():
+            current_time = datetime.now().strftime('%H:%M:%S')
+            console.print(f"[red]❌ 장 종료 시간입니다 ({current_time})[/red]")
+            console.print(f"[red]   종목 {stock_code} ({position.get('name', '')}): 부분청산 주문 불가[/red]")
+            console.print(f"[yellow]⚠️  내일 장 시작 시 수동으로 처리하세요.[/yellow]")
+            return
+
+        # 🔧 FIX: 점심시간 수익 청산 차단 (12:00-14:00)
+        # 부분 청산은 항상 수익 실현이므로 점심시간에는 차단
+        from datetime import time as time_class
+        current_time = datetime.now().time()
+        MIDDAY_START = time_class(12, 0, 0)
+        MIDDAY_END = time_class(14, 0, 0)
+
+        if MIDDAY_START <= current_time < MIDDAY_END:
+            console.print(f"[yellow]🚫 점심시간 부분청산 차단 ({current_time.strftime('%H:%M:%S')})[/yellow]")
+            console.print(f"[yellow]   {position.get('name', '')} ({stock_code}): 14:00 이후 재시도[/yellow]")
             return
 
         # 청산할 수량 계산 (초기 수량 대비)
@@ -2918,10 +4071,28 @@ class IntegratedTradingSystem:
             realized_pnl=realized_profit
         )
 
+        # ✅ TradeStateManager에 부분 청산 기록
+        strategy_tag = position.get('strategy_tag', self.default_strategy_tag)  # ✅ 동적 기본값
+        self.state_manager.mark_traded(
+            stock_code=stock_code,
+            stock_name=position['name'],
+            action=TradeAction.PARTIAL_SELL,
+            price=price,
+            quantity=partial_quantity,
+            strategy_tag=strategy_tag,
+            reason=f"부분청산 {stage}단계 (+{profit_pct:.1f}%)"
+        )
+
         # 포지션 업데이트
         position['quantity'] -= partial_quantity
         position['partial_exit_stage'] = stage
         position['total_realized_profit'] += realized_profit
+
+        # 🔧 CRITICAL FIX: 부분 청산 후에도 쿨다운 설정 (재진입 방지)
+        if position['quantity'] > 0:
+            # 아직 포지션이 남아있지만 쿨다운 시작 (부분 청산은 익절이므로 is_loss=False)
+            self.stock_cooldown[stock_code] = (datetime.now(), False)
+            console.print(f"[yellow]⏸️  {position['name']}: 부분청산 후 쿨다운 {self.cooldown_minutes}분 시작[/yellow]")
 
         console.print(f"✅ 부분 청산 완료 (주문번호: {order_no})")
         console.print("=" * 80, style="yellow")
@@ -2931,6 +4102,27 @@ class IntegratedTradingSystem:
         """매도 실행 (전량 청산)"""
         position = self.positions.get(stock_code)
         if not position:
+            return
+
+        # 🔧 CRITICAL FIX: 장 시간 체크 (장 종료 후 주문 방지)
+        if not self.is_market_open():
+            current_time = datetime.now().strftime('%H:%M:%S')
+            console.print(f"[red]❌ 장 종료 시간입니다 ({current_time})[/red]")
+            console.print(f"[red]   종목 {stock_code} ({position.get('name', '')}): 주문 불가[/red]")
+            console.print(f"[yellow]⚠️  내일 장 시작 시 수동으로 처리하세요.[/yellow]")
+            return
+
+        # 🔧 FIX: 점심시간 수익 청산 차단 (12:00-14:00)
+        # 손절(profit_pct < 0)은 허용, 수익 청산만 차단
+        from datetime import time as time_class
+        current_time = datetime.now().time()
+        MIDDAY_START = time_class(12, 0, 0)
+        MIDDAY_END = time_class(14, 0, 0)
+
+        if MIDDAY_START <= current_time < MIDDAY_END and profit_pct > 0:
+            console.print(f"[yellow]🚫 점심시간 수익 청산 차단 ({current_time.strftime('%H:%M:%S')})[/yellow]")
+            console.print(f"[yellow]   {position.get('name', '')} ({stock_code}): 수익률 {profit_pct:+.2f}%[/yellow]")
+            console.print(f"[yellow]   14:00 이후 재시도 또는 손절 시에만 허용[/yellow]")
             return
 
         # 🔧 FIX: 실제 보유 수량 확인 (부분 청산 후 불일치 방지)
@@ -3067,16 +4259,93 @@ class IntegratedTradingSystem:
             self.stock_loss_streak[stock_code] = self.stock_loss_streak.get(stock_code, 0) + 1
             current_streak = self.stock_loss_streak[stock_code]
 
-            console.print(f"[yellow]📉 {position['name']}: 연속 손실 {current_streak}회[/yellow]")
+            # 🔥 ChatGPT Fix: 손절 시 allow_overnight False 처리
+            # (당일 손절된 종목은 EOD 보유 대상에서 제외)
+            position['allow_overnight'] = False
 
-            # 3회 연속 손실 → 당일 진입 금지
-            if current_streak >= self.max_consecutive_losses:
+            console.print(f"[yellow]📉 {position['name']}: 연속 손실 {current_streak}회 (손실률: {profit_pct:.2f}%)[/yellow]")
+
+            # 🔧 강화된 금지 로직 (2025-11-28 추가)
+            should_ban = False
+            ban_reason = ""
+
+            # 1. 일일 -5% 이상 → 즉시 당일 금지
+            if profit_pct <= -5.0:
+                should_ban = True
+                ban_reason = f"단일 거래 대손실 ({profit_pct:.2f}%)"
+                console.print(f"[red]🚨 {position['name']}: 대손실 {profit_pct:.2f}% 발생![/red]")
+
+            # 2. 2회 연속 -3% 이상 → 당일 금지
+            elif current_streak >= 2 and profit_pct <= -3.0:
+                should_ban = True
+                ban_reason = f"{current_streak}회 연속 -3% 이상 손실"
+                console.print(f"[red]🚨 {position['name']}: {current_streak}회 연속 중손실![/red]")
+
+            # 3. 3회 연속 손실 → 당일 진입 금지 + 쿨다운 파일 생성
+            elif current_streak >= self.max_consecutive_losses:
+                should_ban = True
+                ban_reason = f'{current_streak}회 연속 손실'
+
+            # 금지 실행
+            if should_ban:
                 self.stock_ban_list.add(stock_code)
-                console.print(f"[red]🚫 {position['name']}: {current_streak}회 연속 손실로 당일 진입 금지[/red]")
+                console.print(f"[red]🚫 {position['name']}: {ban_reason}로 당일 진입 금지[/red]")
 
-            # 손실 거래 → 쿨다운 시작
-            self.stock_cooldown[stock_code] = datetime.now()
-            console.print(f"[yellow]⏸️  {position['name']}: 쿨다운 {self.cooldown_minutes}분 시작[/yellow]")
+                # 🔧 쿨다운 파일 생성 (프로세스 간 공유)
+                from pathlib import Path
+                import json
+                from datetime import timedelta
+
+                cooldown_file = Path('data/cooldown.lock')
+                cooldown_file.parent.mkdir(exist_ok=True)
+
+                cooldown_until = (datetime.now() + timedelta(days=1)).isoformat()
+
+                cooldown_data = {
+                    'stock_code': stock_code,
+                    'stock_name': position['name'],
+                    'triggered_at': datetime.now().isoformat(),
+                    'cooldown_until': cooldown_until,
+                    'consecutive_losses': current_streak,
+                    'loss_rate': profit_pct,
+                    'reason': ban_reason
+                }
+
+                cooldown_file.write_text(json.dumps(cooldown_data, indent=2, ensure_ascii=False))
+                console.print(f"[red]🔒 쿨다운 활성화: {cooldown_until[:10]}까지 모든 거래 중지[/red]")
+
+            # 🔴 GPT 개선: 손실 거래 → 30분 쿨다운 (VWAP 재탈환 대기)
+            is_loss = profit_pct < 0
+            cooldown_time = self.loss_cooldown_minutes if is_loss else self.cooldown_minutes
+            self.stock_cooldown[stock_code] = (datetime.now(), is_loss)
+            console.print(f"[yellow]⏸️  {position['name']}: 쿨다운 {cooldown_time}분 시작 ({'손절' if is_loss else '익절'})[/yellow]")
+
+        # ✅ TradeStateManager에 매도 기록
+        strategy_tag = position.get('strategy_tag', self.default_strategy_tag)  # ✅ 동적 기본값
+
+        # 손절 여부 판단 (손실 + 특정 사유)
+        is_stoploss = is_loss and any(keyword in reason.lower() for keyword in ['손절', 'stop', '하락', 'emergency'])
+
+        if is_stoploss:
+            # 손절 기록
+            self.state_manager.mark_stoploss(
+                stock_code=stock_code,
+                stock_name=position['name'],
+                entry_price=position['entry_price'],
+                exit_price=price,
+                reason=reason
+            )
+        else:
+            # 일반 매도 기록
+            self.state_manager.mark_traded(
+                stock_code=stock_code,
+                stock_name=position['name'],
+                action=TradeAction.SELL,
+                price=price,
+                quantity=position['quantity'],
+                strategy_tag=strategy_tag,
+                reason=reason
+            )
 
         # 포지션 제거
         del self.positions[stock_code]
@@ -3085,8 +4354,8 @@ class IntegratedTradingSystem:
         console.print("=" * 80, style="red")
         console.print()
 
-        # 잔고 업데이트 (비동기 실행은 나중에)
-        # TODO: asyncio.create_task(self.update_account_balance())
+        # 잔고 업데이트 (비동기 실행)
+        asyncio.create_task(self.update_account_balance())
 
     def load_candidates_from_db(self):
         """DB에서 활성 감시 종목 로드"""
@@ -3209,6 +4478,7 @@ class IntegratedTradingSystem:
         print(f"⏰ 목표: {target_time.strftime('%m/%d %H:%M')} ({target_time.strftime('%A')})")
         print(f"💡 언제든지 [Enter] 키를 눌러 메인 메뉴로 돌아갈 수 있습니다.")
         print()  # 한 줄 띄우기
+        sys.stdout.flush()  # 🔧 FIX: nohup 환경에서 즉시 출력되도록 flush
 
         # 대기 루프
         while self.running:
@@ -3218,12 +4488,14 @@ class IntegratedTradingSystem:
             if time_diff <= 0:
                 # 줄바꿈 후 완료 메시지
                 print()
+                sys.stdout.flush()
                 console.print(f"[green]✓ {target_hour:02d}:{target_minute:02d} 도달![/green]")
                 break
 
             # 종료 신호 확인
             if not self.running:
                 print()
+                sys.stdout.flush()
                 console.print("[yellow]⚠️  대기 중 종료 신호 수신[/yellow]")
                 break
 
@@ -3236,8 +4508,18 @@ class IntegratedTradingSystem:
 
             # Enter 키 입력 확인 (non-blocking)
             try:
-                # 1초 동안 입력 대기
-                for _ in range(60):  # 60초 = 1분
+                # 적응형 대기 간격 (남은 시간에 따라 조정)
+                if time_diff > 3600:      # 1시간 이상 남음
+                    check_interval = 3600  # 1시간 간격 체크
+                elif time_diff > 600:     # 10분 이상 남음
+                    check_interval = 600   # 10분 간격 체크
+                elif time_diff > 60:      # 1분 이상 남음
+                    check_interval = 60    # 1분 간격 체크
+                else:
+                    check_interval = 10    # 마지막 1분은 10초 간격
+
+                # check_interval 동안 1초씩 대기하면서 Enter 키 감지
+                for _ in range(int(check_interval)):
                     if not self.running:
                         break
 
@@ -3246,6 +4528,7 @@ class IntegratedTradingSystem:
                         line = sys.stdin.readline()
                         if line:  # Enter 키 감지
                             print()
+                            sys.stdout.flush()
                             console.print("[yellow]⚠️  사용자가 대기를 중단했습니다.[/yellow]")
                             self.running = False
                             break
@@ -3253,7 +4536,15 @@ class IntegratedTradingSystem:
                     await asyncio.sleep(1)  # 1초 대기
             except Exception:
                 # select가 작동하지 않는 환경 (Windows 등)에서는 기본 sleep
-                await asyncio.sleep(60)
+                # 적응형 간격 적용
+                if time_diff > 3600:
+                    await asyncio.sleep(3600)
+                elif time_diff > 600:
+                    await asyncio.sleep(600)
+                elif time_diff > 60:
+                    await asyncio.sleep(60)
+                else:
+                    await asyncio.sleep(10)
 
     async def daily_routine(self):
         """일일 루틴 실행 (하루에 한 번만)"""
@@ -3280,17 +4571,56 @@ class IntegratedTradingSystem:
             console.print()
 
         try:
-            # 2. DB에서 활성 감시 종목 로드
-            console.print("\n[0단계] DB에서 활성 감시 종목 로드")
-            self.load_candidates_from_db()
+            # 🔧 FIX: DB 로드 제거 (오래된 데이터 사용 방지)
+            # 조건검색으로 매일 최신 종목만 사용
 
-            # 3. WebSocket 연결 및 로그인
+            # 2. WebSocket 연결 및 로그인
             console.print("\n[1단계] 시스템 초기화")
+
+            # 🔧 FIX: Token 유효성 사전 검증
+            token_valid = await self.validate_token()
+            if not token_valid:
+                console.print("[yellow]⚠️  Token이 유효하지 않음 - 재발급 시도[/yellow]")
+                if not self.refresh_access_token():
+                    console.print("[red]❌ Token 재발급 실패. 10분 후 재시도합니다.[/red]")
+                    console.print("[yellow]💤 10분 대기 중...[/yellow]")
+                    await asyncio.sleep(600)  # 10분 대기
+
+                    # 2차 시도
+                    if not self.refresh_access_token():
+                        console.print("[red]❌ Token 재발급 2차 실패. 내일 다시 시도합니다.[/red]")
+                        return
+
+            # WebSocket 연결
             await self.connect()
 
-            if not await self.login():
-                console.print("[red]❌ 로그인 실패. 내일 다시 시도합니다.[/red]")
-                return
+            # WebSocket 로그인 (최대 3회 재시도, 내부에서 토큰 갱신 포함)
+            if not await self.login(max_retries=3):
+                console.print()
+                console.print("[red]" + "=" * 80 + "[/red]")
+                console.print("[red]❌ WebSocket 로그인 최종 실패[/red]")
+                console.print("[red]" + "=" * 80 + "[/red]")
+                console.print()
+                console.print("[yellow]⚠️  가능한 원인:[/yellow]")
+                console.print("[yellow]   1. API 서버 일시 장애[/yellow]")
+                console.print("[yellow]   2. 네트워크 연결 불안정[/yellow]")
+                console.print("[yellow]   3. API 키/시크릿 오류[/yellow]")
+                console.print("[yellow]   4. 계정 사용 제한[/yellow]")
+                console.print()
+                console.print("[cyan]💡 권장 조치:[/cyan]")
+                console.print("[cyan]   - API 키/시크릿 재확인[/cyan]")
+                console.print("[cyan]   - 키움증권 API 서비스 상태 확인[/cyan]")
+                console.print("[cyan]   - 네트워크 연결 확인[/cyan]")
+                console.print()
+                console.print("[yellow]⏰ 1시간 후 자동 재시도합니다...[/yellow]")
+                await asyncio.sleep(3600)  # 1시간 대기
+
+                # 최종 재시도
+                console.print("\n[bold cyan]🔄 최종 재시도 중...[/bold cyan]")
+                await self.connect()
+                if not await self.login(max_retries=2):
+                    console.print("[red]❌ 최종 로그인 실패. 내일 다시 시도합니다.[/red]")
+                    return
 
             # 4. 계좌 정보 초기화
             await self.initialize_account()
@@ -3304,10 +4634,13 @@ class IntegratedTradingSystem:
             console.print("\n[2단계] 필터링 시작 (08:50)")
             await self.run_condition_filtering()
 
-            # 선정 종목이 없으면 오늘은 종료
-            if not self.watchlist:
+            # 선정 종목이 없으면 오늘은 종료 (✅ Bottom Pullback 신호도 체크)
+            bottom_signals = self.bottom_manager.get_signal_watchlist() if hasattr(self, 'bottom_manager') else {}
+            if not self.watchlist and not bottom_signals:
                 console.print("[yellow]⚠️  선정된 종목이 없습니다. 오늘 거래 없음.[/yellow]")
                 return
+            elif not self.watchlist and bottom_signals:
+                console.print(f"[cyan]ℹ️  Momentum 종목: 0개, Bottom Pullback 신호: {len(bottom_signals)}개[/cyan]")
 
             # 6. WebSocket 종료 (REST API만 사용)
             if self.websocket:
@@ -3329,6 +4662,18 @@ class IntegratedTradingSystem:
                 console.print(f"[cyan]⏰ 현재 시간: {now.strftime('%H:%M')} - 바로 모니터링 시작합니다.[/cyan]")
                 console.print()
 
+            # 🔥 ChatGPT Fix: 갭업 재진입 플래그 리셋 (하루 시작 시)
+            for pos in self.positions.values():
+                pos['gap_reentered_today'] = False
+
+            # ✅ Phase 3: 우선 감시 리스트 로드 및 갭업 재진입 체크
+            console.print("\n[2.5단계] 우선 감시 리스트 체크 (갭업 재진입)")
+            priority_watchlist = self._load_priority_watchlist()
+
+            # 우선 감시 리스트가 있으면 갭업 재진입 체크 (장 시작 후 30분 이내)
+            if priority_watchlist:
+                await self.check_gap_reentry_candidates(priority_watchlist)
+
             # 8. 실시간 모니터링 및 매매 (09:00 ~ 15:30)
             console.print("\n[3단계] 실시간 모니터링 시작")
             await self.monitor_and_trade()
@@ -3338,6 +4683,35 @@ class IntegratedTradingSystem:
             import traceback
             traceback.print_exc()
         finally:
+            # 🔴 자동 거래 분석 실행 (장 종료 시)
+            console.print()
+            console.print("[bold cyan]{'='*80}[/bold cyan]")
+            console.print("[bold cyan]📊 오늘 거래 자동 분석 중...[/bold cyan]")
+            console.print("[bold cyan]{'='*80}[/bold cyan]")
+
+            try:
+                import subprocess
+                result = subprocess.run(
+                    ['python3', 'analyze_daily_trades_detailed.py'],
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
+
+                # 분석 결과 출력
+                if result.stdout:
+                    console.print(result.stdout)
+
+                if result.returncode != 0 and result.stderr:
+                    console.print(f"[yellow]⚠️  분석 중 경고: {result.stderr}[/yellow]")
+
+            except subprocess.TimeoutExpired:
+                console.print("[yellow]⚠️  분석 시간 초과 (30초)[/yellow]")
+            except Exception as e:
+                console.print(f"[yellow]⚠️  자동 분석 실패: {e}[/yellow]")
+
+            console.print()
+
             # WebSocket 정리
             if self.websocket:
                 await self.websocket.close()
@@ -3376,9 +4750,23 @@ class IntegratedTradingSystem:
                 wait_seconds = (next_run - now).total_seconds()
                 console.print(f"[dim]다음 실행 시각: {next_run.strftime('%Y-%m-%d %H:%M')} (약 {wait_seconds/3600:.1f}시간 후)[/dim]")
 
-                # 1시간 단위로 체크하면서 대기
+                # 적응형 대기 (남은 시간에 따라 간격 조정)
                 while self.running and datetime.now() < next_run:
-                    await asyncio.sleep(min(3600, wait_seconds))  # 최대 1시간씩 대기
+                    remaining_seconds = (next_run - datetime.now()).total_seconds()
+                    if remaining_seconds <= 0:
+                        break
+
+                    # 남은 시간에 따라 체크 간격 조정
+                    if remaining_seconds > 3600:      # 1시간 이상 남음
+                        sleep_interval = 3600         # → 1시간 간격
+                    elif remaining_seconds > 600:     # 10분 이상 남음
+                        sleep_interval = 600          # → 10분 간격
+                    elif remaining_seconds > 60:      # 1분 이상 남음
+                        sleep_interval = 60           # → 1분 간격
+                    else:
+                        sleep_interval = 10           # 마지막 1분은 10초 간격
+
+                    await asyncio.sleep(min(sleep_interval, remaining_seconds))
                     if not self.running:
                         break
 
@@ -3386,12 +4774,58 @@ class IntegratedTradingSystem:
             console.print()
             console.print("[yellow]⚠️  사용자가 중지했습니다.[/yellow]")
         except Exception as e:
-            console.print(f"[red]❌ 시스템 오류: {e}[/red]")
+            # 🔧 FIX: Rich markup 에러 방지 - markup=False로 출력
+            console.print(f"❌ 시스템 오류: {e}", style="red", markup=False)
             import traceback
+            import sys
             traceback.print_exc()
+            sys.stderr.flush()  # 🔧 FIX: nohup 환경에서 에러 로그 즉시 출력
         finally:
             if self.websocket:
                 await self.websocket.close()
+
+
+def check_and_create_pid_lock():
+    """
+    PID lock file로 중복 실행 방지
+
+    Returns:
+        True if lock created successfully, False otherwise
+    """
+    from pathlib import Path
+    import os
+    import sys
+
+    pid_file = Path('/tmp/kiwoom_trading.pid')
+
+    # 기존 PID 파일 확인
+    if pid_file.exists():
+        try:
+            old_pid = int(pid_file.read_text().strip())
+            # 프로세스가 실제로 실행 중인지 확인
+            os.kill(old_pid, 0)  # 프로세스 존재 확인 (신호 전송 없음)
+
+            # 프로세스가 살아있음
+            console.print(f"[red]❌ 이미 실행 중입니다! (PID: {old_pid})[/red]")
+            console.print(f"[yellow]기존 프로세스를 종료하려면: kill {old_pid}[/yellow]")
+            console.print(f"[yellow]또는: pkill -f 'main_auto_trading.py'[/yellow]")
+            return False
+
+        except (ProcessLookupError, ValueError):
+            # 프로세스가 죽었거나 PID 파일이 손상됨
+            console.print(f"[yellow]⚠️  이전 PID 파일 정리 중...[/yellow]")
+            pid_file.unlink()
+
+    # 현재 PID 저장
+    current_pid = os.getpid()
+    pid_file.write_text(str(current_pid))
+    console.print(f"[green]✓ PID lock 생성 완료 (PID: {current_pid})[/green]")
+
+    # 종료 시 PID 파일 삭제
+    import atexit
+    atexit.register(lambda: pid_file.unlink() if pid_file.exists() else None)
+
+    return True
 
 
 async def main(skip_wait: bool = False):
@@ -3415,14 +4849,14 @@ async def main(skip_wait: bool = False):
                 formatter_class=argparse.RawDescriptionHelpFormatter,
                 epilog="""
 사용 예시:
-  # 백테스트 검증 (조건식 0,1,2 사용)
-  python3 main_auto_trading.py --dry-run --conditions 0,1,2
+  # 백테스트 검증 (일부 조건식만 사용)
+  python3 main_auto_trading.py --dry-run --conditions 17,18,19
 
-  # 실전 투입 (조건식 0,1,2,3,4,5 사용)
-  python3 main_auto_trading.py --live --conditions 0,1,2,3,4,5
+  # 실전 투입 (전체 조건식 사용)
+  python3 main_auto_trading.py --live --conditions 17,18,19,20,21,22
 
   # 테스트 모드 (대기 시간 건너뛰기)
-  python3 main_auto_trading.py --skip-wait --conditions 0,1,2
+  python3 main_auto_trading.py --skip-wait --conditions 17,18,19
                 """
             )
             parser.add_argument('--skip-wait', action='store_true',
@@ -3439,7 +4873,7 @@ async def main(skip_wait: bool = False):
             try:
                 condition_indices = [int(x.strip()) for x in args.conditions.split(',')]
             except:
-                console.print("[red]❌ --conditions 파라미터 오류: 쉼표로 구분된 숫자를 입력하세요 (예: 0,1,2)[/red]")
+                console.print("[red]❌ --conditions 파라미터 오류: 쉼표로 구분된 숫자를 입력하세요 (예: 17,18,19)[/red]")
                 return
 
     # args 객체 생성 (main_menu.py 호출 시)
@@ -3545,5 +4979,10 @@ async def main(skip_wait: bool = False):
 
 
 if __name__ == "__main__":
+    # 🔧 중복 프로세스 방지
+    if not check_and_create_pid_lock():
+        import sys
+        sys.exit(1)
+
     # 직접 실행 시 argparse가 처리하므로 skip_wait=False로 시작
     asyncio.run(main(skip_wait=False))

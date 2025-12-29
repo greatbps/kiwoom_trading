@@ -518,3 +518,32 @@
 2025-11-03 14:22:35,540 - ERROR - 065440: 비정상 현재가 -1609 (realtime=None, df_close=-1609)
 2025-11-03 14:22:35,625 - ERROR - 011930: 비정상 현재가 -1818 (realtime=None, df_close=-1818)
 2025-11-03 14:22:36,056 - ERROR - 009420: 비정상 현재가 -34150 (realtime=None, df_close=-34150)
+2025-12-22 10:44:35,136 - ERROR - ❌ 100790: [Errno 32] Broken pipe
+Traceback (most recent call last):
+  File "/home/greatbps/projects/kiwoom_trading/main_auto_trading.py", line 2038, in check_all_stocks
+    console.print(f"[dim]  ✓ {stock_code}: 키움 {len(df)}개 봉 (시간 정렬 완료, 최신: {df['cntr_tm'].iloc[-1]})[/dim]")
+  File "/usr/lib/python3/dist-packages/rich/console.py", line 1673, in print
+    with self:
+  File "/usr/lib/python3/dist-packages/rich/console.py", line 865, in __exit__
+    self._exit_buffer()
+  File "/usr/lib/python3/dist-packages/rich/console.py", line 823, in _exit_buffer
+    self._check_buffer()
+  File "/usr/lib/python3/dist-packages/rich/console.py", line 2065, in _check_buffer
+    self.file.flush()
+BrokenPipeError: [Errno 32] Broken pipe
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/greatbps/projects/kiwoom_trading/main_auto_trading.py", line 2044, in check_all_stocks
+    console.print(f"[dim]  ⚠️  {stock_code}: 키움 API 오류 - {e}[/dim]")
+  File "/usr/lib/python3/dist-packages/rich/console.py", line 1673, in print
+    with self:
+  File "/usr/lib/python3/dist-packages/rich/console.py", line 865, in __exit__
+    self._exit_buffer()
+  File "/usr/lib/python3/dist-packages/rich/console.py", line 823, in _exit_buffer
+    self._check_buffer()
+  File "/usr/lib/python3/dist-packages/rich/console.py", line 2065, in _check_buffer
+    self.file.flush()
+BrokenPipeError: [Errno 32] Broken pipe
+

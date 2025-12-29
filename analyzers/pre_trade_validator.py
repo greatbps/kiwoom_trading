@@ -123,14 +123,14 @@ class PreTradeValidator:
 
         # 샘플이 전혀 없는 경우 (0건)
         if stats['total_trades'] == 0:
-            # Stage 3: 완전 차단
+            # Stage 3: 완전 차단 대신 극소량 탐색 진입 허용
             stats['fallback_stage'] = 3
-            stats['entry_ratio'] = 0.0
+            stats['entry_ratio'] = 0.2  # 20% 진입 허용
             stats['warning_flag'] = True
 
-            reason = f"❌ Stage 3 Fallback: 샘플 전무 (0회)\n"
-            reason += "→ RiskManager 주의 플래그 설정 + 후보 제외"
-            return False, reason, stats
+            reason = f"⚠️ Stage 3 Fallback: 샘플 전무 (0회)\n"
+            reason += "→ 극소량 탐색 진입 (entry_ratio=0.2, confidence=0.2)"
+            return True, reason, stats
 
         # 샘플이 1건만 있는 경우
         elif stats['total_trades'] == 1:
