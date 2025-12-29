@@ -977,6 +977,9 @@ class IntegratedTradingSystem:
                     if not entry_date:
                         entry_date = datetime.now()
 
+                    # 🔧 FIX: 기존 트레일링 스탑 상태 보존
+                    existing_position = self.positions.get(stock_code, {})
+
                     self.positions[stock_code] = {
                         'stock_name': stock_name,
                         'name': stock_name,  # 하위 호환성
@@ -986,7 +989,12 @@ class IntegratedTradingSystem:
                         'current_price': current_price,
                         'profit_rate': profit_rate,
                         'eval_amount': quantity * current_price,
-                        'entry_date': entry_date  # 🔧 FIX: DB에서 조회한 실제 매수일자
+                        'entry_date': entry_date,  # 🔧 FIX: DB에서 조회한 실제 매수일자
+                        # 🔧 FIX: 트레일링 스탑 상태 보존
+                        'highest_price': existing_position.get('highest_price', avg_price),
+                        'trailing_active': existing_position.get('trailing_active', False),
+                        'trailing_stop_price': existing_position.get('trailing_stop_price'),
+                        'partial_exit_stage': existing_position.get('partial_exit_stage', 0)
                     }
 
                     console.print(f"  • {stock_name}({stock_code}): {quantity}주 @ {current_price:,}원 "
@@ -3139,7 +3147,16 @@ class IntegratedTradingSystem:
 
             # 수익률 계산
             profit_pct = ((current_price - position['entry_price']) / position['entry_price']) * 100
-            console.print(f"[dim]  💰 {stock_code}: 현재가 {current_price:,.0f}원, 진입가 {position['entry_price']:,.0f}원, 수익률 {profit_pct:+.2f}%[/dim]")
+
+            # 🔧 FIX: 트레일링 스탑 상태 로그 추가
+            trailing_status = ""
+            if position.get('trailing_active'):
+                highest = position.get('highest_price', 0)
+                stop_price = position.get('trailing_stop_price', 0)
+                max_profit = ((highest - position['entry_price']) / position['entry_price']) * 100
+                trailing_status = f" | 트레일링활성 (최고:{highest:,.0f}원 +{max_profit:.2f}%, 스탑:{stop_price:,.0f}원)"
+
+            console.print(f"[dim]  💰 {stock_code}: 현재가 {current_price:,.0f}원, 진입가 {position['entry_price']:,.0f}원, 수익률 {profit_pct:+.2f}%{trailing_status}[/dim]")
 
             # ✅ TradeStateManager에 최고 수익률 업데이트
             self.state_manager.update_max_profit(stock_code, profit_pct)

@@ -1,143 +1,33 @@
 {
   "initial_balance": 353780.0,
-  "today": "2025-12-26",
+  "today": "2025-12-29",
   "daily_trades": [
     {
-      "timestamp": "2025-12-26T10:30:09.311336",
-      "stock_code": "049630",
-      "stock_name": "재영솔루텍",
-      "type": "BUY",
-      "quantity": 7,
-      "price": 4175.0,
-      "amount": 29225.0,
-      "realized_pnl": 0.0
-    },
-    {
-      "timestamp": "2025-12-26T10:35:11.192317",
-      "stock_code": "049630",
-      "stock_name": "재영솔루텍",
-      "type": "SELL",
-      "quantity": 7,
-      "price": 4105.0,
-      "amount": 28735.0,
-      "realized_pnl": -490.0
-    },
-    {
-      "timestamp": "2025-12-26T14:03:15.707829",
+      "timestamp": "2025-12-29T15:01:48.031714",
       "stock_code": "476060",
       "stock_name": "온코닉테라퓨틱스",
-      "type": "BUY",
-      "quantity": 1,
-      "price": 21050.0,
-      "amount": 21050.0,
-      "realized_pnl": 0.0
-    },
-    {
-      "timestamp": "2025-12-26T15:00:40.897753",
-      "stock_code": "100790",
-      "stock_name": "미래에셋벤처투자",
       "type": "SELL",
-      "quantity": 2,
-      "price": 13430.0,
-      "amount": 26860.0,
-      "realized_pnl": 160.0
+      "quantity": 1,
+      "price": 22000.0,
+      "amount": 22000.0,
+      "realized_pnl": 950.0
     }
   ],
-  "daily_realized_pnl": -330.0,
-  "week_start": "2025-12-22",
+  "daily_realized_pnl": 950.0,
+  "week_start": "2025-12-29",
   "weekly_trades": [
     {
-      "timestamp": "2025-12-22T11:01:22.517712",
-      "stock_code": "475830",
-      "stock_name": "오름테라퓨틱",
-      "type": "SELL",
-      "quantity": 2,
-      "price": 94800.0,
-      "amount": 189600.0,
-      "realized_pnl": -4400.0
-    },
-    {
-      "timestamp": "2025-12-23T10:03:57.549963",
-      "stock_code": "124500",
-      "stock_name": "아이티센글로벌",
-      "type": "BUY",
-      "quantity": 1,
-      "price": 31000.0,
-      "amount": 31000.0,
-      "realized_pnl": 0.0
-    },
-    {
-      "timestamp": "2025-12-23T15:13:09.163397",
-      "stock_code": "124500",
-      "stock_name": "아이티센글로벌",
-      "type": "SELL",
-      "quantity": 1,
-      "price": 31400.0,
-      "amount": 31400.0,
-      "realized_pnl": 400.0
-    },
-    {
-      "timestamp": "2025-12-24T10:18:46.428131",
-      "stock_code": "090710",
-      "stock_name": "휴림로봇",
-      "type": "BUY",
-      "quantity": 5,
-      "price": 6590.0,
-      "amount": 32950.0,
-      "realized_pnl": 0.0
-    },
-    {
-      "timestamp": "2025-12-24T10:48:58.366008",
-      "stock_code": "090710",
-      "stock_name": "휴림로봇",
-      "type": "BUY",
-      "quantity": 4,
-      "price": 6610.0,
-      "amount": 26440.0,
-      "realized_pnl": 0.0
-    },
-    {
-      "timestamp": "2025-12-26T10:30:09.311336",
-      "stock_code": "049630",
-      "stock_name": "재영솔루텍",
-      "type": "BUY",
-      "quantity": 7,
-      "price": 4175.0,
-      "amount": 29225.0,
-      "realized_pnl": 0.0
-    },
-    {
-      "timestamp": "2025-12-26T10:35:11.192317",
-      "stock_code": "049630",
-      "stock_name": "재영솔루텍",
-      "type": "SELL",
-      "quantity": 7,
-      "price": 4105.0,
-      "amount": 28735.0,
-      "realized_pnl": -490.0
-    },
-    {
-      "timestamp": "2025-12-26T14:03:15.707829",
+      "timestamp": "2025-12-29T15:01:48.031714",
       "stock_code": "476060",
       "stock_name": "온코닉테라퓨틱스",
-      "type": "BUY",
-      "quantity": 1,
-      "price": 21050.0,
-      "amount": 21050.0,
-      "realized_pnl": 0.0
-    },
-    {
-      "timestamp": "2025-12-26T15:00:40.897753",
-      "stock_code": "100790",
-      "stock_name": "미래에셋벤처투자",
       "type": "SELL",
-      "quantity": 2,
-      "price": 13430.0,
-      "amount": 26860.0,
-      "realized_pnl": 160.0
+      "quantity": 1,
+      "price": 22000.0,
+      "amount": 22000.0,
+      "realized_pnl": 950.0
     }
   ],
-  "weekly_realized_pnl": -4330.0,
+  "weekly_realized_pnl": 950.0,
   "consecutive_losses": 0,
   "cooldown_until": null
 }

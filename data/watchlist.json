@@ -1,74 +1,14 @@
 [
   {
-    "stock_code": "101170",
-    "stock_name": "우림피티에스",
+    "stock_code": "217730",
+    "stock_name": "강스템바이오텍",
     "market": "KOSPI",
-    "rs_rating": 93.54838709677419,
-    "ai_score": 0,
-    "win_rate": 100.0,
-    "avg_profit_pct": 13.545625161668264,
-    "total_trades": 6,
-    "profit_factor": 382280.0,
-    "last_check_time": "2025-12-28T08:50:26.941206"
-  },
-  {
-    "stock_code": "476060",
-    "stock_name": "온코닉테라퓨틱스",
-    "market": "KOSDAQ",
-    "rs_rating": 80.64516129032258,
-    "ai_score": 0,
-    "win_rate": 100.0,
-    "avg_profit_pct": 1.9656019656019657,
-    "total_trades": 3,
-    "profit_factor": 30650.0,
-    "last_check_time": "2025-12-28T08:50:26.941224"
-  },
-  {
-    "stock_code": "030530",
-    "stock_name": "원익홀딩스",
-    "market": "KOSPI",
-    "rs_rating": 90.32258064516128,
-    "ai_score": 0,
-    "win_rate": 0,
-    "avg_profit_pct": 0,
-    "total_trades": 0,
-    "profit_factor": 0,
-    "last_check_time": "2025-12-28T08:50:26.941229"
-  },
-  {
-    "stock_code": "049630",
-    "stock_name": "재영솔루텍",
-    "market": "KOSPI",
-    "rs_rating": 96.7741935483871,
-    "ai_score": 0,
-    "win_rate": 0,
-    "avg_profit_pct": 0,
-    "total_trades": 0,
-    "profit_factor": 0,
-    "last_check_time": "2025-12-28T08:50:26.941233"
-  },
-  {
-    "stock_code": "298830",
-    "stock_name": "슈어소프트테크",
-    "market": "KOSPI",
-    "rs_rating": 83.87096774193549,
-    "ai_score": 0,
-    "win_rate": 0,
-    "avg_profit_pct": 0,
-    "total_trades": 0,
-    "profit_factor": 0,
-    "last_check_time": "2025-12-28T08:50:26.941237"
-  },
-  {
-    "stock_code": "417970",
-    "stock_name": "모델솔루션",
-    "market": "KOSDAQ",
-    "rs_rating": 87.09677419354838,
+    "rs_rating": 83.33333333333334,
     "ai_score": 0,
     "win_rate": 0.0,
-    "avg_profit_pct": -2.549019607843137,
+    "avg_profit_pct": -1.6023738872403561,
     "total_trades": 1,
     "profit_factor": 0.0,
-    "last_check_time": "2025-12-28T08:50:26.941241"
+    "last_check_time": "2025-12-29T15:09:44.835340"
   }
 ]
