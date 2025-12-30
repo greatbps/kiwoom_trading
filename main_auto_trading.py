@@ -977,25 +977,38 @@ class IntegratedTradingSystem:
                     if not entry_date:
                         entry_date = datetime.now()
 
-                    # 🔧 FIX: 기존 트레일링 스탑 상태 보존
-                    existing_position = self.positions.get(stock_code, {})
-
-                    self.positions[stock_code] = {
-                        'stock_name': stock_name,
-                        'name': stock_name,  # 하위 호환성
-                        'quantity': quantity,
-                        'avg_price': avg_price,
-                        'entry_price': avg_price,  # 하위 호환성
-                        'current_price': current_price,
-                        'profit_rate': profit_rate,
-                        'eval_amount': quantity * current_price,
-                        'entry_date': entry_date,  # 🔧 FIX: DB에서 조회한 실제 매수일자
-                        # 🔧 FIX: 트레일링 스탑 상태 보존
-                        'highest_price': existing_position.get('highest_price', avg_price),
-                        'trailing_active': existing_position.get('trailing_active', False),
-                        'trailing_stop_price': existing_position.get('trailing_stop_price'),
-                        'partial_exit_stage': existing_position.get('partial_exit_stage', 0)
-                    }
+                    # 🔧 FIX: 기존 position 데이터 보존 (모든 필드 유지)
+                    if stock_code in self.positions:
+                        # 기존 포지션이 있으면 업데이트만
+                        self.positions[stock_code].update({
+                            'stock_name': stock_name,
+                            'name': stock_name,
+                            'quantity': quantity,
+                            'avg_price': avg_price,
+                            'entry_price': avg_price,
+                            'current_price': current_price,
+                            'profit_rate': profit_rate,
+                            'eval_amount': quantity * current_price,
+                            'entry_date': entry_date
+                        })
+                    else:
+                        # 신규 포지션이면 새로 생성
+                        self.positions[stock_code] = {
+                            'stock_name': stock_name,
+                            'name': stock_name,
+                            'quantity': quantity,
+                            'avg_price': avg_price,
+                            'entry_price': avg_price,
+                            'current_price': current_price,
+                            'profit_rate': profit_rate,
+                            'eval_amount': quantity * current_price,
+                            'entry_date': entry_date,
+                            'highest_price': avg_price,
+                            'trailing_active': False,
+                            'trailing_stop_price': None,
+                            'partial_exit_stage': 0,
+                            'gap_reentered_today': False
+                        }
 
                     console.print(f"  • {stock_name}({stock_code}): {quantity}주 @ {current_price:,}원 "
                                 f"[{'green' if profit_rate >= 0 else 'red'}]{profit_rate:+.2f}%[/]")
@@ -1316,6 +1329,12 @@ class IntegratedTradingSystem:
             bottom_stocks = {}  # {stock_code: condition_idx} (backward compatibility)
             stock_to_condition_map = {}  # ✅ 모든 종목의 조건 인덱스 추적
 
+            # DEBUG 로그
+            with open('data/debug_log.txt', 'a', encoding='utf-8') as f:
+                f.write(f"[{datetime.now()}] 사용 조건식 인덱스: {self.condition_indices}\n")
+                f.write(f"  전체 조건식 수: {len(self.condition_list)}\n")
+                f.flush()
+
             for idx in self.condition_indices:
                 if idx < len(self.condition_list):
                     condition = self.condition_list[idx]
@@ -1323,8 +1342,16 @@ class IntegratedTradingSystem:
                     name = condition[1]
 
                     console.print(f"[yellow]조건식 [{idx}] {name} 검색 중...[/yellow]")
+
                     stocks = await self.search_condition(seq, name)
                     console.print(f"  ✅ {len(stocks)}개 종목 발견")
+
+                    # DEBUG 로그
+                    with open('data/debug_log.txt', 'a', encoding='utf-8') as f:
+                        f.write(f"[{datetime.now()}] 조건식 [{idx}] '{name}' → {len(stocks)}개 종목\n")
+                        if stocks:
+                            f.write(f"  종목코드: {list(stocks)[:5]}\n")  # 최대 5개만
+                        f.flush()
 
                     # ✅ Bottom 전략 분기 처리
                     if idx in bottom_indices:
@@ -1341,12 +1368,28 @@ class IntegratedTradingSystem:
                         all_stocks.update(stocks)
 
                     await asyncio.sleep(0.5)
+                else:
+                    # 인덱스가 범위를 벗어남
+                    with open('data/debug_log.txt', 'a', encoding='utf-8') as f:
+                        f.write(f"[{datetime.now()}] ⚠️ 조건식 인덱스 [{idx}] 범위 초과 (전체: {len(self.condition_list)}개)\n")
+                        f.flush()
+                    console.print(f"[red]⚠️ 조건식 인덱스 [{idx}] 범위 초과[/red]")
 
             console.print()
             console.print(f"[bold green]1차 필터 통과: 총 {len(all_stocks)}개 종목[/bold green]")
 
+            # DEBUG 로그
+            with open('data/debug_log.txt', 'a', encoding='utf-8') as f:
+                f.write(f"[{datetime.now()}] 1차 필터(조건검색) 결과: {len(all_stocks)}개 종목\n")
+                if all_stocks:
+                    f.write(f"  종목: {list(all_stocks)[:10]}\n")  # 최대 10개만 출력
+                f.flush()
+
             if not all_stocks:
                 console.print("[yellow]⚠️  조건검색 결과 없음[/yellow]")
+                with open('data/debug_log.txt', 'a', encoding='utf-8') as f:
+                    f.write(f"[{datetime.now()}] ⚠️ 조건검색 결과 없음 - 필터링 종료\n")
+                    f.flush()
                 return
 
             # L2: RS 필터 적용
@@ -1539,6 +1582,16 @@ class IntegratedTradingSystem:
             console.print(f"  2차 필터 (VWAP):     {validated_count}개 종목 검증 통과", style="yellow")
             console.print(f"  최종 감시 종목:      {len(self.watchlist)}개", style="bold green" if len(self.watchlist) > 0 else "bold red")
             console.print()
+
+            # DEBUG 로그
+            with open('data/debug_log.txt', 'a', encoding='utf-8') as f:
+                f.write(f"[{datetime.now()}] 📊 필터링 결과 요약\n")
+                f.write(f"  1차 필터(조건검색): {len(all_stocks)}개\n")
+                f.write(f"  2차 필터(VWAP): {validated_count}개 통과\n")
+                f.write(f"  최종 감시 종목: {len(self.watchlist)}개\n")
+                if self.watchlist:
+                    f.write(f"  Watchlist: {list(self.watchlist)}\n")
+                f.flush()
 
             # 최종 선정 종목 표시
             if self.watchlist:
@@ -4649,19 +4702,89 @@ class IntegratedTradingSystem:
 
             # 5. 1차 + 2차 필터링 (08:50 ~ 09:00)
             console.print("\n[2단계] 필터링 시작 (08:50)")
-            await self.run_condition_filtering()
+
+            # DEBUG 로그 파일에 기록
+            import sys
+            with open('data/debug_log.txt', 'a', encoding='utf-8') as f:
+                f.write(f"\n[{datetime.now()}] 조건검색 실행 전...\n")
+                f.flush()
+            console.print("[dim]DEBUG: 조건검색 실행 전...[/dim]")
+            sys.stdout.flush()
+
+            try:
+                await self.run_condition_filtering()
+            except Exception as e:
+                error_msg = f"조건검색 중 에러: {e}"
+                with open('data/debug_log.txt', 'a', encoding='utf-8') as f:
+                    f.write(f"[{datetime.now()}] ❌ {error_msg}\n")
+                    import traceback
+                    f.write(traceback.format_exc())
+                    f.flush()
+                console.print(f"[red]❌ {error_msg}[/red]")
+                import traceback
+                traceback.print_exc()
+                sys.stdout.flush()
+                raise
+
+            with open('data/debug_log.txt', 'a', encoding='utf-8') as f:
+                f.write(f"[{datetime.now()}] 조건검색 완료!\n")
+                f.flush()
+            console.print("[dim]DEBUG: 조건검색 완료![/dim]")
+            sys.stdout.flush()
 
             # 선정 종목이 없으면 오늘은 종료 (✅ Bottom Pullback 신호도 체크)
-            bottom_signals = self.bottom_manager.get_signal_watchlist() if hasattr(self, 'bottom_manager') else {}
+            with open('data/debug_log.txt', 'a', encoding='utf-8') as f:
+                f.write(f"[{datetime.now()}] bottom_signals 조회 중...\n")
+                f.flush()
+            console.print("[dim]DEBUG: bottom_signals 조회 중...[/dim]")
+            sys.stdout.flush()
+
+            try:
+                bottom_signals = self.bottom_manager.get_signal_watchlist() if hasattr(self, 'bottom_manager') else {}
+            except Exception as e:
+                error_msg = f"bottom_signals 조회 중 에러: {e}"
+                with open('data/debug_log.txt', 'a', encoding='utf-8') as f:
+                    f.write(f"[{datetime.now()}] ❌ {error_msg}\n")
+                    import traceback
+                    f.write(traceback.format_exc())
+                    f.flush()
+                console.print(f"[red]❌ {error_msg}[/red]")
+                import traceback
+                traceback.print_exc()
+                sys.stdout.flush()
+                raise
+
+            with open('data/debug_log.txt', 'a', encoding='utf-8') as f:
+                f.write(f"[{datetime.now()}] bottom_signals 완료 ({len(bottom_signals)}개)\n")
+                f.flush()
+            console.print(f"[dim]DEBUG: bottom_signals 완료 ({len(bottom_signals)}개)[/dim]")
+            sys.stdout.flush()
+
+            with open('data/debug_log.txt', 'a', encoding='utf-8') as f:
+                f.write(f"[{datetime.now()}] watchlist 체크: {len(self.watchlist)}개\n")
+                f.flush()
+
             if not self.watchlist and not bottom_signals:
-                console.print("[yellow]⚠️  선정된 종목이 없습니다. 오늘 거래 없음.[/yellow]")
-                return
+                # 🔧 FIX: 장중에는 return하지 않고 빈 watchlist로 모니터링 계속
+                now = datetime.now()
+                market_close = now.replace(hour=15, minute=30, second=0, microsecond=0)
+
+                if now < market_close:
+                    # 아직 장중이면 빈 watchlist로 모니터링 계속 (보유 종목 관리)
+                    console.print("[yellow]⚠️  선정된 종목이 없지만, 장중이므로 모니터링 계속합니다.[/yellow]")
+                    console.print("[dim]  (보유 종목이 있다면 청산 관리가 진행됩니다)[/dim]")
+                else:
+                    # 장 마감 후에는 종료
+                    console.print("[yellow]⚠️  선정된 종목이 없습니다. 오늘 거래 없음.[/yellow]")
+                    return
             elif not self.watchlist and bottom_signals:
                 console.print(f"[cyan]ℹ️  Momentum 종목: 0개, Bottom Pullback 신호: {len(bottom_signals)}개[/cyan]")
 
             # 6. WebSocket 종료 (REST API만 사용)
+            console.print("[dim]DEBUG: WebSocket 종료 중...[/dim]")
             if self.websocket:
                 await self.websocket.close()
+            console.print("[dim]DEBUG: WebSocket 종료 완료[/dim]")
 
             # 7. 09:00까지 대기 (이미 지났으면 바로 시작)
             now = datetime.now()
@@ -4673,15 +4796,19 @@ class IntegratedTradingSystem:
                 console.print()
             elif now < market_open:
                 # 아직 09:00 전이면 대기
+                console.print("[dim]DEBUG: 09:00까지 대기 중...[/dim]")
                 await self.wait_until_time(9, 0)
+                console.print("[dim]DEBUG: 대기 완료![/dim]")
             else:
                 # 이미 09:00 지났으면 바로 시작
                 console.print(f"[cyan]⏰ 현재 시간: {now.strftime('%H:%M')} - 바로 모니터링 시작합니다.[/cyan]")
                 console.print()
 
             # 🔥 ChatGPT Fix: 갭업 재진입 플래그 리셋 (하루 시작 시)
+            console.print(f"[dim]DEBUG: gap_reentered_today 리셋 중 (positions: {len(self.positions)}개)...[/dim]")
             for pos in self.positions.values():
                 pos['gap_reentered_today'] = False
+            console.print("[dim]DEBUG: gap_reentered_today 리셋 완료![/dim]")
 
             # ✅ Phase 3: 우선 감시 리스트 로드 및 갭업 재진입 체크
             console.print("\n[2.5단계] 우선 감시 리스트 체크 (갭업 재진입)")
@@ -4853,6 +4980,7 @@ async def main(skip_wait: bool = False):
     """
     import argparse
     import sys
+    import traceback
 
     # Argparse 처리 (커맨드라인 실행 시)
     args = None
@@ -4951,9 +5079,22 @@ async def main(skip_wait: bool = False):
 
     # 통합 시스템 생성 및 실행
     console.print(f"[초기화] 통합 시스템 생성 (조건식 {len(condition_indices)}개)")
-    system = IntegratedTradingSystem(api.access_token, api, condition_indices, skip_wait=args.skip_wait)
-    console.print("  ✓ 완료")
-    console.print()
+    try:
+        system = IntegratedTradingSystem(api.access_token, api, condition_indices, skip_wait=args.skip_wait)
+        console.print("  ✓ 완료")
+        console.print()
+    except Exception as e:
+        error_msg = f"시스템 초기화 오류: {e}\n{traceback.format_exc()}"
+        console.print(f"[red]❌ {error_msg}[/red]")
+        # 에러 로그 파일에 저장
+        with open('data/error_log.txt', 'a', encoding='utf-8') as f:
+            from datetime import datetime
+            f.write(f"\n{'='*80}\n")
+            f.write(f"[{datetime.now()}] 시스템 초기화 오류\n")
+            f.write(f"{'='*80}\n")
+            f.write(error_msg)
+            f.write(f"\n{'='*80}\n")
+        raise
 
     # dry-run 모드 설정
     if args.dry_run:
@@ -4992,7 +5133,20 @@ async def main(skip_wait: bool = False):
     signal.signal(signal.SIGINT, signal_handler)
 
     # 시스템 실행
-    await system.run()
+    try:
+        await system.run()
+    except Exception as e:
+        error_msg = f"시스템 실행 오류: {e}\n{traceback.format_exc()}"
+        console.print(f"[red]❌ {error_msg}[/red]")
+        # 에러 로그 파일에 저장
+        with open('data/error_log.txt', 'a', encoding='utf-8') as f:
+            from datetime import datetime
+            f.write(f"\n{'='*80}\n")
+            f.write(f"[{datetime.now()}] 시스템 실행 오류\n")
+            f.write(f"{'='*80}\n")
+            f.write(error_msg)
+            f.write(f"\n{'='*80}\n")
+        raise
 
 
 if __name__ == "__main__":

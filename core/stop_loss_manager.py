@@ -44,7 +44,7 @@ class StopLossManager:
         try:
             while True:
                 if self.console:
-                    self.console.clear()
+                    # self.console.clear()  # 🔧 임시 비활성화 (에러 확인용)
                     self.console.print(Panel.fit(
                         "🛡️ 자동 손절 관리 시스템\n"
                         "보유 종목의 손절 규칙을 설정하고 관리합니다.",

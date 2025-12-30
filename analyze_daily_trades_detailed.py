@@ -9,6 +9,7 @@ from pathlib import Path
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
+from rich.markup import escape  # 🔧 FIX: markup 에러 방지용
 
 console = Console()
 
@@ -59,12 +60,16 @@ def analyze_today_detailed(date_str: str = None):
 
     # 🔧 FIX: Rich markup 에러 방지 - 색상을 변수로 분리
     pnl_color = 'green' if daily_pnl >= 0 else 'red'
+
+    # 🔧 FIX: Division by zero 방지
+    pnl_pct = (daily_pnl / total_buy_amount * 100) if total_buy_amount > 0 else 0.0
+
     console.print(Panel.fit(
         f"[cyan]총 거래:[/cyan] {len(trades)}건 (BUY {len(buy_trades)}, SELL {len(sell_trades)})\n"
         f"[cyan]총 매수금액:[/cyan] {total_buy_amount:,.0f}원\n"
         f"[cyan]총 매도금액:[/cyan] {total_sell_amount:,.0f}원\n"
         f"[{pnl_color}]실현 손익:[/{pnl_color}] "
-        f"[{pnl_color}]{daily_pnl:+,.0f}원 ({daily_pnl/total_buy_amount*100:+.2f}%)[/{pnl_color}]",
+        f"[{pnl_color}]{daily_pnl:+,.0f}원 ({pnl_pct:+.2f}%)[/{pnl_color}]",
         title="[bold]📋 거래 요약[/bold]",
         border_style="cyan"
     ))
@@ -97,9 +102,10 @@ def analyze_today_detailed(date_str: str = None):
     for stock_code, stock_data in stocks.items():
         stock_trades = stock_data['trades']
         stock_name = stock_data['name']
+        safe_stock_name = escape(stock_name)  # 🔧 FIX: markup 에러 방지
 
         console.print(f"[bold yellow]{'─'*100}[/bold yellow]")
-        console.print(f"[bold yellow]🔸 {stock_name} ({stock_code})[/bold yellow]")
+        console.print(f"[bold yellow]🔸 {safe_stock_name} ({stock_code})[/bold yellow]")
         console.print(f"[bold yellow]{'─'*100}[/bold yellow]")
         console.print()
 
@@ -209,7 +215,8 @@ def analyze_today_detailed(date_str: str = None):
         # 종목별 총 손익
         stock_pnl = sum(s['realized_pnl'] for s in stock_data['sells'])
         stock_pnl_color = "green" if stock_pnl >= 0 else "red"
-        console.print(f"[{stock_pnl_color}]💰 {stock_name} 실현 손익: {stock_pnl:+,.0f}원[/{stock_pnl_color}]")
+        # 🔧 FIX: safe_stock_name은 이미 위에서 생성됨
+        console.print(f"[{stock_pnl_color}]💰 {safe_stock_name} 실현 손익: {stock_pnl:+,.0f}원[/{stock_pnl_color}]")
         console.print()
 
     # ========================================
@@ -252,7 +259,8 @@ def analyze_today_detailed(date_str: str = None):
         console.print(f"  [red]❌ 점심시간 거래 {len(midday)}건 발생[/red]")
         for t in midday:
             ts = datetime.fromisoformat(t['timestamp'])
-            console.print(f"     - {ts.strftime('%H:%M:%S')} {t['type']} {t['stock_name']}")
+            safe_name = escape(t['stock_name'])  # 🔧 FIX: markup 에러 방지
+            console.print(f"     - {ts.strftime('%H:%M:%S')} {t['type']} {safe_name}")
         issues.append("점심시간 거래")
         console.print()
 

@@ -48,7 +48,8 @@ signal.signal(signal.SIGINT, signal_handler)
 
 def clear_screen():
     """화면 클리어"""
-    os.system('clear' if os.name == 'posix' else 'cls')
+    pass  # 🔧 임시 비활성화 (에러 확인용)
+    # os.system('clear' if os.name == 'posix' else 'cls')
 
 
 def print_banner():

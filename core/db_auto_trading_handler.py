@@ -937,7 +937,7 @@ class DatabaseAutoTradingHandler:
                         layout["body"].update(monitoring_content)
                         
                         # 화면 클리어 후 출력
-                        self.console.clear()
+                        # self.console.clear()  # 🔧 임시 비활성화 (에러 확인용)
                         self.console.print(layout)
                         
                         # 사용자 입력 대기
@@ -966,9 +966,9 @@ class DatabaseAutoTradingHandler:
                 # 본문에 모니터링 현황
                 monitoring_content = await self._get_monitoring_content()
                 layout["body"].update(monitoring_content)
-                
+
                 # 화면 클리어 후 출력
-                self.console.clear()
+                # self.console.clear()  # 🔧 임시 비활성화 (에러 확인용)
                 self.console.print(layout)
                 
                 # 1분 대기 (사용자 입력 감지)
@@ -1004,9 +1004,9 @@ class DatabaseAutoTradingHandler:
                                 # 본문에 모니터링 현황 (보유 종목 + 감시 종목) 표시
                                 final_monitoring_content = await self._get_monitoring_content()
                                 final_layout["body"].update(final_monitoring_content)
-                                
+
                                 # 화면 클리어 후 출력
-                                self.console.clear()
+                                # self.console.clear()  # 🔧 임시 비활성화 (에러 확인용)
                                 self.console.print(final_layout)
                                 
                                 # 사용자 입력 대기

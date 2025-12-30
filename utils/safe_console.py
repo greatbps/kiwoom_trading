@@ -156,11 +156,12 @@ class SafeConsole:
     
     def clear(self):
         """콘솔 클리어"""
-        try:
-            self.console.clear()
-        except:
-            import os
-            os.system('cls' if os.name == 'nt' else 'clear')
+        pass  # 🔧 임시 비활성화 (에러 확인용)
+        # try:
+        #     self.console.clear()
+        # except:
+        #     import os
+        #     os.system('cls' if os.name == 'nt' else 'clear')
 
 # 전역 안전 콘솔 인스턴스
 safe_console = SafeConsole()

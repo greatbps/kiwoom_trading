@@ -1368,7 +1368,7 @@ class MenuHandlers:
         console.print(table)
 
     async def _display_realtime_status(self, status: Dict):
-        console.clear()
+        # console.clear()  # 🔧 임시 비활성화 (에러 확인용)
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         status_text = f"""
 [bold]실시간 시스템 상태 ({current_time})[/bold]
