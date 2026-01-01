@@ -1,0 +1,3 @@
+Traceback (most recent call last):
+  File "<string>", line 3, in <module>
+ImportError: cannot import name 'AutoTradingSystem' from 'main_auto_trading' (/home/greatbps/projects/kiwoom_trading/main_auto_trading.py)

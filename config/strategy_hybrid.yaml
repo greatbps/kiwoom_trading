@@ -115,6 +115,60 @@ vwap_exit:
   profit_threshold_for_ignore: 2.0  # +2.0% 이상에서는 VWAP 무시
   multi_condition_required: true    # 다중 조건 필요 (VWAP 단독 청산 방지)
 
+# ========================================
+# ✅ Squeeze Momentum 전략 설정 (LazyBear)
+# ========================================
+squeeze_momentum:
+  enabled: true                      # 스퀴즈 모멘텀 활성화
+
+  # 진입 조건 모드 선택
+  # "squeeze_only"  : 스퀴즈 모멘텀만 사용 (기존 L0-L6 필터 무시)
+  # "legacy_only"   : 기존 필터만 사용 (스퀴즈 모멘텀 무시)
+  # "hybrid"        : 둘 다 사용 (기존 필터 + 스퀴즈 모멘텀)
+  entry_mode: "squeeze_only"         # ✅ 담주 테스트: 스퀴즈 모멘텀만 사용
+
+  # 진입 필터
+  entry_filter:
+    enabled: true                    # 진입 시 스퀴즈 체크 활성화
+    require_bright_green: true       # Bright Green (가속) 필수
+    min_momentum: 0.0                # 최소 모멘텀 값
+
+  # 청산 필터
+  exit_filter:
+    enabled: true                    # 청산 시 스퀴즈 체크 활성화
+
+    # Dark Green (감속) - 부분 익절 (휴림로봇 성공 사례)
+    dark_green:
+      enabled: true
+      partial_exit_ratio: 0.3        # 30% 부분 익절
+      min_profit_pct: 1.0            # 최소 수익률 1%
+
+    # Red (반전) - 전량 청산
+    red:
+      enabled: true
+      full_exit: true                # 전량 청산
+      min_profit_pct: 0.5            # 최소 수익률 0.5%
+
+    # Bright Green (가속) - 보유 필수 (아이티센글로벌 교훈)
+    bright_green:
+      force_hold: true               # 절대 매도 금지
+      ignore_trailing_stop: false    # 트레일링 스탑은 유지 (과도한 손실 방지)
+
+  # 지표 파라미터
+  parameters:
+    bb_length: 20                    # Bollinger Bands 기간
+    bb_mult: 2.0                     # Bollinger Bands 배수
+    kc_length: 20                    # Keltner Channel 기간
+    kc_mult: 1.5                     # Keltner Channel 배수
+    mom_length: 20                   # 모멘텀 계산 기간
+
+  # 실전 통계 (docs/1231 분석 기반)
+  stats:
+    tested_stocks: ["휴림로봇", "모비스", "삼보모터스", "아이티센글로벌"]
+    success_rate: 0.25               # 신호 일치율 25% (1/4)
+    best_case: "휴림로봇"            # Dark Green 부분 익절 성공
+    worst_case: "아이티센글로벌"     # Bright Green 조기 익절로 8배 수익 상실
+
 time_based_exit:
   loss_breakeven_exit_time: "15:00:00"  # ⚠️ EOD Manager로 대체 예정 (Phase 1)
   final_force_exit_time: "15:05:00"     # ✅ 수정: 15:05 (15:00→15:05, API 지연 고려)

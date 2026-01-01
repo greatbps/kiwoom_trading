@@ -2,7 +2,7 @@
 최적화된 청산 로직 - 데이터 기반 손익비 개선
 
 주요 개선사항:
-1. 초기 실패 컷 추가 (30분 이내 -1.6%, 평균 손실 -2.03% 기반)
+1. 초기 실패 컷 추가 (15분 이내 -0.6%)
 2. VWAP 단독 청산 권한 약화 (다중 조건 필요)
 3. 트레일링 스탑 중심화
 4. 시간 비교 버그 수정
@@ -35,13 +35,8 @@ class OptimizedExitLogic:
         # 초기 실패 컷 설정
         self.early_failure = self.risk_control.get('early_failure', {})
         self.early_failure_enabled = self.early_failure.get('enabled', True)
-        self.early_failure_window = self.early_failure.get('window_minutes', 30)  # 🔧 FIX: 15→30분 (노이즈 견디기)
-        self.early_failure_loss = self.early_failure.get('loss_cut_pct', -1.6)    # 🔧 FIX: -0.6→-1.6% (평균 손실 -2.03%의 80%)
-
-        # 🔧 Phase 3: 최소 보유 시간 설정
-        self.min_hold_time = self.risk_control.get('min_hold_time', {})
-        self.min_hold_enabled = self.min_hold_time.get('enabled', False)
-        self.min_hold_minutes = self.min_hold_time.get('minutes', 30)
+        self.early_failure_window = self.early_failure.get('window_minutes', 15)
+        self.early_failure_loss = self.early_failure.get('loss_cut_pct', -0.6)
 
         # 부분 청산 설정
         self.partial_exit = config.get('partial_exit', {})
@@ -126,28 +121,15 @@ class OptimizedExitLogic:
         # 🔧 FIX: 문서 명세에 따른 청산 우선순위 재정렬
 
         # ========================================
-        # -1순위: 최소 보유 시간 체크 (Phase 3: 초단타 방지)
+        # 0순위: Early Failure Cut (최우선!) - 15분 이내 -0.6%
         # ========================================
-        entry_time = position.get('entry_time')
-        elapsed_minutes = 0
-        if entry_time:
-            elapsed_minutes = (datetime.now() - entry_time).total_seconds() / 60
-
-        # 🔧 Phase 3: 최소 보유 시간 이전에는 손절 금지 (하드 스톱 제외)
-        below_min_hold = False
-        if self.min_hold_enabled and elapsed_minutes < self.min_hold_minutes:
-            below_min_hold = True
-
-        # ========================================
-        # 0순위: Early Failure Cut (최우선!) - 30분 이내 -1.6%
-        # ========================================
-        # 📊 ML 개선 (2025-12-16): min_hold 체크 제거 - 손실 방지가 우선
-        # 버그: min_hold로 인해 early_failure가 작동 안 함 (0-30분 동안 비활성화)
-        # 결과: -1.6% 컷이 작동 안 하고 -2.5% 하드스탑까지 손실 확대
-        if self.early_failure_enabled:  # min_hold 체크 제거!
+        if self.early_failure_enabled:
+            entry_time = position.get('entry_time')
             if entry_time:
+                elapsed_minutes = (datetime.now() - entry_time).total_seconds() / 60
+
                 if elapsed_minutes <= self.early_failure_window:
-                    if profit_pct <= self.early_failure_loss:  # -1.6% 이하
+                    if profit_pct <= self.early_failure_loss:  # -0.6% 이하
                         return True, f"🚨 Early Failure Cut ({elapsed_minutes:.1f}분, {profit_pct:.2f}%)", {
                             'profit_pct': profit_pct,
                             'use_market_order': True,  # 시장가 즉시 청산
@@ -156,20 +138,10 @@ class OptimizedExitLogic:
                         }
 
         # ========================================
-        # 1순위: Hard Stop → 전량 시장가 손절 (문서 명세)
-        # 🔴 GPT 개선: 부분 청산 후 손절가 상향 (BE 보호)
+        # 1순위: Hard Stop (-3%) → 전량 시장가 손절 (문서 명세)
         # ========================================
-        # 부분 청산 단계에 따라 손절가 조정
-        partial_stage = position.get('partial_exit_stage', 0)
-        adjusted_hard_stop = self.hard_stop_pct
-
-        if partial_stage >= 1:  # 1차 부분 청산 후
-            adjusted_hard_stop = 0.3  # -0.3% (사실상 BE)
-        if partial_stage >= 2:  # 2차 부분 청산 후
-            adjusted_hard_stop = -0.2  # +0.2% 보장 (손절 → 익절로 전환)
-
-        if profit_pct <= -adjusted_hard_stop:
-            return True, f"Hard Stop (-{adjusted_hard_stop}%, {profit_pct:.2f}%) [부분청산 {partial_stage}차]", {
+        if profit_pct <= -self.hard_stop_pct:
+            return True, f"Hard Stop (-3%, {profit_pct:.2f}%)", {
                 'profit_pct': profit_pct,
                 'use_market_order': True,  # 시장가 플래그
                 'emergency': True
@@ -178,8 +150,7 @@ class OptimizedExitLogic:
         # ========================================
         # 2-3순위: 부분 청산 (문서 명세: +4%/40%, +6%/40%)
         # ========================================
-        # 🔧 FIX: 최소 보유 시간 체크 추가 (초단타 방지)
-        if self.partial_exit_enabled and not below_min_hold:
+        if self.partial_exit_enabled:
             partial_stage = position.get('partial_exit_stage', 0)
 
             # 역순으로 체크 (높은 수익부터)
@@ -195,82 +166,11 @@ class OptimizedExitLogic:
                     }
 
         # ========================================
-        # 3.5순위: Squeeze Momentum 청산 필터 (설정 활성화 시)
-        # ========================================
-        # 실전 분석 기반 색상별 액션:
-        # - Bright Green: 절대 보유 (아이티센글로벌 교훈)
-        # - Dark Green: 부분 익절 권장 (휴림로봇 성공)
-        # - Red: 전량 청산 권장
-
-        # position에서 설정 가져오기 (self.config가 없으면 건너뛰기)
-        if hasattr(self, 'config'):
-            squeeze_config = self.config.get('squeeze_momentum', {})
-        else:
-            squeeze_config = {}
-
-        if squeeze_config.get('enabled', False) and squeeze_config.get('exit_filter', {}).get('enabled', False):
-            from utils.squeeze_momentum_realtime import check_squeeze_momentum_filter
-
-            try:
-                sqz_passed, sqz_reason, sqz_details = check_squeeze_momentum_filter(df, for_entry=False)
-                sqz_color = sqz_details.get('color', 'gray')
-
-                # Bright Green: 강제 보유 (설정 활성화 시)
-                if sqz_color == 'bright_green' and squeeze_config.get('exit_filter', {}).get('bright_green', {}).get('force_hold', False):
-                    # 트레일링 스탑은 유지할지 확인
-                    ignore_trailing = squeeze_config.get('exit_filter', {}).get('bright_green', {}).get('ignore_trailing_stop', False)
-
-                    if not ignore_trailing:
-                        # 트레일링 스탑만 허용, 다른 청산은 차단
-                        console.print(f"[cyan]🟢 Squeeze: Bright Green - 보유 강제 (트레일링만 허용)[/cyan]")
-                        # 트레일링 스탑 체크는 다음 단계에서 진행
-                    else:
-                        # 모든 청산 차단
-                        console.print(f"[cyan]🟢 Squeeze: Bright Green - 보유 강제 (청산 금지)[/cyan]")
-                        return False, "Squeeze: Bright Green 보유 필수", None
-
-                # Dark Green: 부분 익절 권장 (수익 중일 때만)
-                elif sqz_color == 'dark_green':
-                    dark_green_config = squeeze_config.get('exit_filter', {}).get('dark_green', {})
-                    if dark_green_config.get('enabled', False):
-                        min_profit = dark_green_config.get('min_profit_pct', 1.0)
-
-                        if profit_pct >= min_profit:
-                            exit_ratio = dark_green_config.get('partial_exit_ratio', 0.3)
-                            console.print(f"[yellow]🟡 Squeeze: Dark Green - 부분 익절 권장 ({exit_ratio*100:.0f}%)[/yellow]")
-                            return False, f"Squeeze: Dark Green 부분익절 ({profit_pct:+.2f}%)", {
-                                'partial_exit': True,
-                                'stage': 99,  # 특수 스퀴즈 청산 단계
-                                'exit_ratio': exit_ratio,
-                                'profit_pct': profit_pct,
-                                'reason': 'SQUEEZE_DARK_GREEN'
-                            }
-
-                # Red (dark_red/bright_red): 전량 청산 권장
-                elif sqz_color in ['dark_red', 'bright_red']:
-                    red_config = squeeze_config.get('exit_filter', {}).get('red', {})
-                    if red_config.get('enabled', False) and red_config.get('full_exit', False):
-                        min_profit = red_config.get('min_profit_pct', 0.5)
-
-                        if profit_pct >= min_profit:
-                            console.print(f"[red]🔴 Squeeze: {sqz_color} - 전량 청산 권장[/red]")
-                            return True, f"Squeeze: {sqz_color} 모멘텀 반전 ({profit_pct:+.2f}%)", {
-                                'profit_pct': profit_pct,
-                                'reason': 'SQUEEZE_RED_REVERSAL'
-                            }
-
-            except Exception as e:
-                console.print(f"[dim]⚠️ Squeeze Momentum 청산 필터 오류: {e}[/dim]")
-                # 에러 시 무시하고 계속 진행
-
-        # ========================================
         # 4순위: ATR 트레일링 스탑 (문서 명세: 고가 - ATR×2)
         # ========================================
-        # 🔧 FIX: 최소 보유 시간 체크 추가 (초단타 방지)
-        # 단, 이미 활성화된 경우는 계속 추적 (손실 방지)
 
         # 이미 트레일링이 활성화된 경우 OR 활성화 조건 충족 시
-        if position.get('trailing_active') or (profit_pct >= self.trailing_activation and not below_min_hold):
+        if position.get('trailing_active') or profit_pct >= self.trailing_activation:
             # 트레일링 활성화
             position['trailing_active'] = True
 

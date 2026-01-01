@@ -1,14 +1,38 @@
 [
   {
-    "stock_code": "217730",
-    "stock_name": "강스템바이오텍",
+    "stock_code": "250060",
+    "stock_name": "모비스",
     "market": "KOSPI",
-    "rs_rating": 83.33333333333334,
+    "rs_rating": 85.71428571428571,
     "ai_score": 0,
-    "win_rate": 0.0,
-    "avg_profit_pct": -1.6023738872403561,
-    "total_trades": 1,
-    "profit_factor": 0.0,
-    "last_check_time": "2025-12-29T15:09:44.835340"
+    "win_rate": 100.0,
+    "avg_profit_pct": 3.1360647445624683,
+    "total_trades": 3,
+    "profit_factor": 8180.0,
+    "last_check_time": "2026-01-01T15:20:06.255821"
+  },
+  {
+    "stock_code": "032940",
+    "stock_name": "원익",
+    "market": "KOSPI",
+    "rs_rating": 80.95238095238095,
+    "ai_score": 0,
+    "win_rate": 100.0,
+    "avg_profit_pct": 1.411290322580645,
+    "total_trades": 2,
+    "profit_factor": 9500.0,
+    "last_check_time": "2026-01-01T15:20:06.255837"
+  },
+  {
+    "stock_code": "053700",
+    "stock_name": "삼보모터스",
+    "market": "KOSPI",
+    "rs_rating": 90.47619047619048,
+    "ai_score": 0,
+    "win_rate": 42.857142857142854,
+    "avg_profit_pct": 0.7823231083398436,
+    "total_trades": 7,
+    "profit_factor": 1.505,
+    "last_check_time": "2026-01-01T15:20:06.255842"
   }
 ]

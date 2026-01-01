@@ -1,0 +1,24 @@
+{
+  "simulation_date": "2025-12-16",
+  "improvements_applied": [
+    "점심시간 진입 차단 (12:00-14:00)",
+    "손절 쿨다운 30분 (익절 20분)",
+    "종목별 일일 최대 2회",
+    "부분청산 후 BE 보호",
+    "VWAP 필터 강화 (이격 0.4%, 기울기 0.05%)"
+  ],
+  "before": {
+    "total_trades": 11,
+    "realized_pnl": -2060.0
+  },
+  "after": {
+    "total_trades": 7,
+    "blocked_trades": 4,
+    "realized_pnl": -1090.0
+  },
+  "improvement": {
+    "pnl_diff": 970.0,
+    "pnl_diff_pct": 47.0873786407767,
+    "trades_reduced": 4
+  }
+}

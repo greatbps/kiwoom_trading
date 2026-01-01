@@ -1,19 +1,69 @@
 {
-  "initial_balance": 353780.0,
-  "today": "2025-12-29",
+  "initial_balance": 360112.0,
+  "today": "2025-12-30",
   "daily_trades": [
     {
-      "timestamp": "2025-12-29T15:01:48.031714",
-      "stock_code": "476060",
-      "stock_name": "온코닉테라퓨틱스",
+      "timestamp": "2025-12-30T10:56:23.279989",
+      "stock_code": "250060",
+      "stock_name": "모비스",
+      "type": "BUY",
+      "quantity": 7,
+      "price": 3965.0,
+      "amount": 27755.0,
+      "realized_pnl": 0.0
+    },
+    {
+      "timestamp": "2025-12-30T10:59:25.042648",
+      "stock_code": "489500",
+      "stock_name": "엘케이켐",
+      "type": "BUY",
+      "quantity": 1,
+      "price": 35850.0,
+      "amount": 35850.0,
+      "realized_pnl": 0.0
+    },
+    {
+      "timestamp": "2025-12-30T11:04:27.123552",
+      "stock_code": "489500",
+      "stock_name": "엘케이켐",
       "type": "SELL",
       "quantity": 1,
-      "price": 22000.0,
-      "amount": 22000.0,
-      "realized_pnl": 950.0
+      "price": 35100.0,
+      "amount": 35100.0,
+      "realized_pnl": -750.0
+    },
+    {
+      "timestamp": "2025-12-30T11:05:28.597628",
+      "stock_code": "250060",
+      "stock_name": "모비스",
+      "type": "SELL",
+      "quantity": 7,
+      "price": 3895.0,
+      "amount": 27265.0,
+      "realized_pnl": -490.0
+    },
+    {
+      "timestamp": "2025-12-30T14:04:47.284412",
+      "stock_code": "053700",
+      "stock_name": "삼보모터스",
+      "type": "BUY",
+      "quantity": 7,
+      "price": 6630.0,
+      "amount": 46410.0,
+      "realized_pnl": 0.0
+    },
+    {
+      "timestamp": "2025-12-30T14:08:48.483485",
+      "stock_code": "053700",
+      "stock_name": "삼보모터스",
+      "type": "SELL",
+      "quantity": 7,
+      "price": 6520.0,
+      "amount": 45640.0,
+      "realized_pnl": -770.0
     }
   ],
-  "daily_realized_pnl": 950.0,
+  "daily_realized_pnl": -2010.0,
   "week_start": "2025-12-29",
   "weekly_trades": [
     {
@@ -25,9 +75,69 @@
       "price": 22000.0,
       "amount": 22000.0,
       "realized_pnl": 950.0
+    },
+    {
+      "timestamp": "2025-12-30T10:56:23.279989",
+      "stock_code": "250060",
+      "stock_name": "모비스",
+      "type": "BUY",
+      "quantity": 7,
+      "price": 3965.0,
+      "amount": 27755.0,
+      "realized_pnl": 0.0
+    },
+    {
+      "timestamp": "2025-12-30T10:59:25.042648",
+      "stock_code": "489500",
+      "stock_name": "엘케이켐",
+      "type": "BUY",
+      "quantity": 1,
+      "price": 35850.0,
+      "amount": 35850.0,
+      "realized_pnl": 0.0
+    },
+    {
+      "timestamp": "2025-12-30T11:04:27.123552",
+      "stock_code": "489500",
+      "stock_name": "엘케이켐",
+      "type": "SELL",
+      "quantity": 1,
+      "price": 35100.0,
+      "amount": 35100.0,
+      "realized_pnl": -750.0
+    },
+    {
+      "timestamp": "2025-12-30T11:05:28.597628",
+      "stock_code": "250060",
+      "stock_name": "모비스",
+      "type": "SELL",
+      "quantity": 7,
+      "price": 3895.0,
+      "amount": 27265.0,
+      "realized_pnl": -490.0
+    },
+    {
+      "timestamp": "2025-12-30T14:04:47.284412",
+      "stock_code": "053700",
+      "stock_name": "삼보모터스",
+      "type": "BUY",
+      "quantity": 7,
+      "price": 6630.0,
+      "amount": 46410.0,
+      "realized_pnl": 0.0
+    },
+    {
+      "timestamp": "2025-12-30T14:08:48.483485",
+      "stock_code": "053700",
+      "stock_name": "삼보모터스",
+      "type": "SELL",
+      "quantity": 7,
+      "price": 6520.0,
+      "amount": 45640.0,
+      "realized_pnl": -770.0
     }
   ],
-  "weekly_realized_pnl": 950.0,
-  "consecutive_losses": 0,
-  "cooldown_until": null
+  "weekly_realized_pnl": -1060.0,
+  "consecutive_losses": 3,
+  "cooldown_until": "2025-12-30T15:30:00"
 }

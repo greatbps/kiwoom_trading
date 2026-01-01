@@ -1,0 +1,155 @@
+{
+  "period": {
+    "start": "2025-12-15",
+    "end": "2025-12-17"
+  },
+  "summary": {
+    "total_trades": 11,
+    "realized_pnl": -2060.0,
+    "buy_count": 5,
+    "sell_count": 6
+  },
+  "daily_summary": {
+    "2025-12-16": {
+      "trades": 11,
+      "buy": 5,
+      "sell": 6,
+      "pnl": -2060.0
+    }
+  },
+  "stock_summary": {
+    "217330 (싸이토젠)": {
+      "buy_qty": 29,
+      "sell_qty": 21,
+      "buy_amount": 146720.0,
+      "sell_amount": 104110.0,
+      "realized_pnl": -2110.0
+    },
+    "049950 (미래컴퍼니)": {
+      "buy_qty": 0,
+      "sell_qty": 1,
+      "buy_amount": 0,
+      "sell_amount": 17960.0,
+      "realized_pnl": 260.0
+    },
+    "039860 (나노엔텍)": {
+      "buy_qty": 7,
+      "sell_qty": 7,
+      "buy_amount": 33985.0,
+      "sell_amount": 33775.0,
+      "realized_pnl": -210.0
+    }
+  },
+  "trades": [
+    {
+      "timestamp": "2025-12-16T11:18:37.522947",
+      "stock_code": "217330",
+      "stock_name": "싸이토젠",
+      "type": "BUY",
+      "quantity": 10,
+      "price": 4980.0,
+      "amount": 49800.0,
+      "realized_pnl": 0.0
+    },
+    {
+      "timestamp": "2025-12-16T11:20:36.777979",
+      "stock_code": "217330",
+      "stock_name": "싸이토젠",
+      "type": "SELL",
+      "quantity": 10,
+      "price": 4845.0,
+      "amount": 48450.0,
+      "realized_pnl": -1350.0
+    },
+    {
+      "timestamp": "2025-12-16T12:18:58.247179",
+      "stock_code": "217330",
+      "stock_name": "싸이토젠",
+      "type": "BUY",
+      "quantity": 7,
+      "price": 5060.0,
+      "amount": 35420.0,
+      "realized_pnl": 0.0
+    },
+    {
+      "timestamp": "2025-12-16T12:28:02.005813",
+      "stock_code": "217330",
+      "stock_name": "싸이토젠",
+      "type": "SELL",
+      "quantity": 1,
+      "price": 5100.0,
+      "amount": 5100.0,
+      "realized_pnl": 40.0
+    },
+    {
+      "timestamp": "2025-12-16T12:29:04.128466",
+      "stock_code": "217330",
+      "stock_name": "싸이토젠",
+      "type": "BUY",
+      "quantity": 6,
+      "price": 5070.0,
+      "amount": 30420.0,
+      "realized_pnl": 0.0
+    },
+    {
+      "timestamp": "2025-12-16T12:34:04.471333",
+      "stock_code": "049950",
+      "stock_name": "미래컴퍼니",
+      "type": "SELL",
+      "quantity": 1,
+      "price": 17960.0,
+      "amount": 17960.0,
+      "realized_pnl": 260.0
+    },
+    {
+      "timestamp": "2025-12-16T12:35:05.637979",
+      "stock_code": "217330",
+      "stock_name": "싸이토젠",
+      "type": "SELL",
+      "quantity": 4,
+      "price": 5110.0,
+      "amount": 20440.0,
+      "realized_pnl": 160.0
+    },
+    {
+      "timestamp": "2025-12-16T12:38:08.529449",
+      "stock_code": "217330",
+      "stock_name": "싸이토젠",
+      "type": "BUY",
+      "quantity": 6,
+      "price": 5180.0,
+      "amount": 31080.0,
+      "realized_pnl": 0.0
+    },
+    {
+      "timestamp": "2025-12-16T12:51:27.318162",
+      "stock_code": "217330",
+      "stock_name": "싸이토젠",
+      "type": "SELL",
+      "quantity": 6,
+      "price": 5020.0,
+      "amount": 30120.0,
+      "realized_pnl": -960.0
+    },
+    {
+      "timestamp": "2025-12-16T13:03:36.670306",
+      "stock_code": "039860",
+      "stock_name": "나노엔텍",
+      "type": "BUY",
+      "quantity": 7,
+      "price": 4855.0,
+      "amount": 33985.0,
+      "realized_pnl": 0.0
+    },
+    {
+      "timestamp": "2025-12-16T13:08:37.055470",
+      "stock_code": "039860",
+      "stock_name": "나노엔텍",
+      "type": "SELL",
+      "quantity": 7,
+      "price": 4825.0,
+      "amount": 33775.0,
+      "realized_pnl": -210.0
+    }
+  ]
+}

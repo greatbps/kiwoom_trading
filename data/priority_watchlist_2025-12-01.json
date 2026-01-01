@@ -1,0 +1,18 @@
+[
+  {
+    "stock_code": "000001",
+    "stock_name": "테스트종목1",
+    "prev_close": 50000.0,
+    "score": 0.75,
+    "eod_score": 0.75,
+    "market": "KOSPI"
+  },
+  {
+    "stock_code": "000002",
+    "stock_name": "테스트종목2",
+    "prev_close": 30000.0,
+    "score": 0.68,
+    "eod_score": 0.68,
+    "market": "KOSDAQ"
+  }
+]
