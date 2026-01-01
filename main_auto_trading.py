@@ -5215,15 +5215,15 @@ async def main(skip_wait: bool = False):
     # ========== 휴장일 체크 ==========
     is_trading, reason = is_trading_day()
     if not is_trading:
-        from datetime import datetime as dt, timedelta, time
         import time as time_module
+        from datetime import datetime as dt, timedelta, time as time_class
 
         next_trading = get_next_trading_day()
         next_str = next_trading.strftime('%Y-%m-%d (%a)') if next_trading else 'N/A'
 
         # 다음 거래일 09:00까지 대기
         if next_trading:
-            target_time = dt.combine(next_trading, time(9, 0, 0))
+            target_time = dt.combine(next_trading, time_class(9, 0, 0))
         else:
             target_time = None
 
