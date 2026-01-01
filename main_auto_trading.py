@@ -5215,7 +5215,7 @@ async def main(skip_wait: bool = False):
     # ========== 휴장일 체크 ==========
     is_trading, reason = is_trading_day()
     if not is_trading:
-        from datetime import datetime as dt, timedelta
+        from datetime import datetime as dt, timedelta, time
         import time as time_module
 
         next_trading = get_next_trading_day()
