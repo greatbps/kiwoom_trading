@@ -5242,34 +5242,54 @@ async def main(skip_wait: bool = False):
         console.print()
 
         try:
+            last_check_time = dt.now()
+            check_interval = 3600  # 1시간마다 거래일 체크
+
             while True:
-                # 현재 시간 기준으로 거래일 다시 체크
-                is_trading_now, _ = is_trading_day()
+                now = dt.now()
 
-                if is_trading_now:
-                    # 거래일이 되면 루프 종료하고 계속 진행
-                    console.print()
-                    console.print("[green]✅ 거래일이 시작되었습니다![/green]")
-                    console.print()
-                    break
+                # 1시간마다 거래일 재확인
+                if (now - last_check_time).total_seconds() >= check_interval:
+                    is_trading_now, _ = is_trading_day()
 
-                # 남은 시간 계산
+                    if is_trading_now:
+                        # 거래일이 되면 루프 종료하고 계속 진행
+                        console.print()
+                        console.print()
+                        console.print("[green]✅ 거래일이 시작되었습니다![/green]")
+                        console.print()
+                        break
+
+                    last_check_time = now
+
+                # 남은 시간 계산 및 표시 (매초 업데이트)
                 if target_time:
-                    now = dt.now()
                     remaining = target_time - now
 
                     if remaining.total_seconds() > 0:
                         hours, remainder = divmod(int(remaining.total_seconds()), 3600)
                         minutes, seconds = divmod(remainder, 60)
 
-                        console.print(f"\r[dim]남은 시간: {hours:02d}:{minutes:02d}:{seconds:02d} | 다음 확인: 1시간 후[/dim]", end="")
-                    else:
-                        console.print(f"\r[dim]거래일 확인 중...[/dim]", end="")
-                else:
-                    console.print(f"\r[dim]1시간마다 거래일 확인 중... (Ctrl+C로 종료)[/dim]", end="")
+                        # 다음 체크까지 남은 시간
+                        next_check = check_interval - (now - last_check_time).total_seconds()
+                        next_check_min = int(next_check // 60)
 
-                # 1시간 대기 (중간에 Ctrl+C 가능)
-                time_module.sleep(3600)  # 1시간
+                        console.print(f"\r[dim]남은 시간: {hours:02d}:{minutes:02d}:{seconds:02d} | 다음 체크: {next_check_min}분 후[/dim]", end="", flush=True)
+                    else:
+                        # 목표 시간이 지났으면 즉시 거래일 체크
+                        is_trading_now, _ = is_trading_day()
+                        if is_trading_now:
+                            console.print()
+                            console.print()
+                            console.print("[green]✅ 거래일이 시작되었습니다![/green]")
+                            console.print()
+                            break
+                        console.print(f"\r[dim]거래일 확인 중...[/dim]", end="", flush=True)
+                else:
+                    console.print(f"\r[dim]1시간마다 거래일 확인 중... (Ctrl+C로 종료)[/dim]", end="", flush=True)
+
+                # 1초 대기 (실시간 카운트다운)
+                time_module.sleep(1)
 
         except KeyboardInterrupt:
             console.print()
