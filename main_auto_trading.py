@@ -5274,7 +5274,7 @@ async def main(skip_wait: bool = False):
                         next_check = check_interval - (now - last_check_time).total_seconds()
                         next_check_min = int(next_check // 60)
 
-                        console.print(f"\r[dim]남은 시간: {hours:02d}:{minutes:02d}:{seconds:02d} | 다음 체크: {next_check_min}분 후[/dim]", end="", flush=True)
+                        console.print(f"\r[dim]남은 시간: {hours:02d}:{minutes:02d}:{seconds:02d} | 다음 체크: {next_check_min}분 후[/dim]", end="")
                     else:
                         # 목표 시간이 지났으면 즉시 거래일 체크
                         is_trading_now, _ = is_trading_day()
@@ -5284,9 +5284,9 @@ async def main(skip_wait: bool = False):
                             console.print("[green]✅ 거래일이 시작되었습니다![/green]")
                             console.print()
                             break
-                        console.print(f"\r[dim]거래일 확인 중...[/dim]", end="", flush=True)
+                        console.print(f"\r[dim]거래일 확인 중...[/dim]", end="")
                 else:
-                    console.print(f"\r[dim]1시간마다 거래일 확인 중... (Ctrl+C로 종료)[/dim]", end="", flush=True)
+                    console.print(f"\r[dim]1시간마다 거래일 확인 중... (Ctrl+C로 종료)[/dim]", end="")
 
                 # 1초 대기 (실시간 카운트다운)
                 time_module.sleep(1)
