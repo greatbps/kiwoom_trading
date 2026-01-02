@@ -26,25 +26,21 @@ sys.path.insert(0, str(project_root))
 from kiwoom_api import KiwoomAPI
 from analyzers.pre_trade_validator import PreTradeValidator
 from analyzers.entry_timing_analyzer import EntryTimingAnalyzer
-from analyzers.signal_orchestrator import SignalOrchestrator, SignalTier
+from analyzers.signal_orchestrator import SignalOrchestrator
 from utils.config_loader import load_config
 from database.trading_db import TradingDatabase
 from dotenv import load_dotenv
 import yfinance as yf
 import pandas as pd
-import time
 from rich.console import Console
 from rich.table import Table
-from rich.panel import Panel
-from rich.live import Live
 from rich import box
 from trading.exit_logic_optimized import OptimizedExitLogic
 from trading.eod_manager import EODManager  # ✅ EOD Manager Phase 1
 from trading.bottom_pullback_manager import BottomPullbackManager  # ✅ Bottom Pullback 전략
 from trading.trade_state_manager import (  # ✅ Trade State Manager (중복 진입 방지)
     TradeStateManager,
-    TradeAction,
-    InvalidationReason
+    TradeAction
 )
 from core.trade_reconciliation import TradeReconciliation  # ✅ 거래 검증 및 동기화
 from market_utils import is_trading_day, get_next_trading_day  # ✅ 휴장일 체크
@@ -65,7 +61,7 @@ def safe_float(value, default=0.0):
     if isinstance(value, bytes):
         try:
             value = value.decode('utf-8').strip()
-        except:
+        except (UnicodeDecodeError, AttributeError):
             return default
     if isinstance(value, (int, float)):
         return float(value)
@@ -612,7 +608,7 @@ class IntegratedTradingSystem:
             for stock_code, info in self.validated_stocks.items():
                 watchlist_data.append({
                     "stock_code": stock_code,
-                    "stock_name": info.get('name', code),
+                    "stock_name": info.get('name', stock_code),
                     "market": info.get('market', 'KOSPI'),
                     "rs_rating": info.get('rs_rating', 0),
                     "ai_score": info.get('ai_score', 0),
@@ -672,7 +668,7 @@ class IntegratedTradingSystem:
                 try:
                     with open(risk_log_path, 'r', encoding='utf-8') as f:
                         risk_logs = json.load(f)
-                except:
+                except (FileNotFoundError, json.JSONDecodeError, IOError):
                     risk_logs = []
 
             # 새 로그 추가
@@ -909,8 +905,8 @@ class IntegratedTradingSystem:
                         if self.websocket:
                             try:
                                 await self.websocket.close()
-                            except:
-                                pass
+                            except Exception:
+                                pass  # Websocket close errors are non-critical
 
                         # 토큰 재발급
                         if self.refresh_access_token():
@@ -2210,10 +2206,7 @@ class IntegratedTradingSystem:
 
     async def check_all_stocks(self):
         """모든 종목 체크 및 실시간 테이블 갱신 (매수 조건 + 보유 종목 포함)"""
-        import sys
-        import os
         from rich.table import Table
-        from rich.live import Live
         from datetime import datetime
         import logging
 
@@ -5198,7 +5191,6 @@ def check_and_create_pid_lock():
     """
     from pathlib import Path
     import os
-    import sys
 
     pid_file = Path('/tmp/kiwoom_trading.pid')
 
@@ -5316,7 +5308,7 @@ async def main(skip_wait: bool = False):
     is_trading, reason = is_trading_day()
     if not is_trading:
         import time as time_module
-        from datetime import datetime as dt, timedelta, time as time_class
+        from datetime import datetime as dt, time as time_class
 
         next_trading = get_next_trading_day()
         next_str = next_trading.strftime('%Y-%m-%d (%a)') if next_trading else 'N/A'
