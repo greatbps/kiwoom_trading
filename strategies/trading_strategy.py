@@ -6,8 +6,7 @@
 - 리스크 관리
 """
 import pandas as pd
-import numpy as np
-from typing import Dict, List, Any, Tuple, Optional
+from typing import Dict, List, Any
 
 
 class TradingStrategy:
@@ -47,7 +46,6 @@ class TradingStrategy:
             진입 신호 정보
         """
         final_score = analysis_result.get('final_score', 50)
-        action = analysis_result.get('action', 'HOLD')
 
         # 개별 엔진 점수
         technical_score = analysis_result.get('scores_breakdown', {}).get('technical', 50)
@@ -465,7 +463,7 @@ class TradingStrategy:
     def _find_support_levels(self, df: pd.DataFrame, current_price: float) -> List[float]:
         """지지선 찾기"""
         recent_lows = df['low'].tail(60).nsmallest(10).values
-        support = [l for l in recent_lows if l < current_price]
+        support = [low_val for low_val in recent_lows if low_val < current_price]
         return sorted(set([round(s) for s in support]), reverse=True)[:3]
 
     def _calculate_bollinger_upper(self, df: pd.DataFrame, period: int = 20, std: float = 2) -> float:

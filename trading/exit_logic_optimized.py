@@ -74,7 +74,7 @@ class OptimizedExitLogic:
         try:
             parts = time_str.split(':')
             return time(int(parts[0]), int(parts[1]), int(parts[2]) if len(parts) > 2 else 0)
-        except:
+        except (ValueError, IndexError):
             return time(15, 0, 0)  # 기본값
 
     def check_exit_signal(
@@ -113,9 +113,6 @@ class OptimizedExitLogic:
         if entry_time:
             if isinstance(entry_time, str):
                 entry_time = datetime.fromisoformat(entry_time)
-            holding_minutes = (datetime.now() - entry_time).total_seconds() / 60
-        else:
-            holding_minutes = 0
 
         # 최고가 업데이트
         highest_price = position.get('highest_price', entry_price)
@@ -222,11 +219,11 @@ class OptimizedExitLogic:
 
                     if not ignore_trailing:
                         # 트레일링 스탑만 허용, 다른 청산은 차단
-                        console.print(f"[cyan]🟢 Squeeze: Bright Green - 보유 강제 (트레일링만 허용)[/cyan]")
+                        console.print("[cyan]🟢 Squeeze: Bright Green - 보유 강제 (트레일링만 허용)[/cyan]")
                         # 트레일링 스탑 체크는 다음 단계에서 진행
                     else:
                         # 모든 청산 차단
-                        console.print(f"[cyan]🟢 Squeeze: Bright Green - 보유 강제 (청산 금지)[/cyan]")
+                        console.print("[cyan]🟢 Squeeze: Bright Green - 보유 강제 (청산 금지)[/cyan]")
                         return False, "Squeeze: Bright Green 보유 필수", None
 
                 # Dark Green: 부분 익절 권장 (수익 중일 때만)
@@ -340,10 +337,10 @@ class OptimizedExitLogic:
                 try:
                     import struct
                     price = struct.unpack('<q', price)[0]  # int64 (우선)
-                except:
+                except struct.error:
                     try:
                         price = struct.unpack('<d', price)[0]  # double (fallback)
-                    except:
+                    except struct.error:
                         console.print(f"[red]⚠️ {key} 바이너리 변환 실패: {price}[/red]")
                         return 0
 

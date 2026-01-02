@@ -3,7 +3,7 @@
 
 VWAP 기반 매수/매도 신호 감지 및 검증
 """
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional
 from datetime import datetime
 import pandas as pd
 from rich.console import Console
@@ -338,7 +338,7 @@ class SignalDetector:
 
             # 우선순위 5: VWAP 하향 돌파
             if latest_signal == -1:
-                console.print(f"[yellow]📉 VWAP 하향 돌파 감지[/yellow]")
+                console.print("[yellow]📉 VWAP 하향 돌파 감지[/yellow]")
                 return {
                     'should_exit': True,
                     'exit_type': 'full',

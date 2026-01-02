@@ -3,7 +3,7 @@
 네이버 뉴스 API를 통해 뉴스를 수집하고 전처리
 """
 import os
-from typing import List, Dict, Optional
+from typing import List, Dict
 from datetime import datetime
 from dotenv import load_dotenv
 import requests
@@ -59,7 +59,7 @@ class NewsAnalyzer:
             return processed_news
 
         except requests.exceptions.Timeout:
-            print(f"✗ 네이버 뉴스 검색 타임아웃")
+            print("✗ 네이버 뉴스 검색 타임아웃")
             return []
         except requests.exceptions.RequestException as e:
             print(f"✗ 네이버 뉴스 검색 실패: {e}")

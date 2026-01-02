@@ -6,7 +6,6 @@ L4: Liquidity Shift 감지기 (수급 전환)
 """
 
 import pandas as pd
-import numpy as np
 from typing import Tuple, Dict, Optional
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -15,7 +14,7 @@ import sys
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from rich.console import Console
+from rich.console import Console  # noqa: E402
 
 console = Console()
 

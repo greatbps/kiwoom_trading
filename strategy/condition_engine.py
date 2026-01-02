@@ -14,11 +14,10 @@ Advanced Condition Search Engine
 
 import asyncio
 import logging
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Set, Tuple, Any
+from datetime import datetime
+from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
 from enum import Enum
-from collections import defaultdict
 import json
 from pathlib import Path
 
@@ -27,8 +26,8 @@ import sys
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from utils.cache import LRUCache, async_cached
-from core.auth_manager import AuthManager
+from utils.cache import LRUCache  # noqa: E402
+from core.auth_manager import AuthManager  # noqa: E402
 
 
 class StrategyType(Enum):

@@ -181,8 +181,8 @@ class SentimentAnalyzer:
             signal.alarm(0)
 
             return self._parse_json_response(result_text)
-        except TimeoutError as e:
-            print(f"⚠️  Gemini API 타임아웃 (3초 초과)")
+        except TimeoutError:
+            print("⚠️  Gemini API 타임아웃 (3초 초과)")
             signal.alarm(0)  # 타임아웃 해제
             return None
 

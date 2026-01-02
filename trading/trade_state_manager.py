@@ -11,7 +11,7 @@ Trade State Manager
 작성일: 2025-12-23
 """
 
-from datetime import datetime, date
+from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 from enum import Enum

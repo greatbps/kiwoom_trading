@@ -18,7 +18,7 @@ References:
 
 import pandas as pd
 import numpy as np
-from typing import Tuple, Optional, Dict
+from typing import Tuple, Dict
 from rich.console import Console
 
 console = Console()
@@ -310,7 +310,7 @@ if __name__ == "__main__":
         # 현재 시그널 확인
         signal = get_current_squeeze_signal(df)
 
-        print(f"\n현재 시그널:")
+        print("\n현재 시그널:")
         print(f"  - 색상: {signal['color']}")
         print(f"  - 신호: {signal['signal']}")
         print(f"  - 모멘텀: {signal['momentum']:.4f}")
@@ -331,7 +331,7 @@ if __name__ == "__main__":
             print(f"  타입: {exit_type}")
 
         # 최근 5봉 추세
-        print(f"\n최근 5봉 추세:")
+        print("\n최근 5봉 추세:")
         recent = df.tail(5)[['close', 'sqz_color', 'sqz_momentum', 'sqz_signal']]
         for idx, row in recent.iterrows():
             color_emoji = {

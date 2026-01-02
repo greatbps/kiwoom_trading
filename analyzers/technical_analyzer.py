@@ -5,7 +5,6 @@
 """
 import pandas as pd
 import pandas_ta as ta
-import numpy as np
 from typing import Dict, List, Any, Tuple
 
 
@@ -331,7 +330,6 @@ class TechnicalAnalyzer:
         if len(bb_upper) > 0 and len(bb_lower) > 0:
             current_price = df['close'].iloc[-1]
             upper = bb_upper.iloc[-1]
-            middle = bb_middle.iloc[-1]
             lower = bb_lower.iloc[-1]
 
             if not pd.isna(upper) and not pd.isna(lower):
@@ -552,7 +550,7 @@ class TechnicalAnalyzer:
                 # 중간 Breakdown
                 breakdown_detected = True
                 confidence = 'MEDIUM'
-                reason = f'EMA 하향 돌파 + '
+                reason = 'EMA 하향 돌파 + '
                 reason += f'거래량 급증({volume_surge_ratio:.1f}배)' if volume_surged else '연속 하락'
 
             elif price_below_ema and ema_distance_pct > 2.0 and volume_surged:

@@ -7,15 +7,14 @@ L5: Squeeze Momentum Pro (존 카터 전략)
 """
 
 import pandas as pd
-import numpy as np
-from typing import Tuple, Dict, Optional
+from typing import Tuple, Dict
 from pathlib import Path
 import sys
 
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from rich.console import Console
+from rich.console import Console  # noqa: E402
 
 console = Console()
 
@@ -251,10 +250,10 @@ class SqueezeMomentumPro:
             # BB Width가 평균보다 작고, 모멘텀이 강하면 Tier 1
             if details['bb_width'] < details['bb_width_ma'] * 0.8 and details['momentum_value'] > 0:
                 tier = 1
-                reason = f"Squeeze Pro Tier1: BB수축 강함, 모멘텀 상승"
+                reason = "Squeeze Pro Tier1: BB수축 강함, 모멘텀 상승"
             else:
                 tier = 2
-                reason = f"Squeeze Pro Tier2: BB수축, 모멘텀 상승"
+                reason = "Squeeze Pro Tier2: BB수축, 모멘텀 상승"
         else:
             tier = 0
             status = []
@@ -308,7 +307,7 @@ if __name__ == "__main__":
         # Squeeze 상태 상세
         squeeze_on, momentum_up, details = squeeze.check_squeeze(df)
 
-        print(f"\n  상세:")
+        print("\n  상세:")
         print(f"    Squeeze On: {'✅' if squeeze_on else '❌'}")
         print(f"    Momentum Up: {'✅' if momentum_up else '❌'}")
         print(f"    Momentum Value: {details.get('momentum_value', 0):.2f}")
