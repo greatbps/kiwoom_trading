@@ -175,7 +175,7 @@ if __name__ == "__main__":
     print(f"다음 거래일: {next_day}")
 
     # 다가오는 휴장일
-    print(f"\n다가오는 휴장일 (30일):")
+    print("\n다가오는 휴장일 (30일):")
     holidays = get_upcoming_holidays(30)
     for h in holidays:
         print(f"  {h['date']} - {h['name']}")

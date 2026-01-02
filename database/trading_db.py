@@ -2,11 +2,9 @@
 거래 이력 및 분석 데이터 관리 데이터베이스 (PostgreSQL)
 """
 import psycopg2
-from psycopg2 import pool
 from psycopg2.extras import RealDictCursor
 import json
 import os
-from datetime import datetime
 from typing import Dict, List, Optional, Any
 from dotenv import load_dotenv
 
