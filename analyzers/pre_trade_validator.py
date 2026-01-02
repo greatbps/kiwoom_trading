@@ -11,10 +11,9 @@
 - PF·평균수익률 중심 평가로 전환
 """
 import pandas as pd
-import numpy as np
 import math
 from typing import Dict, List, Tuple, Optional
-from datetime import datetime, timedelta
+from datetime import datetime
 from analyzers.entry_timing_analyzer import EntryTimingAnalyzer
 from utils.config_loader import ConfigLoader
 
@@ -128,7 +127,7 @@ class PreTradeValidator:
             stats['entry_ratio'] = 0.2  # 20% 진입 허용
             stats['warning_flag'] = True
 
-            reason = f"⚠️ Stage 3 Fallback: 샘플 전무 (0회)\n"
+            reason = "⚠️ Stage 3 Fallback: 샘플 전무 (0회)\n"
             reason += "→ 극소량 탐색 진입 (entry_ratio=0.2, confidence=0.2)"
             return True, reason, stats
 
@@ -153,7 +152,7 @@ class PreTradeValidator:
                         stats['fallback_stage'] = 2
                         stats['entry_ratio'] = 0.5  # 30분봉 검증 통과 시 50%로 상향
                         stats['stage2_verified'] = True
-                        reason = f"✓ Stage 2 Fallback: 30분봉 검증 통과\n"
+                        reason = "✓ Stage 2 Fallback: 30분봉 검증 통과\n"
                         reason += f"→ 30분봉 백테스트 {stats_30m['total_trades']}회, 승률 {stats_30m['win_rate']:.1f}%, 진입 비중 50%"
                         return True, reason, stats
                     else:
@@ -161,15 +160,15 @@ class PreTradeValidator:
                         stats['fallback_stage'] = 3
                         stats['entry_ratio'] = 0.3
                         stats['stage2_verified'] = False
-                        reason = f"⚠️ Stage 2 → Stage 3: 30분봉 검증 실패\n"
-                        reason += f"→ 30분봉도 샘플 부족/품질 미달, 진입 비중 30% 축소"
+                        reason = "⚠️ Stage 2 → Stage 3: 30분봉 검증 실패\n"
+                        reason += "→ 30분봉도 샘플 부족/품질 미달, 진입 비중 30% 축소"
                         return True, reason, stats
                 else:
                     # 30분봉 데이터 없음 → 기존 로직 (Stage 2, 30% 축소)
                     stats['fallback_stage'] = 2
                     stats['entry_ratio'] = 0.3
                     stats['stage2_verified'] = False
-                    reason = f"⚠️ Stage 2 Fallback: 샘플 1건 + 품질 부족\n"
+                    reason = "⚠️ Stage 2 Fallback: 샘플 1건 + 품질 부족\n"
                     reason += "→ 30분봉 데이터 없음, 진입 비중 30% 축소"
                     return True, reason, stats
 
@@ -254,13 +253,11 @@ class PreTradeValidator:
 
                 # 청산 여부 판단
                 should_exit = False
-                exit_reason = ""
 
                 # 1. Hard Stop (실거래와 동일)
                 stop_loss_pct = trailing_config.get('stop_loss_pct', getattr(analyzer, 'stop_loss_pct', 3.0))
                 if profit_pct <= -stop_loss_pct:
                     should_exit = True
-                    exit_reason = f"Hard Stop (-{stop_loss_pct}%)"
 
                 # 2. 부분 청산
                 elif partial_config['enabled'] and partial_config['tiers']:
@@ -301,7 +298,6 @@ class PreTradeValidator:
                 # 3. VWAP 하향 돌파 (실거래와 동일)
                 elif signal == -1:
                     should_exit = True
-                    exit_reason = "VWAP 하향 돌파"
 
                 # 4. 트레일링 스탑 (실거래와 동일)
                 if not should_exit:
@@ -319,7 +315,6 @@ class PreTradeValidator:
 
                     if trailing_should_exit:
                         should_exit = True
-                        exit_reason = trailing_reason
 
                 # 전량 청산 실행
                 if should_exit:

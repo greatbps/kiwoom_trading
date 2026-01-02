@@ -12,7 +12,6 @@ L6: 사전 검증 (Pre-Trade Validator)
 """
 
 import pandas as pd
-import numpy as np
 from typing import Dict, List, Tuple, Optional
 from datetime import datetime, time
 from pathlib import Path
@@ -21,20 +20,20 @@ import sys
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from analyzers.volatility_regime import VolatilityRegimeDetector
-from analyzers.relative_strength_filter import RelativeStrengthFilter
+from analyzers.volatility_regime import VolatilityRegimeDetector  # noqa: E402
+from analyzers.relative_strength_filter import RelativeStrengthFilter  # noqa: E402
 
 # V2 Filters (Confidence-based)
-from analyzers.multi_timeframe_consensus_v2 import MultiTimeframeConsensusV2
-from analyzers.liquidity_shift_detector_v2 import LiquidityShiftDetectorV2
-from analyzers.squeeze_momentum_v2 import SqueezeMomentumProV2
-from analyzers.pre_trade_validator_v2 import PreTradeValidatorV2
+from analyzers.multi_timeframe_consensus_v2 import MultiTimeframeConsensusV2  # noqa: E402
+from analyzers.liquidity_shift_detector_v2 import LiquidityShiftDetectorV2  # noqa: E402
+from analyzers.squeeze_momentum_v2 import SqueezeMomentumProV2  # noqa: E402
+from analyzers.pre_trade_validator_v2 import PreTradeValidatorV2  # noqa: E402
 
 # Confidence Aggregator
-from trading.confidence_aggregator import ConfidenceAggregator
+from trading.confidence_aggregator import ConfidenceAggregator  # noqa: E402
 
-from rich.console import Console
-import logging
+from rich.console import Console  # noqa: E402
+import logging  # noqa: E402
 
 console = Console()
 
@@ -117,16 +116,7 @@ class SignalOrchestrator:
         self.confidence_aggregator = ConfidenceAggregator()
 
         # Phase 4: 8-Alpha System + Dynamic Weight Adjuster
-        from trading.alpha_engine import SimonsStyleAlphaEngine
-        from trading.alphas.vwap_alpha import VWAPAlpha
-        from trading.alphas.volume_spike_alpha import VolumeSpikeAlpha
-        from trading.alphas.obv_trend_alpha import OBVTrendAlpha
-        from trading.alphas.institutional_flow_alpha import InstitutionalFlowAlpha
-        from trading.alphas.news_score_alpha import NewsScoreAlpha
         # Phase 4: 신규 알파
-        from trading.alphas.momentum_alpha import MomentumAlpha
-        from trading.alphas.mean_reversion_alpha import MeanReversionAlpha
-        from trading.alphas.volatility_alpha import VolatilityAlpha
         # Phase 4: 동적 가중치 조정기
         from trading.dynamic_weight_adjuster import DynamicWeightAdjuster
 
@@ -661,7 +651,6 @@ class SignalOrchestrator:
             self.current_regime = regime
 
             # 가중치 재조정
-            old_weights = self.current_weights.copy()
             self.current_weights = self.weight_adjuster.adjust_weights(regime, rv_percentile)
 
             # 변경 사항 출력
@@ -672,7 +661,7 @@ class SignalOrchestrator:
 
             weights_changed = True
 
-            console.print(f"[green]✅ Alpha Engine이 새로운 가중치로 업데이트되었습니다.[/green]")
+            console.print("[green]✅ Alpha Engine이 새로운 가중치로 업데이트되었습니다.[/green]")
             console.print()
 
         return regime, weights_changed
