@@ -9,7 +9,7 @@ trading_system의 실제 성과 데이터를 기반으로 한 검증된 리스�
 """
 from dataclasses import dataclass
 from datetime import datetime, date
-from typing import Optional, Dict, List
+from typing import List
 import json
 import os
 
@@ -194,8 +194,8 @@ class RiskManager:
                 print(f"⚠️  쿨다운 파일 읽기 실패: {e}")
                 try:
                     cooldown_file.unlink()
-                except:
-                    pass
+                except (OSError, PermissionError):
+                    pass  # 파일 삭제 실패는 무시
 
         # 1. 보유 종목 수 제한
         if position_count >= self.MAX_POSITIONS:
@@ -389,7 +389,7 @@ class RiskManager:
                     if self.CONSECUTIVE_LOSS_ACTION == 'halt_day':
                         # 🔧 Phase 3: 당일 거래 중지 (장 마감까지)
                         self.cooldown_until = datetime.now().replace(hour=15, minute=30, second=0, microsecond=0).isoformat()
-                        print(f"🚫 3연패 발생 - 당일 거래 중지 (해제: 15:30)")
+                        print("🚫 3연패 발생 - 당일 거래 중지 (해제: 15:30)")
                     elif self.CONSECUTIVE_LOSS_ACTION == 'reduce_size':
                         # 🔧 Phase 3: 포지션 사이즈 축소
                         self.position_size_multiplier = self.LOSS_SIZE_REDUCTION

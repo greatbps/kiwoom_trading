@@ -7,7 +7,7 @@
 
 import json
 from datetime import datetime
-from typing import Dict, List, Tuple
+from typing import Dict, List
 from pathlib import Path
 from rich.console import Console
 

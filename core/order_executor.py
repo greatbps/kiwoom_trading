@@ -6,7 +6,7 @@
 """
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional, Literal
+from typing import Optional
 import time
 
 from kiwoom_api import KiwoomAPI
@@ -109,7 +109,7 @@ class OrderExecutor:
 
         try:
             # 실제 Kiwoom API 매수 주문 호출
-            print(f"\n[매수 주문 실행]")
+            print("\n[매수 주문 실행]")
             print(f"  종목: {stock_name} ({stock_code})")
             print(f"  수량: {quantity:,}주")
             print(f"  가격: {price:,}원 (지정가)")
@@ -220,7 +220,7 @@ class OrderExecutor:
             realized_pnl = (price - position.avg_price) * quantity
             pnl_rate = ((price - position.avg_price) / position.avg_price) * 100
 
-            print(f"\n[매도 주문 실행]")
+            print("\n[매도 주문 실행]")
             print(f"  종목: {position.stock_name} ({stock_code})")
             print(f"  수량: {quantity:,}주 (잔여: {position.remaining_quantity - quantity:,}주)")
             print(f"  가격: {price:,}원 (지정가)")
