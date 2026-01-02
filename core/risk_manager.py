@@ -156,30 +156,38 @@ class RiskManager:
 
             self.save()  # 즉시 저장
 
-        # 🔧 FIX: 0-2. 연속 손실 쿨다운 체크 (파일 기반 동기화)
+        # 🔧 FIX: 0-2. 연속 손실 쿨다운 체크 (3회 이상만 적용)
+        # 📌 손실 1-2회: 개별 종목만 쿨다운 (main_auto_trading.py의 stock_cooldown 처리)
+        # 📌 손실 3회 이상: 전체 거래 차단 (글로벌 쿨다운)
         cooldown_file = Path('data/cooldown.lock')
 
-        # 메모리 쿨다운도 체크 (하위 호환성)
-        if self.cooldown_until:
+        # 메모리 쿨다운도 체크 (3회 이상 연속 손실만)
+        if self.cooldown_until and self.consecutive_losses >= self.CONSECUTIVE_LOSS_LIMIT:
             if datetime.now().date() <= datetime.fromisoformat(self.cooldown_until).date():
-                return False, f"연속 손실 쿨다운 중 (해제: {self.cooldown_until})"
+                return False, f"연속 손실 {self.consecutive_losses}회 - 쿨다운 중 (해제: {self.cooldown_until})"
 
-        # 파일 기반 쿨다운 체크 (프로세스 간 공유)
+        # 파일 기반 쿨다운 체크 (프로세스 간 공유, 3회 이상만)
         if cooldown_file.exists():
             try:
                 cooldown_data = json.loads(cooldown_file.read_text())
                 cooldown_until = cooldown_data.get('cooldown_until')
+                consecutive_losses = cooldown_data.get('consecutive_losses', 0)
 
-                if cooldown_until:
+                # 3회 이상 연속 손실일 때만 글로벌 쿨다운 적용
+                if cooldown_until and consecutive_losses >= self.CONSECUTIVE_LOSS_LIMIT:
                     until_dt = datetime.fromisoformat(cooldown_until)
 
                     if datetime.now() <= until_dt:
-                        return False, f"연속 손실 쿨다운 중 (해제: {cooldown_until[:10]})"
+                        return False, f"연속 손실 {consecutive_losses}회 - 쿨다운 중 (해제: {cooldown_until[:10]})"
                     else:
                         # 쿨다운 기간 만료 → 파일 삭제
                         cooldown_file.unlink()
                         # 메모리 쿨다운도 해제
                         self.cooldown_until = None
+                        self.consecutive_losses = 0
+                else:
+                    # 3회 미만은 파일 삭제 (개별 종목 쿨다운만 적용)
+                    cooldown_file.unlink()
 
             except Exception as e:
                 # 손상된 파일 삭제

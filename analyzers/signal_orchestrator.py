@@ -164,16 +164,16 @@ class SignalOrchestrator:
         Returns:
             (pass, reason)
         """
-        # 1. 진입 시간 체크 (10:00~14:59)
+        # 1. 진입 시간 체크 (10:00 이후만 체크, 종료 시간 제한 없음)
         now = datetime.now()
         current_time = now.time()
 
         entry_start = time(10, 0, 0)  # 10시 이후 매수 (장초반 가격 불안정)
-        entry_end = time(14, 59, 0)   # 🔧 FIX: 15:30 → 14:59 (문서 명세)
+        # entry_end = time(14, 59, 0)   # ❌ 비활성화: 종료 시간 제한 없음
 
-        if not (entry_start <= current_time <= entry_end):
+        if current_time < entry_start:
             self.stats['l0_blocked'] += 1
-            return False, f"진입 시간 외 ({current_time.strftime('%H:%M')}, 허용: 10:00~14:59)"
+            return False, f"진입 시간 외 ({current_time.strftime('%H:%M')}, 10:00 이전)"
 
         # 2. 요일 체크 (토요일=5, 일요일=6)
         if now.weekday() >= 5:

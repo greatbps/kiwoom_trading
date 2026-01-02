@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "analyzer": {
+      "type": "stdio",
+      "command": "/home/greatbps/projects/kiwoom_trading/venv/bin/python",
+      "args": [
+        "-m",
+        "mcp_server_analyzer"
+      ],
+      "env": {}
+    }
+  }
+}

@@ -178,7 +178,7 @@ time_based_exit:
 # ✅ ChatGPT 리뷰 반영: EOD 정책 추가
 # ========================================
 eod_policy:
-  enabled: true                          # EOD Manager 활성화
+  enabled: false                         # ❌ 비활성화: 시간 기반 강제 청산 없음
   check_time: "14:55:00"                 # ✅ 수정: 14:55 (15:00에서 변경, API 지연 고려)
   force_exit_time: "15:05:00"            # ✅ 수정: 15:05 (15:10에서 변경)
   max_overnight_positions: 3             # 최대 익일 보유 종목 수

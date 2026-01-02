@@ -433,6 +433,82 @@ class IntegratedTradingSystem:
         self.daily_trade_count: Dict[str, int] = {}  # {stock_code: count}
         self.max_trades_per_stock_per_day = 2  # 종목당 하루 최대 2회 거래
 
+        # ✅ DB에서 활성 모니터링 종목 복원
+        self._load_monitoring_stocks_from_db()
+
+    def _load_monitoring_stocks_from_db(self):
+        """DB에서 활성 모니터링 종목 복원"""
+        print("\n" + "="*60)
+        print("🔍 DB 모니터링 종목 복원 시작...")
+        print("="*60)
+
+        try:
+            print("📦 market_utils 임포트 중...")
+            from market_utils import get_db_connection
+
+            print("🔌 DB 연결 시도 중...")
+            conn = get_db_connection()
+            try:
+                cur = conn.cursor()
+                print("✅ DB 연결 성공")
+
+                # monitoring_stocks에서 활성 종목 조회
+                print("📊 monitoring_stocks 테이블 조회 중...")
+                cur.execute("""
+                    SELECT symbol, name, source, add_reason, created_at
+                    FROM monitoring_stocks
+                    WHERE monitoring_active = true
+                    ORDER BY created_at DESC
+                """)
+
+                rows = cur.fetchall()
+                print(f"✅ 쿼리 완료: {len(rows)}개 종목 발견")
+
+                if rows:
+                    console.print(f"\n[cyan]📥 DB에서 {len(rows)}개 모니터링 종목 복원 중...[/cyan]")
+
+                    for symbol, name, source, add_reason, created_at in rows:
+                        # watchlist에 추가
+                        self.watchlist.add(symbol)
+
+                        # validated_stocks에 추가 (간단한 정보만)
+                        self.validated_stocks[symbol] = {
+                            'name': name,
+                            'source': source,
+                            'add_reason': add_reason,
+                            'created_at': created_at,
+                            'market': 'KOSPI' if symbol.startswith('0') else 'KOSDAQ'
+                        }
+
+                    console.print(f"[green]✅ DB 복원 완료: {len(rows)}개 종목[/green]")
+                    console.print(f"  🔍 조건검색: {sum(1 for v in self.validated_stocks.values() if v.get('source') == 'condition_search')}개")
+                    console.print(f"  📦 StockGravity: {sum(1 for v in self.validated_stocks.values() if v.get('source') == 'stockgravity')}개")
+
+                    print(f"📌 watchlist 크기: {len(self.watchlist)}")
+                    print(f"📌 validated_stocks 크기: {len(self.validated_stocks)}")
+                else:
+                    console.print("[dim]ℹ️  DB에 활성 모니터링 종목이 없습니다[/dim]")
+                    print("⚠️  rows가 비어있습니다!")
+
+            finally:
+                conn.close()
+                print("🔌 DB 연결 종료")
+
+        except ImportError as e:
+            print(f"❌ 임포트 에러: {e}")
+            import traceback
+            traceback.print_exc()
+        except Exception as e:
+            print(f"❌ DB 복원 실패: {e}")
+            import traceback
+            traceback.print_exc()
+            console.print(f"[yellow]⚠️  DB 복원 실패: {e}[/yellow]")
+            console.print("[dim]조건 검색으로 새 종목을 추가하세요[/dim]")
+
+        print("="*60)
+        print("🔍 DB 모니터링 종목 복원 완료")
+        print("="*60 + "\n")
+
     def _get_stock_info_with_cache(self, stock_code: str) -> Optional[Dict]:
         """
         캐시를 사용하여 종목 정보 조회 (Rate Limit 방지)
@@ -536,14 +612,14 @@ class IntegratedTradingSystem:
             for stock_code, info in self.validated_stocks.items():
                 watchlist_data.append({
                     "stock_code": stock_code,
-                    "stock_name": info['name'],
+                    "stock_name": info.get('name', code),
                     "market": info.get('market', 'KOSPI'),
                     "rs_rating": info.get('rs_rating', 0),
                     "ai_score": info.get('ai_score', 0),
-                    "win_rate": info['stats'].get('win_rate', 0),
-                    "avg_profit_pct": info['stats'].get('avg_profit_pct', 0),
-                    "total_trades": info['stats'].get('total_trades', 0),
-                    "profit_factor": info['stats'].get('profit_factor', 0),
+                    "win_rate": info.get('stats', {}).get('win_rate', 0),
+                    "avg_profit_pct": info.get('stats', {}).get('avg_profit_pct', 0),
+                    "total_trades": info.get('stats', {}).get('total_trades', 0),
+                    "profit_factor": info.get('stats', {}).get('profit_factor', 0),
                     "last_check_time": datetime.now().isoformat()
                 })
 
@@ -1308,10 +1384,25 @@ class IntegratedTradingSystem:
         console.print()
 
         try:
-            # 🔧 FIX: 기존 감시 목록 초기화 (오래된 종목 제거)
-            self.watchlist.clear()
-            self.validated_stocks.clear()
-            console.print("[dim]✓ 기존 감시 목록 초기화 (최신 종목으로 교체)[/dim]")
+            # 🔧 FIX: StockGravity 종목은 유지하고, 조건검색 종목만 초기화
+            stockgravity_stocks = {
+                code: info for code, info in self.validated_stocks.items()
+                if info.get('source') == 'stockgravity'
+            }
+
+            # 기존 조건검색 종목만 제거
+            condition_codes = [
+                code for code, info in self.validated_stocks.items()
+                if info.get('source') == 'condition_search'
+            ]
+            for code in condition_codes:
+                self.watchlist.discard(code)
+                self.validated_stocks.pop(code, None)
+
+            if stockgravity_stocks:
+                console.print(f"[dim]✓ 조건검색 종목 초기화 ({len(condition_codes)}개 제거), StockGravity {len(stockgravity_stocks)}개 유지[/dim]")
+            else:
+                console.print(f"[dim]✓ 조건검색 종목 초기화 ({len(condition_codes)}개 제거)[/dim]")
             console.print()
 
             # 1차 필터: 조건검색
@@ -1607,21 +1698,23 @@ class IntegratedTradingSystem:
                 table.add_column("평균수익률", justify="right", style="green")
                 table.add_column("거래수", justify="right")
 
+                # StockGravity 종목은 stats가 없을 수 있으므로 안전하게 처리
                 sorted_stocks = sorted(
                     self.validated_stocks.items(),
-                    key=lambda x: x[1]['stats']['avg_profit_pct'],
+                    key=lambda x: x[1].get('stats', {}).get('avg_profit_pct', 0) if x[1].get('stats') else 0,
                     reverse=True
                 )
 
                 for rank, (code, info) in enumerate(sorted_stocks, 1):
-                    stats = info['stats']
+                    stats = info.get('stats', {})
+                    # StockGravity 종목은 stats가 없을 수 있음
                     table.add_row(
                         str(rank),
-                        info['name'],
+                        info.get('name', code),
                         code,
-                        f"{stats['win_rate']:.1f}%",
-                        f"{stats['avg_profit_pct']:+.2f}%",
-                        f"{stats['total_trades']}회"
+                        f"{stats.get('win_rate', 0):.1f}%" if stats else "N/A",
+                        f"{stats.get('avg_profit_pct', 0):+.2f}%" if stats else "N/A",
+                        f"{stats.get('total_trades', 0)}회" if stats else "N/A"
                     )
 
                 console.print(table)
@@ -1904,21 +1997,22 @@ class IntegratedTradingSystem:
             table.add_column("평균수익률", justify="right", style="green")
             table.add_column("거래수", justify="right")
 
+            # StockGravity 종목은 stats가 없을 수 있으므로 안전하게 처리
             sorted_stocks = sorted(
                 self.validated_stocks.items(),
-                key=lambda x: x[1]['stats']['avg_profit_pct'],
+                key=lambda x: x[1].get('stats', {}).get('avg_profit_pct', 0) if x[1].get('stats') else 0,
                 reverse=True
             )
 
             for rank, (code, info) in enumerate(sorted_stocks, 1):
-                stats = info['stats']
+                stats = info.get('stats', {})
                 table.add_row(
                     str(rank),
-                    info['name'],
+                    info.get('name', code),
                     code,
-                    f"{stats['win_rate']:.1f}%",
-                    f"{stats['avg_profit_pct']:+.2f}%",
-                    f"{stats['total_trades']}회"
+                    f"{stats.get('win_rate', 0):.1f}%" if stats else "N/A",
+                    f"{stats.get('avg_profit_pct', 0):+.2f}%" if stats else "N/A",
+                    f"{stats.get('total_trades', 0)}회" if stats else "N/A"
                 )
 
             console.print(table)
@@ -1959,7 +2053,9 @@ class IntegratedTradingSystem:
                 for stock_code in truly_new_stocks:
                     stock_info = self.validated_stocks.get(stock_code)
                     if stock_info:
-                        console.print(f"[green]     + {stock_info['name']} ({stock_code}) 추가 (승률 {stock_info['stats'].get('win_rate', 0):.1f}%)[/green]")
+                        stats = stock_info.get('stats', {})
+                        win_rate = stats.get('win_rate', 0) if stats else 0
+                        console.print(f"[green]     + {stock_info.get('name', stock_code)} ({stock_code}) 추가 (승률 {win_rate:.1f}%)[/green]")
             else:
                 console.print("[dim]  새로운 종목 없음[/dim]")
 
@@ -2527,13 +2623,170 @@ class IntegratedTradingSystem:
         # 보유 종목의 AI 점수와 승률을 캐싱 (시뮬레이션 테이블에서 재사용)
         position_scores = {}  # {stock_code: {'ai_score': 0, 'win_rate': 0}}
 
-        # ========================================
-        # 0. 보유 포지션 상세 테이블 (최우선 표시)
-        # ========================================
         # 화면 클리어 (기존 테이블 지우고 업데이트)
         # 🔧 DISABLED: 사용자 요청으로 clear 비활성화 (에러 로그 확인 위해)
         # os.system('clear' if os.name == 'posix' else 'cls')
         console.print()
+
+        # 종목 수 확인
+        if len(stock_data) == 0:
+            console.print("[yellow]⚠️  모니터링 중인 종목이 없습니다.[/yellow]")
+            console.print(f"[dim]watchlist: {len(self.watchlist)}개[/dim]")
+            console.print(f"[dim]validated_stocks: {len(self.validated_stocks)}개[/dim]")
+            return
+
+        # ========================================
+        # 1. 시뮬레이션 통계 요약 테이블
+        # ========================================
+        sim_table = Table(title=f"📈 시뮬레이션 통계 요약 ({current_time})", box=box.ROUNDED, show_header=True, header_style="bold cyan")
+        sim_table.add_column("순번", style="cyan", justify="right", width=4)
+        sim_table.add_column("코드", style="yellow", width=8)
+        sim_table.add_column("종목명", style="white", width=12)
+        sim_table.add_column("AI점수", justify="right", width=7)
+        sim_table.add_column("스퀴즈", justify="center", width=8)  # ✅ 스퀴즈 모멘텀 컬럼 추가
+        sim_table.add_column("총거래", justify="right", width=7)
+        sim_table.add_column("승률", justify="right", width=7)
+        sim_table.add_column("평균수익", justify="right", width=9)
+        sim_table.add_column("최대수익", justify="right", width=9)
+        sim_table.add_column("최대손실", justify="right", width=9)
+
+        for i, data in enumerate(stock_data, 1):
+            stock_code = data['code']
+            stock_info = self.validated_stocks.get(stock_code)
+
+            # 보유 종목이지만 validated_stocks에 없는 경우 캐시에서 가져오기
+            ai_score = 0  # 기본값
+            if not stock_info:
+                if stock_code in self.positions:
+                    # 보유 포지션 테이블에서 계산한 값 사용
+                    cached = position_scores.get(stock_code, {})
+                    ai_score = cached.get('ai_score', 0)
+                    cached_win_rate = cached.get('win_rate', 0)
+
+                    # ✅ FIX: historical_df가 있으면 실제 백테스트 stats 사용
+                    historical_df = None
+                    for d in stock_data:
+                        if d['code'] == stock_code and 'historical_df' in d:
+                            historical_df = d['historical_df']
+                            break
+
+                    if historical_df is not None and len(historical_df) >= 100:
+                        # 실시간 백테스트로 정확한 stats 계산
+                        from analyzers.pre_trade_validator import PreTradeValidator
+                        validator = PreTradeValidator(self.config)
+                        trades = validator._run_quick_simulation(historical_df)
+                        stats = validator._calculate_stats(trades)
+                    else:
+                        # 백테스트 불가능하면 기본값
+                        stats = {
+                            'total_trades': 0,
+                            'winning_trades': 0,
+                            'losing_trades': 0,
+                            'win_rate': cached_win_rate,  # 캐시된 승률 사용
+                            'avg_profit_pct': 0,
+                            'max_profit_pct': 0,
+                            'max_loss_pct': 0
+                        }
+                else:
+                    continue
+            else:
+                # 실시간 백테스트로 최신 stats 계산
+                historical_df = None
+                for d in stock_data:
+                    if d['code'] == stock_code and 'historical_df' in d:
+                        historical_df = d['historical_df']
+                        break
+
+                if historical_df is not None and len(historical_df) >= 100:
+                    # 실시간 데이터로 재계산
+                    from analyzers.pre_trade_validator import PreTradeValidator
+                    validator = PreTradeValidator(self.config)
+                    trades = validator._run_quick_simulation(historical_df)
+                    stats = validator._calculate_stats(trades)
+                else:
+                    # 저장된 stats 사용 (StockGravity 종목은 stats가 없을 수 있음)
+                    stats = stock_info.get('stats', {})
+
+                analysis = stock_info.get('analysis', {})
+                # 🔧 CRITICAL FIX: 필드명 수정 (total_score → final_score 또는 total_score)
+                ai_score = analysis.get('total_score') or analysis.get('final_score', 0) if analysis else 0
+
+            total_trades = stats.get('total_trades', 0)
+            win_rate = stats.get('win_rate', 0)
+            avg_profit = stats.get('avg_profit_pct', 0)
+            max_profit = stats.get('max_profit_pct', 0)
+            max_loss = stats.get('max_loss_pct', 0)
+
+            # AI 점수 안전 처리 (None 체크)
+            ai_score = ai_score if ai_score is not None else 0
+
+            # AI 점수 색상
+            ai_color = "bold green" if ai_score >= 70 else "green" if ai_score >= 60 else "yellow" if ai_score >= 50 else "red"
+
+            # 승률 색상
+            wr_color = "green" if win_rate >= 60 else "yellow" if win_rate >= 40 else "red"
+
+            # 평균수익 색상
+            avg_color = "green" if avg_profit >= 2 else "yellow" if avg_profit >= 1 else "red"
+
+            # ✅ 스퀴즈 모멘텀 상태 계산
+            squeeze_display = "-"
+            squeeze_config = self.config.get('squeeze_momentum', {})
+            if squeeze_config.get('enabled', False) and historical_df is not None and len(historical_df) >= 50:
+                try:
+                    from utils.squeeze_momentum_realtime import calculate_squeeze_momentum, get_current_squeeze_signal
+
+                    # 컬럼명 확인 및 변환
+                    df_copy = historical_df.copy()
+                    if isinstance(df_copy.columns, pd.MultiIndex):
+                        df_copy.columns = [col[0].lower() if isinstance(col, tuple) else col.lower() for col in df_copy.columns]
+                    else:
+                        df_copy.columns = df_copy.columns.str.lower()
+
+                    # 스퀴즈 계산
+                    df_copy = calculate_squeeze_momentum(df_copy)
+                    signal = get_current_squeeze_signal(df_copy)
+
+                    # 색상별 표시
+                    color_map = {
+                        'bright_green': ('🟢', 'BG', 'bold green'),
+                        'dark_green': ('🟡', 'DG', 'yellow'),
+                        'dark_red': ('🔴', 'DR', 'red'),
+                        'bright_red': ('🟠', 'BR', 'bold red'),
+                        'gray': ('⚪', '--', 'dim')
+                    }
+
+                    emoji, abbr, color = color_map.get(signal['color'], ('⚪', '--', 'dim'))
+                    squeeze_display = f"[{color}]{emoji}{abbr}[/{color}]"
+
+                except Exception:
+                    squeeze_display = "[dim]ERR[/dim]"
+
+            sim_table.add_row(
+                str(i),
+                data['code'],
+                data['name'],
+                f"[{ai_color}]{ai_score:.0f}[/{ai_color}]" if ai_score > 0 else "-",
+                squeeze_display,  # ✅ 스퀴즈 모멘텀 상태
+                str(total_trades),
+                f"[{wr_color}]{win_rate:.1f}%[/{wr_color}]",
+                f"[{avg_color}]{avg_profit:+.2f}%[/{avg_color}]",
+                f"[green]{max_profit:+.2f}%[/green]",
+                f"[red]{max_loss:+.2f}%[/red]"
+            )
+
+        console.print(sim_table)
+        console.print()
+
+        # ✅ 스퀴즈 모멘텀 범례 (설정 활성화 시)
+        squeeze_config = self.config.get('squeeze_momentum', {})
+        if squeeze_config.get('enabled', False):
+            console.print("[dim]스퀴즈: [bold green]🟢BG[/bold green]=Bright Green(진입/보유) | [yellow]🟡DG[/yellow]=Dark Green(부분익절) | [red]🔴DR[/red]=Dark Red(청산) | [bold red]🟠BR[/bold red]=Bright Red(청산) | ⚪--=미확인[/dim]")
+            console.print()
+
+        # ========================================
+        # 2. 보유 포지션 상세 테이블
+        # ========================================
 
         if len(self.positions) > 0:
             holdings_table = Table(
@@ -2565,7 +2818,9 @@ class IntegratedTradingSystem:
                 stock_info = self.validated_stocks.get(stock_code)
 
                 if stock_info:
-                    win_rate = stock_info['stats'].get('win_rate', 0)
+                    # StockGravity 종목은 stats가 없을 수 있음
+                    stats = stock_info.get('stats', {})
+                    win_rate = stats.get('win_rate', 0) if stats else 0
                     analysis = stock_info.get('analysis', {})
                     ai_score = analysis.get('total_score', 0)
                 else:
@@ -2689,164 +2944,8 @@ class IntegratedTradingSystem:
             console.print(holdings_table)
             console.print()
 
-        # 종목 수 확인
-        if len(stock_data) == 0:
-            console.print("[yellow]⚠️  모니터링 중인 종목이 없습니다.[/yellow]")
-            console.print(f"[dim]watchlist: {len(self.watchlist)}개[/dim]")
-            console.print(f"[dim]validated_stocks: {len(self.validated_stocks)}개[/dim]")
-            return
-
         # ========================================
-        # 1. 시뮬레이션 통계 요약 테이블
-        # ========================================
-        sim_table = Table(title=f"📈 시뮬레이션 통계 요약 ({current_time})", box=box.ROUNDED, show_header=True, header_style="bold cyan")
-        sim_table.add_column("순번", style="cyan", justify="right", width=4)
-        sim_table.add_column("코드", style="yellow", width=8)
-        sim_table.add_column("종목명", style="white", width=12)
-        sim_table.add_column("AI점수", justify="right", width=7)
-        sim_table.add_column("스퀴즈", justify="center", width=8)  # ✅ 스퀴즈 모멘텀 컬럼 추가
-        sim_table.add_column("총거래", justify="right", width=7)
-        sim_table.add_column("승률", justify="right", width=7)
-        sim_table.add_column("평균수익", justify="right", width=9)
-        sim_table.add_column("최대수익", justify="right", width=9)
-        sim_table.add_column("최대손실", justify="right", width=9)
-
-        for i, data in enumerate(stock_data, 1):
-            stock_code = data['code']
-            stock_info = self.validated_stocks.get(stock_code)
-
-            # 보유 종목이지만 validated_stocks에 없는 경우 캐시에서 가져오기
-            ai_score = 0  # 기본값
-            if not stock_info:
-                if stock_code in self.positions:
-                    # 보유 포지션 테이블에서 계산한 값 사용
-                    cached = position_scores.get(stock_code, {})
-                    ai_score = cached.get('ai_score', 0)
-                    cached_win_rate = cached.get('win_rate', 0)
-
-                    # ✅ FIX: historical_df가 있으면 실제 백테스트 stats 사용
-                    historical_df = None
-                    for d in stock_data:
-                        if d['code'] == stock_code and 'historical_df' in d:
-                            historical_df = d['historical_df']
-                            break
-
-                    if historical_df is not None and len(historical_df) >= 100:
-                        # 실시간 백테스트로 정확한 stats 계산
-                        from analyzers.pre_trade_validator import PreTradeValidator
-                        validator = PreTradeValidator(self.config)
-                        trades = validator._run_quick_simulation(historical_df)
-                        stats = validator._calculate_stats(trades)
-                    else:
-                        # 백테스트 불가능하면 기본값
-                        stats = {
-                            'total_trades': 0,
-                            'winning_trades': 0,
-                            'losing_trades': 0,
-                            'win_rate': cached_win_rate,  # 캐시된 승률 사용
-                            'avg_profit_pct': 0,
-                            'max_profit_pct': 0,
-                            'max_loss_pct': 0
-                        }
-                else:
-                    continue
-            else:
-                # 실시간 백테스트로 최신 stats 계산
-                historical_df = None
-                for d in stock_data:
-                    if d['code'] == stock_code and 'historical_df' in d:
-                        historical_df = d['historical_df']
-                        break
-
-                if historical_df is not None and len(historical_df) >= 100:
-                    # 실시간 데이터로 재계산
-                    from analyzers.pre_trade_validator import PreTradeValidator
-                    validator = PreTradeValidator(self.config)
-                    trades = validator._run_quick_simulation(historical_df)
-                    stats = validator._calculate_stats(trades)
-                else:
-                    # 저장된 stats 사용
-                    stats = stock_info['stats']
-
-                analysis = stock_info.get('analysis', {})
-                # 🔧 CRITICAL FIX: 필드명 수정 (total_score → final_score 또는 total_score)
-                ai_score = analysis.get('total_score') or analysis.get('final_score', 0) if analysis else 0
-
-            total_trades = stats.get('total_trades', 0)
-            win_rate = stats.get('win_rate', 0)
-            avg_profit = stats.get('avg_profit_pct', 0)
-            max_profit = stats.get('max_profit_pct', 0)
-            max_loss = stats.get('max_loss_pct', 0)
-
-            # AI 점수 안전 처리 (None 체크)
-            ai_score = ai_score if ai_score is not None else 0
-
-            # AI 점수 색상
-            ai_color = "bold green" if ai_score >= 70 else "green" if ai_score >= 60 else "yellow" if ai_score >= 50 else "red"
-
-            # 승률 색상
-            wr_color = "green" if win_rate >= 60 else "yellow" if win_rate >= 40 else "red"
-
-            # 평균수익 색상
-            avg_color = "green" if avg_profit >= 2 else "yellow" if avg_profit >= 1 else "red"
-
-            # ✅ 스퀴즈 모멘텀 상태 계산
-            squeeze_display = "-"
-            squeeze_config = self.config.get('squeeze_momentum', {})
-            if squeeze_config.get('enabled', False) and historical_df is not None and len(historical_df) >= 50:
-                try:
-                    from utils.squeeze_momentum_realtime import calculate_squeeze_momentum, get_current_squeeze_signal
-
-                    # 컬럼명 확인 및 변환
-                    df_copy = historical_df.copy()
-                    if isinstance(df_copy.columns, pd.MultiIndex):
-                        df_copy.columns = [col[0].lower() if isinstance(col, tuple) else col.lower() for col in df_copy.columns]
-                    else:
-                        df_copy.columns = df_copy.columns.str.lower()
-
-                    # 스퀴즈 계산
-                    df_copy = calculate_squeeze_momentum(df_copy)
-                    signal = get_current_squeeze_signal(df_copy)
-
-                    # 색상별 표시
-                    color_map = {
-                        'bright_green': ('🟢', 'BG', 'bold green'),
-                        'dark_green': ('🟡', 'DG', 'yellow'),
-                        'dark_red': ('🔴', 'DR', 'red'),
-                        'bright_red': ('🟠', 'BR', 'bold red'),
-                        'gray': ('⚪', '--', 'dim')
-                    }
-
-                    emoji, abbr, color = color_map.get(signal['color'], ('⚪', '--', 'dim'))
-                    squeeze_display = f"[{color}]{emoji}{abbr}[/{color}]"
-
-                except Exception:
-                    squeeze_display = "[dim]ERR[/dim]"
-
-            sim_table.add_row(
-                str(i),
-                data['code'],
-                data['name'],
-                f"[{ai_color}]{ai_score:.0f}[/{ai_color}]" if ai_score > 0 else "-",
-                squeeze_display,  # ✅ 스퀴즈 모멘텀 상태
-                str(total_trades),
-                f"[{wr_color}]{win_rate:.1f}%[/{wr_color}]",
-                f"[{avg_color}]{avg_profit:+.2f}%[/{avg_color}]",
-                f"[green]{max_profit:+.2f}%[/green]",
-                f"[red]{max_loss:+.2f}%[/red]"
-            )
-
-        console.print(sim_table)
-        console.print()
-
-        # ✅ 스퀴즈 모멘텀 범례 (설정 활성화 시)
-        squeeze_config = self.config.get('squeeze_momentum', {})
-        if squeeze_config.get('enabled', False):
-            console.print("[dim]스퀴즈: [bold green]🟢BG[/bold green]=Bright Green(진입/보유) | [yellow]🟡DG[/yellow]=Dark Green(부분익절) | [red]🔴DR[/red]=Dark Red(청산) | [bold red]🟠BR[/bold red]=Bright Red(청산) | ⚪--=미확인[/dim]")
-            console.print()
-
-        # ========================================
-        # 2. 실시간 모니터링 테이블 (매수 조건)
+        # 3. 실시간 모니터링 테이블 (매수 조건)
         # ========================================
         # 보유 종목 개수 확인
         holding_count = sum(1 for data in stock_data if data.get('holding'))
@@ -3174,7 +3273,7 @@ class IntegratedTradingSystem:
 
             # 2. 진입 조건 모드 확인
             squeeze_config = self.config.get('squeeze_momentum', {})
-            entry_mode = squeeze_config.get('entry_mode', 'hybrid')  # 기본값: hybrid
+            entry_mode = squeeze_config.get('entry_mode', 'squeeze_only')  # 기본값: squeeze_only
 
             # 3. 모드별 진입 조건 체크
             if entry_mode == "squeeze_only":
@@ -3423,7 +3522,7 @@ class IntegratedTradingSystem:
         # Hard-coded 시간 체크 (설정 파일 무관)
         from datetime import time as time_class
         ENTRY_START = time_class(10, 0, 0)  # 10시 이후 매수 (장초반 가격 불안정)
-        ENTRY_END = time_class(14, 59, 0)
+        # ENTRY_END = time_class(14, 59, 0)  # ❌ 비활성화: 시간 제한 없음
 
         # 🔴 GPT 개선: 점심시간 완전 차단 (재진입 포함)
         MIDDAY_START = time_class(12, 0, 0)
@@ -3432,12 +3531,13 @@ class IntegratedTradingSystem:
         if t < ENTRY_START:
             return False, f"❌ 10:00 이전 진입 차단 ({t.strftime('%H:%M:%S')})"
 
-        if t > ENTRY_END:
-            return False, f"❌ 14:59 이후 진입 차단 ({t.strftime('%H:%M:%S')})"
+        # ❌ 14:59 진입 차단 비활성화
+        # if t > ENTRY_END:
+        #     return False, f"❌ 14:59 이후 진입 차단 ({t.strftime('%H:%M:%S')})"
 
         # ✅ 스퀴즈 모멘텀 모드: 점심시간 매수 허용
         squeeze_config = self.config.get('squeeze_momentum', {})
-        entry_mode = squeeze_config.get('entry_mode', 'hybrid')
+        entry_mode = squeeze_config.get('entry_mode', 'squeeze_only')  # 기본값: squeeze_only
 
         if entry_mode == 'squeeze_only':
             # 스퀴즈 전용 모드에서는 점심시간 매수 허용
@@ -5274,19 +5374,20 @@ async def main(skip_wait: bool = False):
                         next_check = check_interval - (now - last_check_time).total_seconds()
                         next_check_min = int(next_check // 60)
 
-                        console.print(f"\r[dim]남은 시간: {hours:02d}:{minutes:02d}:{seconds:02d} | 다음 체크: {next_check_min}분 후[/dim]", end="")
+                        # \r로 줄 처음으로, \033[K로 줄 끝까지 지우고 새로 씀
+                        print(f"\r\033[K남은 시간: {hours:02d}:{minutes:02d}:{seconds:02d} | 다음 체크: {next_check_min}분 후", end="", flush=True)
                     else:
                         # 목표 시간이 지났으면 즉시 거래일 체크
                         is_trading_now, _ = is_trading_day()
                         if is_trading_now:
-                            console.print()
+                            print()  # 줄바꿈
                             console.print()
                             console.print("[green]✅ 거래일이 시작되었습니다![/green]")
                             console.print()
                             break
-                        console.print(f"\r[dim]거래일 확인 중...[/dim]", end="")
+                        print(f"\r\033[K거래일 확인 중...", end="", flush=True)
                 else:
-                    console.print(f"\r[dim]1시간마다 거래일 확인 중... (Ctrl+C로 종료)[/dim]", end="")
+                    print(f"\r\033[K1시간마다 거래일 확인 중... (Ctrl+C로 종료)", end="", flush=True)
 
                 # 1초 대기 (실시간 카운트다운)
                 time_module.sleep(1)

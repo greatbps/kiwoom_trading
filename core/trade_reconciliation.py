@@ -242,8 +242,8 @@ class TradeReconciliation:
             stock_name=trade['stock_name'],
             trade_type=trade['type'],
             quantity=trade['quantity'],
-            price=trade['price'],
-            timestamp=trade['timestamp']
+            price=trade['price']
+            # timestamp는 record_trade() 내부에서 자동 생성됨
         )
 
         # DB에 기록 (있으면)
