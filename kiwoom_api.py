@@ -1,6 +1,7 @@
 """
 키움증권 REST API 접속 모듈
 """
+import json
 import os
 import requests
 import time
@@ -162,7 +163,7 @@ class KiwoomAPI:
             status_code = e.response.status_code if e.response else None
             try:
                 response_data = e.response.json() if e.response and e.response.content else None
-            except:
+            except (json.JSONDecodeError, ValueError, AttributeError):
                 response_data = e.response.text if e.response else None
 
             if status_code == 401:
@@ -245,7 +246,7 @@ class KiwoomAPI:
                 expires_in = 86400  # 기본 24시간
                 self.token_expires_at = time.time() + expires_in
 
-            print(f"✓ 접근 토큰 발급 성공")
+            print("✓ 접근 토큰 발급 성공")
             print(f"  - 만료일시: {expires_dt}")
             print(f"  - 남은시간: {expires_in}초 ({expires_in/3600:.1f}시간)")
             print(f"[DEBUG] 저장된 토큰: {self.access_token[:30]}..." if self.access_token else "None")
@@ -308,7 +309,7 @@ class KiwoomAPI:
             response = self.session.get(url, headers=headers, timeout=10)
             response.raise_for_status()
             return response.json()
-        except requests.exceptions.RequestException as e:
+        except requests.exceptions.RequestException:
             # 가격 조회 실패는 정상 동작 (5분봉 데이터 사용)
             # 에러 로그 출력하지 않고 None 반환
             return None
@@ -898,7 +899,7 @@ class KiwoomAPI:
         }
 
         try:
-            print(f"\n[매수 주문 API 요청]")
+            print("\n[매수 주문 API 요청]")
             print(f"  종목: {stock_code}, 수량: {quantity}, 가격: {price if price > 0 else '시장가'}")
 
             response = self.session.post(url, headers=headers, json=data, timeout=15)
@@ -994,7 +995,7 @@ class KiwoomAPI:
         }
 
         try:
-            print(f"\n[매도 주문 API 요청]")
+            print("\n[매도 주문 API 요청]")
             print(f"  종목: {stock_code}, 수량: {quantity}, 가격: {price if price > 0 else '시장가'}")
 
             response = self.session.post(url, headers=headers, json=data, timeout=15)
@@ -1069,7 +1070,7 @@ class KiwoomAPI:
         }
 
         try:
-            print(f"\n[정정 주문 API 요청]")
+            print("\n[정정 주문 API 요청]")
             print(f"  원주문번호: {orig_ord_no}, 수량: {quantity}, 가격: {price}")
 
             response = self.session.post(url, headers=headers, json=data)
@@ -1142,7 +1143,7 @@ class KiwoomAPI:
         }
 
         try:
-            print(f"\n[취소 주문 API 요청]")
+            print("\n[취소 주문 API 요청]")
             print(f"  원주문번호: {orig_ord_no}, 취소수량: {quantity if quantity > 0 else '전체'}")
 
             response = self.session.post(url, headers=headers, json=data)
@@ -1570,6 +1571,6 @@ class KiwoomAPI:
         """컨텍스트 매니저 진입"""
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, _exc_type, _exc_val, _exc_tb):
         """컨텍스트 매니저 종료"""
         self.close()
