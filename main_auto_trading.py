@@ -2938,7 +2938,82 @@ class IntegratedTradingSystem:
             console.print()
 
         # ========================================
-        # 3. 실시간 모니터링 테이블 (매수 조건)
+        # 3. 오늘 거래 내역 테이블
+        # ========================================
+        try:
+            risk_log_path = Path("data/risk_log.json")
+            if risk_log_path.exists():
+                with open(risk_log_path, 'r', encoding='utf-8') as f:
+                    risk_data = json.load(f)
+
+                daily_trades = risk_data.get('daily_trades', [])
+
+                if daily_trades:
+                    trade_history_table = Table(
+                        title=f"📝 오늘 거래 내역 ({len(daily_trades)}건)",
+                        box=box.ROUNDED,
+                        show_header=True,
+                        header_style="bold yellow"
+                    )
+                    trade_history_table.add_column("번호", style="cyan", justify="right", width=4)
+                    trade_history_table.add_column("날짜", style="white", justify="center", width=14)
+                    trade_history_table.add_column("종목명", style="yellow", width=12)
+                    trade_history_table.add_column("종목코드", style="dim", width=8)
+                    trade_history_table.add_column("매매", justify="center", width=6)
+                    trade_history_table.add_column("수량", justify="right", width=6)
+                    trade_history_table.add_column("평단가", justify="right", width=10)
+                    trade_history_table.add_column("손익", justify="right", width=12)
+
+                    for idx, trade in enumerate(daily_trades, 1):
+                        # 타임스탬프 파싱
+                        timestamp = trade.get('timestamp', '')
+                        if 'T' in timestamp:
+                            date_part, time_part = timestamp.split('T')
+                            # "2026-01-02T10:01:02" -> "01-02 10:01"
+                            formatted_date = f"{date_part[5:]} {time_part[:5]}"
+                        else:
+                            formatted_date = timestamp[:14]
+
+                        stock_name = trade.get('stock_name', '')
+                        stock_code = trade.get('stock_code', '')
+                        trade_type = trade.get('type', '')
+                        quantity = trade.get('quantity', 0)
+                        price = trade.get('price', 0)
+                        realized_pnl = trade.get('realized_pnl', 0.0)
+
+                        # 매매 타입 색상
+                        if trade_type == 'BUY':
+                            trade_type_str = "[red]매수[/red]"
+                        else:
+                            trade_type_str = "[blue]매도[/blue]"
+
+                        # 손익 표시 (매도일 때만)
+                        if trade_type == 'SELL' and realized_pnl != 0:
+                            if realized_pnl > 0:
+                                pnl_str = f"[green]+₩{realized_pnl:,.0f}[/green]"
+                            else:
+                                pnl_str = f"[red]₩{realized_pnl:,.0f}[/red]"
+                        else:
+                            pnl_str = "-"
+
+                        trade_history_table.add_row(
+                            str(idx),
+                            formatted_date,
+                            stock_name,
+                            stock_code,
+                            trade_type_str,
+                            str(quantity),
+                            f"₩{price:,.0f}",
+                            pnl_str
+                        )
+
+                    console.print(trade_history_table)
+                    console.print()
+        except Exception as e:
+            console.print(f"[dim yellow]⚠️  거래 내역 로드 오류: {e}[/dim yellow]")
+
+        # ========================================
+        # 4. 실시간 모니터링 테이블 (매수 조건)
         # ========================================
         # 보유 종목 개수 확인
         holding_count = sum(1 for data in stock_data if data.get('holding'))
