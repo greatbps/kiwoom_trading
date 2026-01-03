@@ -12,7 +12,7 @@ from rich import box
 from kiwoom_api import KiwoomAPI
 from analyzers.pre_trade_validator import PreTradeValidator
 from exceptions import handle_api_errors
-from database.trading_db_v2 import TradingDatabaseV2 as TradingDatabase
+from database.trading_db import TradingDatabase
 
 console = Console()
 

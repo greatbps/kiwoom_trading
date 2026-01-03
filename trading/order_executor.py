@@ -18,7 +18,7 @@ from exceptions import (
 )
 from config.config_manager import ConfigManager
 from core.risk_manager import RiskManager
-from database.trading_db_v2 import TradingDatabaseV2 as TradingDatabase
+from database.trading_db import TradingDatabase
 
 console = Console()
 

@@ -30,7 +30,7 @@ from config.config_manager import ConfigManager
 from core.risk_manager import RiskManager
 from analyzers.entry_timing_analyzer import EntryTimingAnalyzer
 from analyzers.pre_trade_validator import PreTradeValidator
-from database.trading_db_v2 import TradingDatabaseV2
+from database.trading_db import TradingDatabase
 
 
 @pytest.fixture
@@ -122,7 +122,7 @@ def mock_validator():
 @pytest.fixture
 def mock_db():
     """Mock TradingDatabase"""
-    db = Mock(spec=TradingDatabaseV2)
+    db = Mock(spec=TradingDatabase)
     db.insert_validation_score.return_value = None
     db.insert_buy_order.return_value = None
     db.insert_sell_order.return_value = None

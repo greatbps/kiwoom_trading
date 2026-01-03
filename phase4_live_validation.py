@@ -27,7 +27,7 @@ from dotenv import load_dotenv
 from kiwoom_api import KiwoomAPI
 from config.config_manager import ConfigManager
 from analyzers.signal_orchestrator import SignalOrchestrator
-from database.trading_db_v2 import TradingDatabaseV2
+from database.trading_db import TradingDatabase
 
 load_dotenv()
 console = Console()
@@ -97,7 +97,7 @@ class Phase4LiveValidator:
         # 3. DB 초기화
         console.print("[cyan]3. 데이터베이스 초기화 중...[/cyan]")
         try:
-            self.db = TradingDatabaseV2('database/trading.db')
+            self.db = TradingDatabase('database/trading.db')
             console.print("   ✅ 데이터베이스 연결 완료")
         except Exception as e:
             console.print(f"[red]   ❌ DB 초기화 실패: {e}[/red]")
