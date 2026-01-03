@@ -203,48 +203,72 @@ class TradeReconciliation:
             return []
 
     def _find_missing_trades(self, actual: List[Dict], system: List[Dict]) -> List[Dict]:
-        """누락된 거래 찾기"""
+        """누락된 거래 찾기 (시간 + 종목코드 기준)"""
 
-        # 시스템 기록을 키로 변환 (빠른 조회)
+        # 시스템에 이미 기록된 거래들을 (시간, 종목코드) 조합으로 인덱싱
         system_keys = set()
         for trade in system:
-            key = (
-                trade['stock_code'],
-                trade['type'],
-                trade['quantity'],
-                int(trade['price']),
-                trade['timestamp'][:16]  # 분 단위까지만 비교
-            )
-            system_keys.add(key)
+            # 시간(분 단위) + 종목코드 조합
+            timestamp = trade.get('timestamp', '')
+            if timestamp:
+                time_key = timestamp[:16]  # YYYY-MM-DDTHH:MM 까지만
+                stock_code = trade.get('stock_code', '')
+                key = (time_key, stock_code)
+                system_keys.add(key)
 
-        # 실제 거래 중 시스템에 없는 것 찾기
+        # API에서 가져온 거래 중 시스템에 없는 것만 추가
         missing = []
         for trade in actual:
-            key = (
-                trade['stock_code'],
-                trade['type'],
-                trade['quantity'],
-                int(trade['price']),
-                trade['timestamp'][:16]
-            )
+            timestamp = trade.get('timestamp', '')
+            if timestamp:
+                time_key = timestamp[:16]
+                stock_code = trade.get('stock_code', '')
+                key = (time_key, stock_code)
 
-            if key not in system_keys:
-                missing.append(trade)
+                if key not in system_keys:
+                    missing.append(trade)
 
         return missing
 
     def _sync_trade(self, trade: Dict):
-        """누락된 거래를 시스템에 동기화"""
+        """API에서 가져온 거래를 시스템에 추가"""
 
-        # RiskManager에 기록
-        self.risk_manager.record_trade(
-            stock_code=trade['stock_code'],
-            stock_name=trade['stock_name'],
-            trade_type=trade['type'],
-            quantity=trade['quantity'],
-            price=trade['price']
-            # timestamp는 record_trade() 내부에서 자동 생성됨
-        )
+        # risk_log.json에 직접 추가 (RiskManager 거치지 않음)
+        try:
+            risk_log_path = Path("data/risk_log.json")
+
+            if risk_log_path.exists():
+                with open(risk_log_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+            else:
+                data = {
+                    'daily_trades': [],
+                    'daily_realized_pnl': 0.0
+                }
+
+            # 거래 추가
+            data['daily_trades'].append({
+                'timestamp': trade['timestamp'],
+                'stock_code': trade['stock_code'],
+                'stock_name': trade['stock_name'],
+                'type': trade['type'],
+                'quantity': trade['quantity'],
+                'price': trade['price'],
+                'amount': trade['amount'],
+                'realized_pnl': trade.get('realized_pnl', 0.0),
+                'order_no': trade.get('order_no', '')
+            })
+
+            # 실현손익 업데이트
+            if trade['type'] == 'SELL':
+                data['daily_realized_pnl'] = data.get('daily_realized_pnl', 0.0) + trade.get('realized_pnl', 0.0)
+
+            # 저장
+            with open(risk_log_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+
+        except Exception as e:
+            console.print(f"[red]❌ risk_log 저장 실패: {e}[/red]")
 
         # DB에 기록 (있으면)
         if self.db:
@@ -257,8 +281,8 @@ class TradeReconciliation:
                     'quantity': trade['quantity'],
                     'price': trade['price'],
                     'amount': trade['amount'],
-                    'realized_pnl': trade['realized_pnl'],
-                    'source': 'AUTO_SYNC'  # 자동 동기화 표시
+                    'realized_pnl': trade.get('realized_pnl', 0.0),
+                    'source': 'API_SYNC'  # API 동기화 표시
                 })
             except Exception as e:
                 console.print(f"[yellow]⚠️  DB 기록 실패: {e}[/yellow]")
