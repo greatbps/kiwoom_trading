@@ -14,11 +14,10 @@ KIS API Access Token Manager
 import asyncio
 import json
 import logging
-import os
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional, Tuple, Any
+from typing import Optional
 from dataclasses import dataclass, asdict
 from threading import Lock
 import aiohttp
@@ -28,7 +27,7 @@ import sys
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from utils.retry import retry, RetryStrategy
+from utils.retry import retry, RetryStrategy  # noqa: E402
 
 
 @dataclass

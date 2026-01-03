@@ -9,7 +9,6 @@ Rich 라이브러리를 활용한 터미널 결과 표시 유틸리티
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
-from rich.text import Text
 from typing import List, Dict, Any
 
 console = Console()

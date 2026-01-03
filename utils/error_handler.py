@@ -7,12 +7,10 @@ trading_system/utils/error_handler.py
 """
 
 import sys
-import traceback
 import logging
-from typing import Optional, Callable, Any, Type
+from typing import Callable, Any
 from datetime import datetime
 from functools import wraps
-from pathlib import Path
 
 class ErrorHandler:
     """통합 에러 핸들링 클래스"""
@@ -26,15 +24,7 @@ class ErrorHandler:
         """에러 처리 및 로깅"""
         self.error_count += 1
         self.last_error_time = datetime.now()
-        
-        error_info = {
-            'type': type(error).__name__,
-            'message': str(error),
-            'context': context,
-            'timestamp': self.last_error_time,
-            'traceback': traceback.format_exc()
-        }
-        
+
         # 로깅
         if critical:
             self.logger.critical(f"CRITICAL ERROR in {context}: {error}", exc_info=True)

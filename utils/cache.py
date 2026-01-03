@@ -11,17 +11,14 @@ High-Performance Caching System
 - 자동 만료 및 정리
 """
 
-import asyncio
-import json
 import logging
 import pickle
 import sqlite3
 import time
 from collections import OrderedDict
-from datetime import datetime, timedelta
 from pathlib import Path
 from threading import RLock
-from typing import Any, Optional, Dict, Callable, TypeVar, Generic
+from typing import Any, Optional, Callable, TypeVar, Generic
 from dataclasses import dataclass
 from functools import wraps
 import hashlib

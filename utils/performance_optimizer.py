@@ -8,13 +8,11 @@ performance_optimizer.py
 
 import asyncio
 import gc
-import logging
-import threading
 import time
 import weakref
-from collections import defaultdict, deque
+from collections import deque
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Any, Callable, Union
+from typing import Dict, List, Optional, Any, Callable
 from dataclasses import dataclass
 from functools import wraps
 import json
@@ -101,7 +99,7 @@ class MemoryOptimizer:
         if TRACEMALLOC_AVAILABLE:
             try:
                 tracemalloc.start()
-            except:
+            except RuntimeError:
                 pass  # 이미 시작된 경우 무시
 
         # 약한 참조 캐시

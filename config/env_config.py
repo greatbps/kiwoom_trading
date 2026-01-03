@@ -7,7 +7,6 @@ API 키, 비밀번호 등 민감한 정보 관리
 from typing import Optional
 from pydantic_settings import BaseSettings
 from pydantic import Field
-from pathlib import Path
 
 
 class EnvironmentConfig(BaseSettings):
