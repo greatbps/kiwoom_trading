@@ -44,6 +44,7 @@ from trading.trade_state_manager import (  # ✅ Trade State Manager (중복 진
 )
 from core.trade_reconciliation import TradeReconciliation  # ✅ 거래 검증 및 동기화
 from market_utils import is_trading_day, get_next_trading_day  # ✅ 휴장일 체크
+from analyzers.squeeze_with_orderbook import SqueezeWithOrderBook  # ✅ 스퀴즈 + 호가창 통합 전략
 
 # 환경변수 로드
 load_dotenv()
@@ -365,6 +366,12 @@ class IntegratedTradingSystem:
             api=self.api
         )
         console.print("[dim]✓ SignalOrchestrator 초기화 완료 (L0-L6 파이프라인)[/dim]")
+
+        # ✅ SqueezeWithOrderBook 초기화 (스퀴즈 + 호가창 통합 전략)
+        squeeze_config = self.config.get('squeeze_momentum', {})
+        enable_orderbook = squeeze_config.get('orderbook_filter', {}).get('enabled', False)
+        self.squeeze_orderbook_strategy = SqueezeWithOrderBook(enable_orderbook=enable_orderbook)
+        console.print(f"[green]✓ SqueezeWithOrderBook 초기화 완료 (호가창 필터: {'활성화' if enable_orderbook else '비활성화'})[/green]")
 
         # 데이터베이스 초기화 (PostgreSQL)
         self.db = TradingDatabase()
@@ -3367,6 +3374,115 @@ class IntegratedTradingSystem:
                 # 스퀴즈 모멘텀만 사용하므로 SignalOrchestrator 건너뛰기
                 entry_confidence = 0.8  # 스퀴즈 전용 신뢰도
                 position_size_mult = 1.0  # 풀 포지션
+
+            elif entry_mode == "squeeze_with_orderbook":
+                # ========================================
+                # 모드 1.5: 스퀴즈 + 호가창 통합 전략
+                # ========================================
+                console.print(f"[cyan]📊 진입 모드: 스퀴즈 + 호가창 통합[/cyan]")
+
+                if not squeeze_config.get('enabled', False):
+                    console.print(f"[red]❌ {stock_name}: 스퀴즈 모멘텀이 비활성화됨[/red]")
+                    return
+
+                # 1. 호가창 데이터 수집
+                try:
+                    orderbook_data = self.api.get_stock_quote(stock_code)
+
+                    if orderbook_data.get('return_code') != 0:
+                        console.print(f"[yellow]⚠️  {stock_name}: 호가 데이터 조회 실패, 스퀴즈만 사용[/yellow]")
+                        # 호가 데이터 없으면 기존 스퀴즈만 사용
+                        from utils.squeeze_momentum_realtime import check_squeeze_momentum_filter
+                        sqz_passed, sqz_reason, sqz_details = check_squeeze_momentum_filter(df, for_entry=True)
+
+                        if not sqz_passed:
+                            console.print(f"[yellow]⚠️  {stock_name}: Squeeze 차단 - {sqz_reason}[/yellow]")
+                            return
+
+                        entry_confidence = 0.8
+                        position_size_mult = 1.0
+                    else:
+                        # 2. 호가창 데이터 파싱
+                        output = orderbook_data.get('output', {})
+
+                        # 매도 1호가 정보
+                        sell_1st_qty = float(output.get('sell_hoga_rem_qty_1', 0))
+                        tot_sell_qty = float(output.get('tot_sell_hoga_rem_qty', 0))
+                        tot_buy_qty = float(output.get('tot_buy_hoga_rem_qty', 0))
+
+                        # 체결강도 계산 (매수 / 매도 비율)
+                        if tot_sell_qty > 0:
+                            execution_strength = (tot_buy_qty / tot_sell_qty) * 100
+                        else:
+                            execution_strength = 100.0  # 기본값
+
+                        # 3. VWAP 계산 (5분/20분)
+                        vwap = df['close'].rolling(20).mean().iloc[-1]
+                        vwap_5min = df['close'].tail(5).mean() if len(df) >= 5 else vwap
+
+                        # 4. 거래량 데이터
+                        recent_5min_volume = df['volume'].tail(5).sum() if len(df) >= 5 else 0
+                        prev_5min_volume = df['volume'].iloc[-10:-5].sum() if len(df) >= 10 else recent_5min_volume * 0.8
+
+                        # 5. 최근 고가
+                        recent_high_5min = df['high'].tail(5).max() if len(df) >= 5 else current_price
+
+                        # 6. 통합 전략 진입 신호 체크
+                        signal, reason, details = self.squeeze_orderbook_strategy.check_entry_signal(
+                            stock_code=stock_code,
+                            df=df,
+                            current_price=current_price,
+                            vwap=vwap,
+                            vwap_5min=vwap_5min,
+                            recent_5min_volume=recent_5min_volume,
+                            prev_5min_volume=prev_5min_volume,
+                            sell_1st_qty=sell_1st_qty,
+                            sell_1st_avg_1min=sell_1st_qty,  # 간소화: 현재값 사용
+                            sell_total_current=tot_sell_qty,
+                            sell_total_avg=tot_sell_qty,  # 간소화: 현재값 사용
+                            execution_strength=execution_strength,
+                            stock_avg_strength=100.0,  # 기본값
+                            price_stable_sec=0.0,  # TODO: 실시간 데이터에서 계산 필요
+                            recent_high_5min=recent_high_5min
+                        )
+
+                        if not signal:
+                            console.print(f"[yellow]⚠️  {stock_name} ({stock_code}): {reason}[/yellow]")
+
+                            # 상세 정보 출력
+                            if 'squeeze' in details:
+                                sq = details['squeeze']
+                                console.print(f"[dim]  스퀴즈: {sq['reason']} (Tier {sq.get('tier', 0)})[/dim]")
+
+                            if 'orderbook' in details:
+                                console.print(f"[dim]  호가창 조건:[/dim]")
+                                for cond, result in details['orderbook'].items():
+                                    status = "✓" if result.get('pass') else "✗"
+                                    console.print(f"[dim]    {status} {cond}: {result.get('reason', 'N/A')}[/dim]")
+
+                            return
+                        else:
+                            console.print(f"[green]✅ {stock_name}: {reason}[/green]")
+
+                            # 티어 기반 신뢰도 조정
+                            tier = details.get('squeeze', {}).get('tier', 1)
+                            if tier >= 3:
+                                entry_confidence = 0.95
+                                position_size_mult = 1.2
+                            elif tier >= 2:
+                                entry_confidence = 0.85
+                                position_size_mult = 1.0
+                            else:
+                                entry_confidence = 0.75
+                                position_size_mult = 0.8
+
+                            console.print(f"[green]  Tier {tier} 진입 (신뢰도: {entry_confidence*100:.0f}%)[/green]")
+
+                except Exception as e:
+                    console.print(f"[red]❌ {stock_name}: 호가창 데이터 처리 실패 - {e}[/red]")
+                    import traceback
+                    traceback.print_exc()
+                    return
 
             elif entry_mode == "legacy_only":
                 # ========================================

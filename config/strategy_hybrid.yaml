@@ -122,16 +122,47 @@ squeeze_momentum:
   enabled: true                      # 스퀴즈 모멘텀 활성화
 
   # 진입 조건 모드 선택
-  # "squeeze_only"  : 스퀴즈 모멘텀만 사용 (기존 L0-L6 필터 무시)
-  # "legacy_only"   : 기존 필터만 사용 (스퀴즈 모멘텀 무시)
-  # "hybrid"        : 둘 다 사용 (기존 필터 + 스퀴즈 모멘텀)
-  entry_mode: "squeeze_only"         # ✅ 담주 테스트: 스퀴즈 모멘텀만 사용
+  # "squeeze_only"           : 스퀴즈 모멘텀만 사용 (기존 L0-L6 필터 무시)
+  # "squeeze_with_orderbook" : 스퀴즈 + 호가창 통합 전략 (Phase 1 필터)
+  # "legacy_only"            : 기존 필터만 사용 (스퀴즈 모멘텀 무시)
+  # "hybrid"                 : 둘 다 사용 (기존 필터 + 스퀴즈 모멘텀)
+  entry_mode: "squeeze_with_orderbook"  # ✅ 호가창 필터 테스트
 
   # 진입 필터
   entry_filter:
     enabled: true                    # 진입 시 스퀴즈 체크 활성화
     require_bright_green: true       # Bright Green (가속) 필수
     min_momentum: 0.0                # 최소 모멘텀 값
+
+  # ✅ 호가창 필터 (Phase 1 보수적 필터)
+  orderbook_filter:
+    enabled: true                    # 호가창 필터 활성화
+
+    # 진입 조건 (6개)
+    entry_conditions:
+      volume_surge_mult: 1.3         # 거래량 급증 (5분 vs 이전 5분)
+      sell_decrease_ratio: 0.8       # 매도 1호가 감소 (1분 평균 대비)
+      price_stable_max_sec: 5        # 가격 정체 최대 허용 (초)
+      execution_strength_min: 90.0   # 최소 체결강도 (절대값)
+      execution_strength_mult: 1.1   # 종목별 상대 체결강도 (20일 평균 대비)
+
+    # 진입 금지 조건 (3개)
+    entry_blockers:
+      chase_prevention_pct: 2.0      # 급등 후 고점 대비 -2% 이상 하락 시 진입 금지
+      sell_surge_ratio: 1.3          # 매도호가 급증 (+30% 이상) 시 금지
+      weak_execution_min: 90.0       # 약한 체결강도 (<90%) 차단
+
+    # 듀얼 손절 구조
+    stop_loss:
+      vwap_rapid_pct: 0.8            # 급락 손절: VWAP -0.8%
+      vwap_trend_enabled: true       # 추세 손절 활성화
+      trend_execution_min: 80.0      # 추세 손절: 5분 VWAP 이탈 + 체결강도 < 80%
+
+    # 차등 쿨다운
+    cooldown:
+      crash_minutes: 30              # 급락 손절 (≥2% 손실) 쿨다운
+      trend_minutes: 15              # 추세 붕괴 손절 쿨다운
+      strategy_minutes: 0            # 전략 청산 쿨다운 (없음)
 
   # 청산 필터
   exit_filter:
