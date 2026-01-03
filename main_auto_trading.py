@@ -5403,9 +5403,9 @@ async def main(skip_wait: bool = False):
         console.print(f"[yellow]다음 거래일: {next_str}[/yellow]")
 
         if target_time:
-            console.print(f"[cyan]다음 거래일 09:00까지 대기합니다... (Ctrl+C로 종료)[/cyan]")
+            console.print(f"[cyan]다음 거래일 09:00까지 대기합니다... (Ctrl+C로 메인 메뉴)[/cyan]")
         else:
-            console.print(f"[cyan]거래일 정보 없음. 1시간마다 재확인합니다... (Ctrl+C로 종료)[/cyan]")
+            console.print(f"[cyan]거래일 정보 없음. 1시간마다 재확인합니다... (Ctrl+C로 메인 메뉴)[/cyan]")
         console.print()
 
         try:
@@ -5454,15 +5454,15 @@ async def main(skip_wait: bool = False):
                             break
                         print(f"\r\033[K거래일 확인 중...", end="", flush=True)
                 else:
-                    print(f"\r\033[K1시간마다 거래일 확인 중... (Ctrl+C로 종료)", end="", flush=True)
+                    print(f"\r\033[K1시간마다 거래일 확인 중... (Ctrl+C로 메인 메뉴)", end="", flush=True)
 
-                # 1초 대기 (실시간 카운트다운)
-                time_module.sleep(1)
+                # 1초 대기 (실시간 카운트다운) - asyncio.sleep 사용하여 KeyboardInterrupt 감지 가능
+                await asyncio.sleep(1)
 
         except KeyboardInterrupt:
             console.print()
             console.print()
-            console.print("[yellow]사용자가 프로그램을 종료했습니다.[/yellow]")
+            console.print("[yellow]⚠️  대기 모드를 종료하고 메인 메뉴로 돌아갑니다.[/yellow]")
             console.print()
             return
 
