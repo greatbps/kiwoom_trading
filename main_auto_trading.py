@@ -5459,7 +5459,7 @@ async def main(skip_wait: bool = False):
                 # 1초 대기 (실시간 카운트다운) - asyncio.sleep 사용하여 KeyboardInterrupt 감지 가능
                 await asyncio.sleep(1)
 
-        except KeyboardInterrupt:
+        except (KeyboardInterrupt, asyncio.CancelledError):
             console.print()
             console.print()
             console.print("[yellow]⚠️  대기 모드를 종료하고 메인 메뉴로 돌아갑니다.[/yellow]")
