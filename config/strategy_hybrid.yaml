@@ -13,6 +13,13 @@ trailing:
   use_atr_based: true        # 🔧 FIX: ATR 기반 트레일링 활성화 (문서 명세)
   atr_multiplier: 1.3        # ✅ ChatGPT 리뷰: ATR×1.3 (1.5→1.3, 코스닥 변동성 고려)
 
+  # 🔧 NEW: 당일 매수 종목 강화 손절 (2026-01-20 제이엔비 분석 반영)
+  # 당일 매수 종목은 더 타이트한 손절 적용 (장기 하락 노출 방지)
+  same_day_entry:
+    enabled: true              # 당일 매수 종목 강화 손절 활성화
+    stop_loss_pct: 1.5         # 당일 매수: -1.5% 손절 (기본 3.0% → 1.5%)
+    trailing_ratio: 0.8        # 당일 매수: 트레일링 0.8% (기본 1.0% → 0.8%)
+
 filters:
   use_trend_filter: true
   trend_period: 20
@@ -45,17 +52,30 @@ time_filter:
   avoid_early_minutes: 30      # 🔧 FIX: 09:30까지 회피 (문서 명세) [복원: 10→30]
   avoid_late_minutes: 21       # 🔧 FIX: 14:59까지만 진입 (15:20-21=14:59) [복원: 10→21]
 
-  # 📊 ML: 거래 데이터 분석 기반 시간대 가중치
+  # 📊 시뮬레이션 결과 반영 (2026-01-17): 오전장이 가장 효과적
+  # 8일 시뮬레이션: 승률 50.7%, 총 수익 +19,840원
   time_weight:
-    morning_penalty: 0.5       # 09:30~12:00 신호 가중치 50% 감소 (승률 10%)
-    # 📊 ML 개선 (2025-12-16): 점심시간 완전 차단
-    # 오늘 분석: 12:18-12:51 거래로 -1,683원 손실 → 완전 차단
-    midday_penalty: 0.0        # 12:00~14:00 신호 완전 차단 (0.3 → 0.0)
-    afternoon_bonus: 1.5       # 14:00~14:59 신호 가중치 50% 증가 (승률 100%)
+    morning_bonus: 1.5         # 09:30~12:00 신호 가중치 50% 증가 (시뮬레이션 최적 구간)
+    # 📊 시뮬레이션 결과: 오후장 진입 시 손실 증가 → squeeze_2tf는 12시 이전만
+    midday_penalty: 0.0        # 12:00~14:00 신호 완전 차단
+    afternoon_penalty: 0.0     # 14:00~14:59 신호 완전 차단 (squeeze_2tf 기준)
 
 re_entry:
   use_cooldown: true           # 재진입 방지 ✅
-  cooldown_minutes: 20         # 적절한 대기 시간
+  cooldown_minutes: 20         # 적절한 대기 시간 (fallback)
+
+  # 🔧 2026-02-07: 쿨다운 차등화 v2 (exit_reason 기반)
+  # Early Failure/손절 → 강한 쿨다운, 익절 → 쿨다운 없음
+  reentry_cooldown:
+    enabled: true
+    by_exit_reason:
+      early_failure: 60          # 구조 실패 → 가장 위험, 60분
+      stop_loss: 45              # 명확한 손절 → 45분
+      trailing_stop: 30          # 트레일링 스탑 → 30분
+      time_exit: 20              # 시간 기반 청산 → 짧게 20분
+      take_profit: 0             # 익절 → 차단하지 않음
+      partial_exit: 10           # 부분 청산 → 짧게 10분
+      default: 30                # 분류 불가 → 안전 fallback 30분
 
 risk_management:
   initial_capital: 10000000
@@ -72,10 +92,11 @@ risk_management:
   position_risk_pct: 1.0       # 포지션당 리스크 1%
   min_rr_ratio: 1.5
 
-  # 🔧 REFACTOR: RiskManager 추가 설정
-  min_cash_reserve_pct: 20     # 최소 현금 보유 비율 20%
-  max_position_size_pct: 30    # 포지션당 최대 30%
-  hard_max_position: 300000    # 하드 포지션 제한 30만원 (실거래 고려)
+  # 🔧 REFACTOR: RiskManager 추가 설정 (2026-01-17 시뮬레이션 반영)
+  # 시뮬레이션 결과: 8일간 승률 50.7%, 총 수익 +19,840원 (8만원 기준)
+  min_cash_reserve_pct: 10     # 최소 현금 보유 비율 10% (20→10, 적극적)
+  max_position_size_pct: 40    # 포지션당 최대 40% (30→40, 적극적)
+  hard_max_position: 500000    # 하드 포지션 제한 50만원 (30만→50만, 적극적)
 
 risk_control:
   max_daily_loss_pct: 3.0      # SignalOrchestrator L0 필터용 (일일 손실 한도)
@@ -94,8 +115,51 @@ risk_control:
     enabled: true              # 최소 보유 시간 강제 활성화
     minutes: 30                # 📊 DATA: 패배 평균 9분 vs 승리 평균 124분 → 30분 권장
 
+  # 🔧 2026-02-06: 구조 기반 손절 (SMC 전략)
+  # 고정 퍼센트 손절 → 구조 저점/HL - ATR 버퍼
+  # 포지션 크기 = (계좌 × 2%) / (진입가 - 구조손절가)
+  structure_based_stop:
+    enabled: true                      # 구조 기반 손절 활성화
+    atr_buffer_mult: 0.5               # 구조점 아래 ATR × 0.5 버퍼
+    max_stop_pct: 3.0                  # 최대 손절 폭 cap (3%)
+
+  # 🔧 2026-02-06: 조건부 최소 보유 시간 연장
+  # HTF 추세 일치 + ATR 확장 + 거래량 평균 이상 중 2개 충족 시 보유 시간 연장
+  conditional_hold:
+    enabled: true                      # 조건부 보유 활성화
+    min_conditions: 2                  # 최소 충족 조건 수
+    hold_multiplier: 1.5               # 조건 충족 시 보유시간 배수 (1.5x)
+
+  # 🔧 2026-02-07: Early Failure Structure Filter (빠른 구조 실패 감지)
+  # 진입 후 2~3캔들(5~15분) 이내 실패 신호 감지 → 조기 탈출
+  # Score: direction_fail(2) + atr_decay(1) + volume_dry(1) >= 3
+  early_failure_structure:
+    enabled: true                      # Early Failure 구조 필터 활성화
+    min_observe_minutes: 5             # 최소 관찰 시간 (분)
+    observe_minutes: 15                # 최대 관찰 구간 (분)
+    score_threshold: 3                 # 조기 청산 임계값
+    atr_decay_ratio: 0.85             # ATR 감쇠 비율 (< 0.85 = 모멘텀 소실)
+    volume_dry_ratio: 0.8             # 거래량 고갈 비율 (< 0.8 = 고갈)
+    action: "exit_market"              # exit_market | reduce_half | trail_stop
+
+  # 🔧 2026-01-27: 오버나잇 전용 Exit 로직 (아진엑스텍 사례 반영)
+  # 전일 진입분 ≠ 당일 진입분 - 시초가 변동성 보호
+  overnight_exit:
+    enabled: true                           # 오버나잇 Exit 로직 활성화
+    morning_protection_start: "09:00:00"    # 보호 구간 시작
+    morning_protection_end: "09:30:00"      # 보호 구간 종료
+    use_open_range: true                    # Open Range (09:00~09:30) 기반 스탑 사용
+    open_range_multiplier: 1.5              # OR Low - (OR Range × 1.5) 이탈 시 청산
+
+  # 🔧 2026-01-27: 무승부(Draw) 거래 정의
+  # +0.2% 미만 & 6시간+ 보유 = WIN/LOSS가 아닌 DRAW로 분류
+  draw_trade:
+    enabled: true                           # Draw 분류 활성화
+    profit_threshold_pct: 0.2               # +0.2% 미만은 Draw (수수료 고려)
+    min_hold_hours: 6                       # 6시간 이상 보유 시 적용
+
 partial_exit:
-  enabled: true                # 부분 청산 핵심 전략 ✅
+  enabled: false               # ❌ 비활성화: MA Cross 단순 전략 (부분 청산 없음)
   tiers:
     # 📊 ML 개선 (2025-12-15): 손익비 0.38 → 익절 타겟 상향
     # 이번주 분석: 평균 승리 +0.65% vs 평균 손실 -1.70% → 더 늦게, 더 적게 청산
@@ -105,15 +169,16 @@ partial_exit:
       exit_ratio: 0.3
     # 나머지 40%는 트레일링 스톱으로 추가 수익 추구 (기존 20% → 40%)
 
-trailing_stop:
-  activation_profit_pct: 2.5   # 📊 ML 개선 (2025-12-16): 0.5 → 2.5% (부분청산 후 활성화)
-                               # 이유: 조기 활성화로 +1.5%, +2.5% 목표 도달 전 청산 발생
-  distance_pct: 0.8            # 📊 DATA: 최고가 대비 -0.8% 트레일링 (타이트하게)
-  min_lock_profit_pct: 0.3     # 📊 DATA: 최소 +0.3% 수익 보장 (작은 수익이라도 확보)
+# ❌ 트레일링 스탑 비활성화 (MA Cross 단순 전략)
+# trailing_stop:
+#   activation_profit_pct: 2.5
+#   distance_pct: 0.8
+#   min_lock_profit_pct: 0.3
 
-vwap_exit:
-  profit_threshold_for_ignore: 2.0  # +2.0% 이상에서는 VWAP 무시
-  multi_condition_required: true    # 다중 조건 필요 (VWAP 단독 청산 방지)
+# ❌ VWAP 청산 비활성화 (MA Cross 단순 전략)
+# vwap_exit:
+#   profit_threshold_for_ignore: 2.0
+#   multi_condition_required: true
 
 # ========================================
 # ✅ Squeeze Momentum 전략 설정 (LazyBear)
@@ -126,7 +191,12 @@ squeeze_momentum:
   # "squeeze_with_orderbook" : 스퀴즈 + 호가창 통합 전략 (Phase 1 필터)
   # "legacy_only"            : 기존 필터만 사용 (스퀴즈 모멘텀 무시)
   # "hybrid"                 : 둘 다 사용 (기존 필터 + 스퀴즈 모멘텀)
-  entry_mode: "squeeze_with_orderbook"  # ✅ 호가창 필터 테스트
+  # "ma_cross"               : MA 골든크로스/데드크로스 전략 (5분봉 MA5/MA10)
+  # "squeeze_2tf"            : 2-타임프레임 전략 (30분봉 MA5/MA20 + Squeeze + 하위봉 진입)
+  # "smc"                    : SMC (Smart Money Concepts) - CHoCH + Liquidity Sweep
+  # entry_mode: "ma_cross"  # 대기: 5분봉 MA 골든크로스 전략
+  # entry_mode: "squeeze_2tf"  # 30분봉 + Squeeze + 5분봉 진입
+  entry_mode: "smc"        # ✅ 현재: SMC 전략 (CHoCH + Liquidity Sweep)
 
   # 진입 필터
   entry_filter:
@@ -164,25 +234,25 @@ squeeze_momentum:
       trend_minutes: 15              # 추세 붕괴 손절 쿨다운
       strategy_minutes: 0            # 전략 청산 쿨다운 (없음)
 
-  # 청산 필터
+  # ❌ 청산 필터 비활성화 (MA Cross 단순 전략: 데드크로스만 사용)
   exit_filter:
-    enabled: true                    # 청산 시 스퀴즈 체크 활성화
+    enabled: false                   # 청산 시 스퀴즈 체크 비활성화
 
     # Dark Green (감속) - 부분 익절 (휴림로봇 성공 사례)
     dark_green:
-      enabled: true
+      enabled: false
       partial_exit_ratio: 0.3        # 30% 부분 익절
       min_profit_pct: 1.0            # 최소 수익률 1%
 
     # Red (반전) - 전량 청산
     red:
-      enabled: true
+      enabled: false
       full_exit: true                # 전량 청산
       min_profit_pct: 0.5            # 최소 수익률 0.5%
 
     # Bright Green (가속) - 보유 필수 (아이티센글로벌 교훈)
     bright_green:
-      force_hold: true               # 절대 매도 금지
+      force_hold: false              # 강제 보유 비활성화
       ignore_trailing_stop: false    # 트레일링 스탑은 유지 (과도한 손실 방지)
 
   # 지표 파라미터
@@ -200,10 +270,11 @@ squeeze_momentum:
     best_case: "휴림로봇"            # Dark Green 부분 익절 성공
     worst_case: "아이티센글로벌"     # Bright Green 조기 익절로 8배 수익 상실
 
-time_based_exit:
-  loss_breakeven_exit_time: "15:00:00"  # ⚠️ EOD Manager로 대체 예정 (Phase 1)
-  final_force_exit_time: "15:05:00"     # ✅ 수정: 15:05 (15:00→15:05, API 지연 고려)
-  loss_breakeven_threshold_pct: 0.0     # 전량 청산으로 통일
+# ❌ 시간 기반 청산 비활성화 (MA Cross 단순 전략: 데드크로스만 사용)
+# time_based_exit:
+#   loss_breakeven_exit_time: "15:00:00"
+#   final_force_exit_time: "15:05:00"
+#   loss_breakeven_threshold_pct: 0.0
 
 # ========================================
 # ✅ ChatGPT 리뷰 반영: EOD 정책 추가
@@ -310,3 +381,63 @@ condition_strategies:
       time_window:
         start: "09:30"                          # 진입 가능 시작 시간
         end: "14:30"                            # 진입 가능 종료 시간
+
+# ========================================
+# SMC (Smart Money Concepts) 전략 설정
+# ========================================
+smc:
+  enabled: true                        # SMC 전략 활성화
+
+  # 스윙 포인트 설정
+  swing_lookback: 5                    # 스윙 탐지 좌우 비교 봉 수
+  min_swing_size_pct: 0.3              # 최소 스윙 크기 (%) - 노이즈 제거
+
+  # 유동성 스윕 설정
+  sweep_threshold_pct: 0.1             # 스윕 인정 최소 돌파율 (%)
+  sweep_lookback: 20                   # 유동성 스윕 탐색 범위
+
+  # 진입 조건
+  require_liquidity_sweep: true        # 🔧 2026-01-23: Sweep 필수 (CHoCH 단독 진입 차단)
+  long_only: true                      # 롱만 진입 (숏 신호 무시)
+
+  # 오더블록 설정
+  ob_lookback: 10                      # 오더블록 탐색 범위
+
+  # 타임프레임
+  analysis_timeframe: "5min"           # SMC 분석 타임프레임
+
+  # 🔧 2026-01-23: CHoCH 등급 필터 (과진입 방지)
+  choch_grade:
+    enabled: true                      # 등급 필터 활성화
+    min_grade: "B"                     # 최소 허용 등급 (A/B/C) - C급 차단
+    grade_b_weight: 0.5                # B급 CHoCH 비중 배율 (50%)
+    # A급: HTF 구조 일치 + Sweep + OB 명확 + Squeeze 수축 (70점+)
+    # B급: 일부 조건 미충족 (40-69점)
+    # C급: 횡보 내 CHoCH, 저품질 (40점 미만) → 진입 금지
+
+  # 🔧 2026-01-23: 추가 진입 필터 (옵션)
+  additional_filters:
+    require_squeeze_on: false          # Squeeze ON 상태 필수 (에너지 축적 확인)
+    require_vwap_above: false          # VWAP 위 필수 (추세 확인)
+
+  # 🔧 2026-01-29: MTF Bias 필터 (30분봉 추세 체크)
+  # LONG 진입 시 30분봉이 하락 추세면 진입 차단
+  # → 추세에 역행하는 "방향 싸움" 거래 방지 (DRAW 발생 핵심 원인)
+  mtf_bias:
+    enabled: true                      # MTF Bias 필터 활성화
+    timeframe: "30min"                 # 상위 타임프레임 (30분봉)
+    # 하락 추세 정의: Lower High + Lower Low 패턴
+    # 상승 추세 정의: Higher High + Higher Low 패턴
+    # 중립: 패턴 불명확 → LONG 허용
+
+  # 🔧 2026-02-06: SMC 진입 프리필터 (진입 품질 개선)
+  # CHoCH 감지 후 3가지 조건 중 min_conditions 이상 충족 시만 진입
+  # 목표: 승률 16.7% → 30~35%, 진입 수 50% 감소
+  entry_prefilter:
+    enabled: true                      # 프리필터 활성화
+    min_conditions: 2                  # 최소 충족 조건 수 (3개 중 2개)
+    require_htf_trend: true            # 조건1: HTF 추세 생존 체크
+    require_liquidity_sweep: true      # 조건2: 유동성 청산 확인
+    require_reclaim: true              # 조건3: 되돌림 캔들 확인
+    reclaim_lookback: 5                # CHoCH 후 몇 캔들 내 되돌림 확인
+    reclaim_tolerance_pct: 0.3         # broken level 대비 허용 범위 (%)

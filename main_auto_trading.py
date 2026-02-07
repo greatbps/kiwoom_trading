@@ -15,7 +15,8 @@ import json
 import sys
 import os
 import signal
-from datetime import datetime, timedelta, time
+import time
+from datetime import datetime, timedelta, time as datetime_time
 from typing import List, Dict, Set, Any, Optional, Tuple
 from pathlib import Path
 
@@ -45,6 +46,13 @@ from trading.trade_state_manager import (  # ✅ Trade State Manager (중복 진
 from core.trade_reconciliation import TradeReconciliation  # ✅ 거래 검증 및 동기화
 from market_utils import is_trading_day, get_next_trading_day  # ✅ 휴장일 체크
 from analyzers.squeeze_with_orderbook import SqueezeWithOrderBook  # ✅ 스퀴즈 + 호가창 통합 전략
+
+# ✅ 한투 브로커 통합 (국내/해외 중기)
+from brokers import get_broker, BrokerType, Market, Position as BrokerPosition
+from trading.mid_term_engine import (
+    Action, PositionGroup, Position as MidTermPosition, MarketData,
+    evaluate_position, STOCK_GROUP_MAP
+)
 
 # 환경변수 로드
 load_dotenv()
@@ -373,6 +381,66 @@ class IntegratedTradingSystem:
         self.squeeze_orderbook_strategy = SqueezeWithOrderBook(enable_orderbook=enable_orderbook)
         console.print(f"[green]✓ SqueezeWithOrderBook 초기화 완료 (호가창 필터: {'활성화' if enable_orderbook else '비활성화'})[/green]")
 
+        # ✅ MACrossStrategy 초기화 (MA 골든크로스/데드크로스 전략)
+        from analyzers.ma_cross_strategy import MACrossStrategy
+        self.ma_cross_strategy = MACrossStrategy()
+        console.print("[green]✓ MACrossStrategy 초기화 완료 (MA5/MA10 골든크로스)[/green]")
+
+        # ✅ 2-타임프레임 전략 초기화 (30분봉 + Squeeze + 하위봉 진입)
+        from analyzers.squeeze_momentum_lazybear import TwoTimeframeStrategy
+        self.two_tf_strategy = TwoTimeframeStrategy(
+            higher_tf='30min',
+            lower_tf='5min',
+            ma_short=5,
+            ma_long=20
+        )
+        console.print("[green]✓ TwoTimeframeStrategy 초기화 완료 (30분봉 MA5/MA20 + Squeeze)[/green]")
+
+        # ✅ SMC (Smart Money Concepts) 전략 초기화 (2026-01-23 CHoCH 등급 필터 추가)
+        from analyzers.smc import SMCStrategy
+        smc_config = self.config.get('smc', {})
+        choch_grade_config = smc_config.get('choch_grade', {})
+        additional_filters = smc_config.get('additional_filters', {})
+        mtf_bias_config = smc_config.get('mtf_bias', {})  # 🔧 2026-01-29: MTF Bias 설정
+        prefilter_config = smc_config.get('entry_prefilter', {})  # 🔧 2026-02-06: 프리필터
+
+        self.smc_strategy = SMCStrategy(
+            swing_lookback=smc_config.get('swing_lookback', 5),
+            min_swing_size_pct=smc_config.get('min_swing_size_pct', 0.3),
+            sweep_threshold_pct=smc_config.get('sweep_threshold_pct', 0.1),
+            sweep_lookback=smc_config.get('sweep_lookback', 20),
+            require_liquidity_sweep=smc_config.get('require_liquidity_sweep', True),
+            long_only=smc_config.get('long_only', True),
+            # 🔧 2026-01-23: CHoCH 등급 필터
+            min_choch_grade=choch_grade_config.get('min_grade', 'B'),
+            require_squeeze_on=additional_filters.get('require_squeeze_on', False),
+            require_vwap_above=additional_filters.get('require_vwap_above', False),
+            grade_b_weight=choch_grade_config.get('grade_b_weight', 0.5),
+            # 🔧 2026-01-29: MTF Bias 필터 (30분봉 추세 체크)
+            mtf_bias_enabled=mtf_bias_config.get('enabled', True),
+            mtf_timeframe=mtf_bias_config.get('timeframe', '30min'),
+            # 🔧 2026-02-06: 진입 프리필터 (품질 개선)
+            prefilter_enabled=prefilter_config.get('enabled', True),
+            prefilter_min_conditions=prefilter_config.get('min_conditions', 2),
+            prefilter_require_htf_trend=prefilter_config.get('require_htf_trend', True),
+            prefilter_require_liquidity_sweep=prefilter_config.get('require_liquidity_sweep', True),
+            prefilter_require_reclaim=prefilter_config.get('require_reclaim', True),
+            reclaim_lookback=prefilter_config.get('reclaim_lookback', 5),
+            reclaim_tolerance_pct=prefilter_config.get('reclaim_tolerance_pct', 0.3)
+        )
+        sweep_required = smc_config.get('require_liquidity_sweep', True)
+        min_grade = choch_grade_config.get('min_grade', 'B')
+        sweep_mode = "CHoCH + Sweep" if sweep_required else "CHoCH Only"
+        grade_mode = f"등급>={min_grade}"
+        mtf_mode = "MTF Bias ON" if mtf_bias_config.get('enabled', True) else "MTF Bias OFF"
+        prefilter_mode = "프리필터 ON" if prefilter_config.get('enabled', True) else "프리필터 OFF"
+        console.print(f"[green]✓ SMCStrategy 초기화 완료 ({sweep_mode}, {grade_mode}, {mtf_mode}, {prefilter_mode})[/green]")
+
+        # ✅ BB(30,1) 관측기 초기화 (진입 X, 로깅만)
+        from analyzers.bb30_observer import get_bb30_observer
+        self.bb30_observer = get_bb30_observer()
+        console.print("[dim]✓ BB(30,1) Observer 초기화 (관측 전용)[/dim]")
+
         # 데이터베이스 초기화 (PostgreSQL)
         self.db = TradingDatabase()
         console.print("[dim]✓ 데이터베이스 초기화 완료 (PostgreSQL)[/dim]")
@@ -421,20 +489,39 @@ class IntegratedTradingSystem:
         # 리스크 관리자 (나중에 실계좌 기반으로 초기화)
         self.risk_manager = None
 
+        # ✅ 한투 브로커 초기화 (국내/해외 중기 통합 모니터링)
+        self.kis_domestic = None
+        self.kis_overseas = None
+        self.kis_domestic_positions = []
+        self.kis_overseas_positions = []
+        self.kis_domestic_results = []
+        self.kis_overseas_results = []
+        self.kis_last_update = None
+        self._init_kis_brokers()
+
         # Dry-run 모드 (백테스트 검증용)
         self.dry_run_mode = False
 
         # 🔧 FIX: 쿨다운 + 연속 손실 차단 (거래 내역 분석 기반)
-        # 🔴 GPT 개선: (datetime, is_loss) 저장하여 손절/익절 구분
-        self.stock_cooldown: Dict[str, Tuple[datetime, bool]] = {}  # {stock_code: (last_exit_time, is_loss)}
+        # 🔧 2026-02-07 v2: (datetime, is_loss, exit_reason) 3-tuple, exit_reason 기반 차등 쿨다운
+        self.stock_cooldown: Dict[str, tuple] = {}  # {stock_code: (last_exit_time, is_loss, exit_reason)}
         self.stock_loss_streak: Dict[str, int] = {}  # {stock_code: consecutive_losses}
         self.stock_ban_list: Set[str] = set()  # 당일 진입 금지 종목
-        self.cooldown_minutes = 20  # 일반 청산 쿨다운 (분)
-        self.loss_cooldown_minutes = 30  # 🔴 GPT 개선: 손절 쿨다운 30분 (VWAP 재탈환 대기)
+        self.cooldown_minutes = 20  # fallback 일반 청산 쿨다운 (분)
+        self.loss_cooldown_minutes = 30  # fallback 손절 쿨다운 30분
         self.max_consecutive_losses = 3  # 연속 손실 상한
         # 🔴 GPT 개선: 종목별 일일 거래 제한 (과도한 집중 방지)
         self.daily_trade_count: Dict[str, int] = {}  # {stock_code: count}
         self.max_trades_per_stock_per_day = 2  # 종목당 하루 최대 2회 거래
+
+        # 🔧 2026-02-07: Re-entry Cooldown 운영 통계 + 차등화 v2
+        from metrics.reentry_metrics import ReentryMetrics, categorize_exit_reason
+        self.reentry_metrics = ReentryMetrics()
+        self._categorize_exit_reason = categorize_exit_reason
+
+        # 쿨다운 차등화 config 로드
+        self._cooldown_by_reason = self.config.get('re_entry.reentry_cooldown.by_exit_reason', {})
+        self._cooldown_v2_enabled = self.config.get('re_entry.reentry_cooldown.enabled', False)
 
         # ✅ DB에서 활성 모니터링 종목 복원
         self._load_monitoring_stocks_from_db()
@@ -511,6 +598,422 @@ class IntegratedTradingSystem:
         print("="*60)
         print("🔍 DB 모니터링 종목 복원 완료")
         print("="*60 + "\n")
+
+    def _init_kis_brokers(self):
+        """한투 브로커 초기화 (국내/해외)"""
+        try:
+            # 한투 국내
+            self.kis_domestic = get_broker(BrokerType.KIS_DOMESTIC)
+            if self.kis_domestic.initialize():
+                console.print("[green]✓ 한투 국내 연결 완료[/green]")
+            else:
+                console.print("[yellow]⚠️  한투 국내 연결 실패[/yellow]")
+                self.kis_domestic = None
+
+            # 한투 해외
+            self.kis_overseas = get_broker(BrokerType.KIS_OVERSEAS)
+            if self.kis_overseas.initialize():
+                console.print("[green]✓ 한투 해외 연결 완료[/green]")
+            else:
+                console.print("[yellow]⚠️  한투 해외 연결 실패[/yellow]")
+                self.kis_overseas = None
+
+        except Exception as e:
+            console.print(f"[yellow]⚠️  한투 브로커 초기화 실패: {e}[/yellow]")
+
+    def fetch_kis_positions(self):
+        """한투 포지션 조회 및 평가"""
+        try:
+            # 국내 포지션
+            if self.kis_domestic:
+                self.kis_domestic_positions = self.kis_domestic.get_positions()
+                self._evaluate_kis_positions('domestic')
+
+            # 해외 포지션
+            if self.kis_overseas:
+                self.kis_overseas_positions = self.kis_overseas.get_positions()
+                self._evaluate_kis_positions('overseas')
+
+            self.kis_last_update = datetime.now()
+
+        except Exception as e:
+            console.print(f"[yellow]⚠️  한투 포지션 조회 실패: {e}[/yellow]")
+
+    def _evaluate_kis_positions(self, market_type: str):
+        """한투 포지션 중기 평가"""
+        if market_type == 'domestic':
+            positions = self.kis_domestic_positions
+            results_list = []
+        else:
+            positions = self.kis_overseas_positions
+            results_list = []
+
+        total_eval = sum(p.eval_amount for p in positions) if positions else 0
+
+        for bp in positions:
+            weight = (bp.eval_amount / total_eval * 100) if total_eval > 0 else 0
+
+            pos = MidTermPosition(
+                stock_code=bp.symbol,
+                stock_name=bp.name,
+                quantity=bp.quantity,
+                avg_price=bp.avg_price,
+                current_price=bp.current_price,
+                profit_pct=bp.profit_pct,
+                eval_amount=bp.eval_amount,
+                group=STOCK_GROUP_MAP.get(bp.symbol, PositionGroup.B_TREND),
+                weight_pct=weight
+            )
+
+            result = evaluate_position(pos, MarketData())
+            results_list.append(result)
+
+        if market_type == 'domestic':
+            self.kis_domestic_results = results_list
+        else:
+            self.kis_overseas_results = results_list
+
+    def _get_action_style(self, action_value: str) -> tuple:
+        """Action 스타일 반환"""
+        styles = {
+            'STOP_LOSS': ('🔴', 'red bold'),
+            'TRAILING_STOP': ('🟢', 'green'),
+            'REDUCE': ('🟡', 'yellow'),
+            'ADD_ON_PULLBACK': ('🔵', 'cyan'),
+            'HOLD': ('⚪', 'white'),
+            'TAKE_PROFIT': ('💰', 'green bold'),
+        }
+        return styles.get(action_value, ('⚪', 'white'))
+
+    def display_kis_positions(self):
+        """한투 포지션 대시보드 표시"""
+        console.print()
+        console.print("=" * 80, style="bold cyan")
+        console.print(f"{'📊 한투 중기 모니터링':^80}", style="bold cyan")
+        console.print("=" * 80, style="bold cyan")
+
+        # 국내 포지션
+        console.print(f"\n[bold yellow]━━━ 📊 한투 국내 (중기) ━━━[/bold yellow]")
+
+        if self.kis_domestic_positions:
+            table = Table(box=box.SIMPLE, show_header=True, padding=(0, 1))
+            table.add_column("종목", width=16)
+            table.add_column("수익률", justify="right", width=10)
+            table.add_column("평가금", justify="right", width=12)
+            table.add_column("Action", width=16)
+
+            total_eval = 0
+            total_invested = 0
+
+            for i, p in enumerate(self.kis_domestic_positions):
+                style = "green" if p.profit_pct >= 0 else "red"
+                total_eval += p.eval_amount
+                total_invested += p.avg_price * p.quantity
+
+                action = "HOLD"
+                if i < len(self.kis_domestic_results):
+                    action = self.kis_domestic_results[i].action.value
+
+                icon, action_style = self._get_action_style(action)
+
+                table.add_row(
+                    p.name[:14] if p.name else p.symbol,
+                    f"[{style}]{p.profit_pct:+.1f}%[/{style}]",
+                    f"{p.eval_amount:,.0f}",
+                    f"{icon} [{action_style}]{action}[/{action_style}]"
+                )
+
+            console.print(table)
+            profit_pct = ((total_eval - total_invested) / total_invested * 100) if total_invested > 0 else 0
+            profit_style = "green" if profit_pct >= 0 else "red"
+            console.print(f"  [bold]평가: {total_eval:,.0f}원[/bold] [{profit_style}]{profit_pct:+.1f}%[/{profit_style}]")
+        else:
+            console.print("[dim]  보유 없음[/dim]")
+
+        # 해외 포지션
+        console.print(f"\n[bold magenta]━━━ 🌍 한투 해외 (중기) ━━━[/bold magenta]")
+
+        if self.kis_overseas_positions:
+            table = Table(box=box.SIMPLE, show_header=True, padding=(0, 1))
+            table.add_column("종목", width=8)
+            table.add_column("현재가", justify="right", width=10)
+            table.add_column("수익률", justify="right", width=10)
+            table.add_column("Action", width=16)
+
+            total_eval = 0
+            total_invested = 0
+
+            for i, p in enumerate(self.kis_overseas_positions):
+                style = "green" if p.profit_pct >= 0 else "red"
+                total_eval += p.eval_amount
+                total_invested += p.avg_price * p.quantity
+
+                action = "HOLD"
+                if i < len(self.kis_overseas_results):
+                    action = self.kis_overseas_results[i].action.value
+
+                icon, action_style = self._get_action_style(action)
+
+                table.add_row(
+                    p.symbol,
+                    f"${p.current_price:.2f}",
+                    f"[{style}]{p.profit_pct:+.1f}%[/{style}]",
+                    f"{icon} [{action_style}]{action}[/{action_style}]"
+                )
+
+            console.print(table)
+            profit_pct = ((total_eval - total_invested) / total_invested * 100) if total_invested > 0 else 0
+            profit_style = "green" if profit_pct >= 0 else "red"
+            console.print(f"  [bold]평가: ${total_eval:,.2f}[/bold] [{profit_style}]{profit_pct:+.1f}%[/{profit_style}]")
+        else:
+            console.print("[dim]  보유 없음[/dim]")
+
+        # STOP_LOSS 경고
+        stop_loss_items = []
+
+        for r in self.kis_domestic_results:
+            if r.action.value == 'STOP_LOSS':
+                stop_loss_items.append(f"{r.position.stock_name[:10]} ({r.position.profit_pct:+.1f}%)")
+
+        for r in self.kis_overseas_results:
+            if r.action.value == 'STOP_LOSS':
+                stop_loss_items.append(f"{r.position.stock_code} ({r.position.profit_pct:+.1f}%)")
+
+        if stop_loss_items:
+            console.print(f"\n[bold red]🚨 한투 STOP_LOSS 대상 ({len(stop_loss_items)}건)[/bold red]")
+            for item in stop_loss_items:
+                console.print(f"   🔴 {item}")
+
+        console.print()
+
+    def execute_kis_stop_loss(self):
+        """한투 STOP_LOSS 자동 실행"""
+        # 안전 스위치
+        AUTO_STOP_ENABLED = True  # False로 변경하면 시뮬레이션만
+        AUTO_STOP_ALLOWED_GROUPS = [PositionGroup.B_TREND, PositionGroup.C_REBALANCE]
+        MAX_DAILY_STOPS = 3
+
+        # 오늘 실행 횟수 추적
+        if not hasattr(self, 'kis_stop_loss_count'):
+            self.kis_stop_loss_count = {}
+        today = datetime.now().strftime('%Y%m%d')
+        if today not in self.kis_stop_loss_count:
+            self.kis_stop_loss_count = {today: 0}
+
+        executed = []
+
+        # 국내 STOP_LOSS 체크
+        for r in self.kis_domestic_results:
+            if r.action != Action.STOP_LOSS:
+                continue
+            if r.position.group not in AUTO_STOP_ALLOWED_GROUPS:
+                console.print(f"[yellow]⚠️ {r.position.stock_name}: 그룹 {r.position.group.value} → 수동 손절 필요[/yellow]")
+                continue
+            if self.kis_stop_loss_count[today] >= MAX_DAILY_STOPS:
+                console.print(f"[yellow]⚠️ 1일 손절 한도 {MAX_DAILY_STOPS}회 도달[/yellow]")
+                break
+
+            if AUTO_STOP_ENABLED and self.kis_domestic:
+                try:
+                    from brokers import OrderSide, OrderType
+                    result = self.kis_domestic.place_order(
+                        symbol=r.position.stock_code,
+                        side=OrderSide.SELL,
+                        quantity=r.position.quantity,
+                        order_type=OrderType.MARKET
+                    )
+                    if result.success:
+                        console.print(f"[red]🔴 국내 손절 실행: {r.position.stock_name} {r.position.quantity}주[/red]")
+                        self.kis_stop_loss_count[today] += 1
+                        executed.append(r.position.stock_code)
+                    else:
+                        console.print(f"[red]❌ 손절 실패: {r.position.stock_name} - {result.message}[/red]")
+                except Exception as e:
+                    console.print(f"[red]❌ 손절 오류: {r.position.stock_name} - {e}[/red]")
+            else:
+                console.print(f"[cyan]🔵 [시뮬] 국내 손절: {r.position.stock_name} {r.position.quantity}주 ({r.position.profit_pct:+.1f}%)[/cyan]")
+
+        # 해외 STOP_LOSS 체크
+        for r in self.kis_overseas_results:
+            if r.action != Action.STOP_LOSS:
+                continue
+            if r.position.group not in AUTO_STOP_ALLOWED_GROUPS:
+                console.print(f"[yellow]⚠️ {r.position.stock_code}: 그룹 {r.position.group.value} → 수동 손절 필요[/yellow]")
+                continue
+            if self.kis_stop_loss_count[today] >= MAX_DAILY_STOPS:
+                console.print(f"[yellow]⚠️ 1일 손절 한도 {MAX_DAILY_STOPS}회 도달[/yellow]")
+                break
+
+            if AUTO_STOP_ENABLED and self.kis_overseas:
+                try:
+                    # 해외주식은 place_market_sell 사용 (현재가 지정가 주문)
+                    result = self.kis_overseas.place_market_sell(
+                        symbol=r.position.stock_code,
+                        quantity=r.position.quantity
+                    )
+                    if result.success:
+                        console.print(f"[red]🔴 해외 손절 실행: {r.position.stock_code} {r.position.quantity}주 @ ${result.price:.2f}[/red]")
+                        self.kis_stop_loss_count[today] += 1
+                        executed.append(r.position.stock_code)
+                    else:
+                        console.print(f"[red]❌ 손절 실패: {r.position.stock_code} - {result.message}[/red]")
+                except Exception as e:
+                    console.print(f"[red]❌ 손절 오류: {r.position.stock_code} - {e}[/red]")
+            else:
+                console.print(f"[cyan]🔵 [시뮬] 해외 손절: {r.position.stock_code} {r.position.quantity}주 ({r.position.profit_pct:+.1f}%)[/cyan]")
+
+        return executed
+
+    def run_kis_pre_market_check(self) -> bool:
+        """한투 장 시작 전 체크리스트"""
+        console.print()
+        console.print("=" * 60, style="cyan")
+        console.print("[bold]🌅 한투 장 시작 전 체크리스트[/bold]", style="cyan")
+        console.print("=" * 60, style="cyan")
+
+        checks = []
+
+        # 1. API 연결 상태
+        if self.kis_domestic and self.kis_domestic.is_initialized:
+            checks.append(("한투 국내 API", True, "연결됨"))
+        else:
+            checks.append(("한투 국내 API", False, "연결 실패"))
+
+        if self.kis_overseas and self.kis_overseas.is_initialized:
+            checks.append(("한투 해외 API", True, "연결됨"))
+        else:
+            checks.append(("한투 해외 API", False, "연결 실패"))
+
+        # 2. 포지션 조회 가능
+        try:
+            self.fetch_kis_positions()
+            domestic_cnt = len(self.kis_domestic_positions)
+            overseas_cnt = len(self.kis_overseas_positions)
+            checks.append(("포지션 조회", True, f"국내 {domestic_cnt}종목, 해외 {overseas_cnt}종목"))
+        except Exception as e:
+            checks.append(("포지션 조회", False, str(e)[:30]))
+
+        # 3. STOP_LOSS 대상 확인
+        stop_targets = []
+        for r in self.kis_domestic_results:
+            if r.action == Action.STOP_LOSS:
+                stop_targets.append(r.position.stock_name)
+        for r in self.kis_overseas_results:
+            if r.action == Action.STOP_LOSS:
+                stop_targets.append(r.position.stock_code)
+
+        if stop_targets:
+            checks.append(("STOP_LOSS 대상", True, f"{len(stop_targets)}건: {', '.join(stop_targets)[:25]}"))
+        else:
+            checks.append(("STOP_LOSS 대상", True, "없음 (양호)"))
+
+        # 4. 시장 시간
+        now = datetime.now()
+        if now.weekday() >= 5:
+            checks.append(("시장 시간", False, "주말 휴장"))
+        elif now.hour < 9:
+            checks.append(("시장 시간", True, "장 시작 전"))
+        elif now.hour < 16 or (now.hour == 15 and now.minute <= 30):
+            checks.append(("시장 시간", True, "장중"))
+        else:
+            checks.append(("시장 시간", False, "장 마감"))
+
+        # 결과 표시
+        all_passed = True
+        for name, passed, msg in checks:
+            status = "[green]✅[/green]" if passed else "[red]❌[/red]"
+            console.print(f"  {status} {name}: {msg}")
+            if not passed:
+                all_passed = False
+
+        if all_passed:
+            console.print("\n[green]✅ 한투 체크 완료 - 자동 손절 가능[/green]")
+        else:
+            console.print("\n[yellow]⚠️ 일부 항목 실패 - 확인 필요[/yellow]")
+
+        return all_passed
+
+    def run_kis_post_market_check(self):
+        """한투 장 마감 후 체크리스트"""
+        console.print()
+        console.print("=" * 60, style="blue")
+        console.print("[bold]🌙 한투 장 마감 후 체크리스트[/bold]", style="blue")
+        console.print("=" * 60, style="blue")
+
+        # 오늘 손절 실행 기록
+        today = datetime.now().strftime('%Y%m%d')
+        executed_today = self.kis_stop_loss_count.get(today, 0) if hasattr(self, 'kis_stop_loss_count') else 0
+        console.print(f"  📊 오늘 손절 실행: {executed_today}건")
+
+        # 현재 포지션 요약
+        self.fetch_kis_positions()
+        console.print(f"  📊 국내 보유: {len(self.kis_domestic_positions)}종목")
+        console.print(f"  📊 해외 보유: {len(self.kis_overseas_positions)}종목")
+
+        # 내일 주의 종목 (-10% ~ -12% 구간)
+        warning_stocks = []
+        for r in self.kis_domestic_results:
+            if -12 < r.position.profit_pct <= -10:
+                warning_stocks.append(f"{r.position.stock_name} ({r.position.profit_pct:+.1f}%)")
+        for r in self.kis_overseas_results:
+            if -12 < r.position.profit_pct <= -10:
+                warning_stocks.append(f"{r.position.stock_code} ({r.position.profit_pct:+.1f}%)")
+
+        if warning_stocks:
+            console.print(f"\n[yellow]⚠️ 내일 손절 주의 종목:[/yellow]")
+            for s in warning_stocks:
+                console.print(f"   🟡 {s}")
+        else:
+            console.print(f"\n[green]✅ 내일 손절 주의 종목 없음[/green]")
+
+        # 재진입 후보 체크
+        self.check_kis_reentry()
+
+    def check_kis_reentry(self):
+        """한투 손절 후 재진입 체크"""
+        COOLDOWN_DAYS = 5
+        REENTRY_WEIGHT_PCT = 50
+
+        # 손절 기록 로드
+        if not hasattr(self, 'kis_stopped_stocks'):
+            self.kis_stopped_stocks = {}
+
+        log_dir = project_root / 'logs'
+        for i in range(30):
+            d = datetime.now() - timedelta(days=i)
+            log_file = log_dir / f"kis_stop_loss_{d.strftime('%Y%m%d')}.json"
+            if log_file.exists():
+                try:
+                    import json
+                    with open(log_file, 'r') as f:
+                        logs = json.load(f)
+                    for log in logs:
+                        if log.get('status') == 'executed':
+                            symbol = log['symbol']
+                            if symbol not in self.kis_stopped_stocks:
+                                self.kis_stopped_stocks[symbol] = {
+                                    'stop_date': d.date(),
+                                    'original_qty': log['quantity'],
+                                    'stock_name': log.get('stock_name', symbol)
+                                }
+                except:
+                    pass
+
+        if not self.kis_stopped_stocks:
+            return
+
+        console.print(f"\n[cyan]🔄 재진입 후보 평가 ({len(self.kis_stopped_stocks)}건)[/cyan]")
+
+        today = datetime.now().date()
+        for symbol, info in self.kis_stopped_stocks.items():
+            days_since = (today - info['stop_date']).days
+            reentry_qty = int(info['original_qty'] * REENTRY_WEIGHT_PCT / 100)
+
+            if days_since < COOLDOWN_DAYS:
+                console.print(f"   ⏳ {info['stock_name']}: 쿨다운 {COOLDOWN_DAYS - days_since}일 남음")
+            else:
+                # 재진입 조건 체크 (간단 버전)
+                console.print(f"   🟢 {info['stock_name']}: 재진입 가능 ({reentry_qty}주, 원래의 {REENTRY_WEIGHT_PCT}%)")
 
     def _get_stock_info_with_cache(self, stock_code: str) -> Optional[Dict]:
         """
@@ -731,7 +1234,18 @@ class IntegratedTradingSystem:
     async def connect(self):
         """WebSocket 연결"""
         try:
-            self.websocket = await websockets.connect(self.uri)
+            # 연결 헤더 설정 (Kiwoom API 요구사항)
+            headers = {
+                "Authorization": f"Bearer {self.access_token}",
+                "Content-Type": "application/json",
+            }
+
+            self.websocket = await websockets.connect(
+                self.uri,
+                additional_headers=headers,  # websockets 15.0+ uses additional_headers
+                ping_interval=20,  # 20초마다 ping
+                ping_timeout=10,   # 10초 타임아웃
+            )
             self.connected = True
             console.print("=" * 120, style="bold green")
             console.print(f"{'키움 통합 자동매매 시스템':^120}", style="bold green")
@@ -2116,12 +2630,19 @@ class IntegratedTradingSystem:
 
         check_interval = 60  # 1분마다 종목 체크
         rescan_interval = 300  # 5분마다 조건검색 재실행
+        kis_interval = 300  # 5분마다 한투 중기 체크
 
         last_check = datetime.now()
         last_rescan = datetime.now()
         last_sync = datetime.now()  # 거래 내역 동기화 마지막 시간
         last_status_update = datetime.now()
+        last_kis_check = datetime.now() - timedelta(seconds=kis_interval)  # 즉시 첫 체크
         eod_executed = False  # ✅ EOD 프로세스 실행 여부 플래그
+
+        # ✅ 초기 한투 포지션 조회 및 체크
+        self.run_kis_pre_market_check()
+        self.fetch_kis_positions()
+        self.display_kis_positions()
 
         try:
             while self.running:
@@ -2134,6 +2655,14 @@ class IntegratedTradingSystem:
                     console.print("[yellow]=" * 80 + "[/yellow]")
                     console.print(f"[bold yellow]🕐 15:30 장 종료 - 오늘 모니터링 종료[/bold yellow]")
                     console.print("[yellow]=" * 80 + "[/yellow]")
+
+                    # 🔧 2026-02-07: Re-entry Cooldown 리포트 출력 + 저장
+                    self.reentry_metrics.print_report()
+                    self.reentry_metrics.save_daily()
+
+                    # ✅ 한투 장 마감 후 체크리스트
+                    self.run_kis_post_market_check()
+
                     console.print()
                     console.print(f"[cyan]✅ 오늘 거래 완료 ({current_time.strftime('%Y-%m-%d %H:%M:%S')})[/cyan]")
                     console.print(f"[dim cyan]💤 내일 08:50에 자동으로 다시 시작됩니다.[/dim cyan]")
@@ -2180,6 +2709,14 @@ class IntegratedTradingSystem:
                     # 1분마다 종목 체크
                     elif (current_time - last_check).seconds >= check_interval:
                         await self.check_all_stocks()
+
+                        # ✅ 5분마다 한투 중기 포지션 조회, 평가, STOP_LOSS 실행
+                        if (current_time - last_kis_check).seconds >= kis_interval:
+                            self.fetch_kis_positions()
+                            self.display_kis_positions()
+                            self.execute_kis_stop_loss()  # STOP_LOSS 자동 실행
+                            last_kis_check = current_time
+
                         last_check = current_time
                     else:
                         # 남은 시간 카운트다운 (같은 줄에서 갱신)
@@ -2419,6 +2956,7 @@ class IntegratedTradingSystem:
                         'signal_color': "dim",
                         'conditions_met': 0,
                         'squeeze_display': '[dim]-[/dim]',  # 스퀴즈 모멘텀 상태
+                        'orderbook_display': '[green]✓0/6[/green]',  # 호가창 상태 - 데이터 없어도 기본 표시
                         'time': current_time
                     })
                     continue
@@ -2547,7 +3085,7 @@ class IntegratedTradingSystem:
                         orchestrator_status = "오류"
                         rejection_info = str(e)[:30]
 
-                # 스퀴즈 모멘텀 계산
+                # 스퀴즈 모멘텀 계산 (색상 표시)
                 squeeze_display = "[dim]-[/dim]"
                 squeeze_config = self.config.get('squeeze_momentum', {})
                 if squeeze_config.get('enabled', False) and df is not None and len(df) >= 50:
@@ -2558,6 +3096,7 @@ class IntegratedTradingSystem:
                         df_copy = calculate_squeeze_momentum(df_copy)
                         signal = get_current_squeeze_signal(df_copy)
 
+                        # 색상별 표시
                         color_map = {
                             'bright_green': ('🟢', 'BG', 'bold green'),
                             'dark_green': ('🟡', 'DG', 'yellow'),
@@ -2565,10 +3104,84 @@ class IntegratedTradingSystem:
                             'bright_red': ('🟠', 'BR', 'bold red'),
                             'gray': ('⚪', '--', 'dim')
                         }
+
                         emoji, abbr, color = color_map.get(signal['color'], ('⚪', '--', 'dim'))
                         squeeze_display = f"[{color}]{emoji}{abbr}[/{color}]"
                     except Exception:
                         squeeze_display = "[dim]-[/dim]"
+
+                # 호가창 상태 계산
+                orderbook_display = "[dim]-[/dim]"  # 기본값
+                entry_mode = squeeze_config.get('entry_mode', 'squeeze_only')
+
+                if entry_mode == "squeeze_with_orderbook" and df is not None and len(df) >= 20:
+                    try:
+                        # 호가창 데이터 조회
+                        orderbook_data = self.api.get_stock_quote(stock_code)
+
+                        # 디버그: API 응답 확인
+                        if orderbook_data is None:
+                            console.print(f"[dim yellow]⚠️  {stock_code}: get_stock_quote() 반환 None[/dim yellow]")
+                        elif orderbook_data.get('return_code') != 0:
+                            console.print(f"[dim yellow]⚠️  {stock_code}: API return_code={orderbook_data.get('return_code')}[/dim yellow]")
+
+                        if orderbook_data is not None and orderbook_data.get('return_code') == 0:
+                            output = orderbook_data.get('output', {})
+
+                            # 필요한 데이터 추출
+                            sell_1st_qty = safe_float(output.get('sell_hoga_rem_qty_1', 0))
+                            tot_buy_qty = safe_float(output.get('tot_buy_hoga_rem_qty', 0))
+                            tot_sell_qty = safe_float(output.get('tot_sell_hoga_rem_qty', 0))
+
+                            # 체결강도
+                            execution_strength = (tot_buy_qty / tot_sell_qty * 100) if tot_sell_qty > 0 else 100.0
+
+                            # VWAP
+                            vwap = df['vwap'].iloc[-1] if 'vwap' in df.columns else current_price
+
+                            # 거래량
+                            recent_5min_volume = df['volume'].tail(5).sum() if len(df) >= 5 else 0
+                            prev_5min_volume = df['volume'].iloc[-10:-5].sum() if len(df) >= 10 else recent_5min_volume * 0.8
+                            recent_high_5min = df['high'].tail(5).max() if len(df) >= 5 else current_price
+
+                            # 호가창 필터 체크 (간단 버전)
+                            from analyzers.order_book_filter import OrderBookFilter
+                            ob_filter = OrderBookFilter()
+
+                            # Phase 1 진입 조건 체크
+                            passed, reason, results = ob_filter.check_entry_conditions_phase1(
+                                stock_code=stock_code,
+                                current_price=current_price,
+                                vwap=vwap,
+                                squeeze_current=False,
+                                squeeze_prev=True,
+                                squeeze_off_count=1,
+                                recent_5min_volume=recent_5min_volume,
+                                prev_5min_volume=prev_5min_volume,
+                                sell_1st_qty=sell_1st_qty,
+                                sell_1st_avg_1min=sell_1st_qty,
+                                execution_strength=execution_strength,
+                                stock_avg_strength=100.0,
+                                price_stable_sec=0.0,
+                                recent_high_5min=recent_high_5min,
+                                debug=False  # 테이블에서는 디버그 로그 생략
+                            )
+
+                            # 통과한 조건 개수 계산
+                            passed_count = sum([1 for r in results.values() if r.get('pass', False)])
+                            total_count = len(results)
+
+                            if passed:
+                                orderbook_display = f"[green]✓{passed_count}/{total_count}[/green]"
+                            else:
+                                orderbook_display = f"[red]✗{passed_count}/{total_count}[/red]"
+                        else:
+                            # API 조회 실패
+                            orderbook_display = "[dim]-[/dim]"
+                    except Exception as e:
+                        # 에러 발생 시 디버그 로그
+                        console.print(f"[dim red]⚠️  {stock_code} 호가창 계산 오류: {e}[/dim red]")
+                        orderbook_display = "[dim]-[/dim]"
 
                 stock_data.append({
                     'code': stock_code,
@@ -2591,6 +3204,7 @@ class IntegratedTradingSystem:
                     'signal_color': signal_color,
                     'conditions_met': conditions_met,
                     'squeeze_display': squeeze_display,  # 스퀴즈 모멘텀 상태
+                    'orderbook_display': orderbook_display,  # 호가창 상태
                     'orchestrator_status': orchestrator_status,  # L0-L6 상태
                     'rejection_info': rejection_info,  # 차단 이유
                     'time': current_time,
@@ -2781,7 +3395,7 @@ class IntegratedTradingSystem:
         # ✅ 스퀴즈 모멘텀 범례 (설정 활성화 시)
         squeeze_config = self.config.get('squeeze_momentum', {})
         if squeeze_config.get('enabled', False):
-            console.print("[dim]스퀴즈: [bold green]🟢BG[/bold green]=Bright Green(진입/보유) | [yellow]🟡DG[/yellow]=Dark Green(부분익절) | [red]🔴DR[/red]=Dark Red(청산) | [bold red]🟠BR[/bold red]=Bright Red(청산) | ⚪--=미확인[/dim]")
+            console.print("[dim]스퀴즈: [bold green]✓T1/T2/T3[/bold green]=진입 가능(Tier) | [yellow]⏳[/yellow]=타이밍 지남 | --=스퀴즈 없음 | ✗=차단[/dim]")
             console.print()
 
         # ========================================
@@ -2955,9 +3569,23 @@ class IntegratedTradingSystem:
 
                 daily_trades = risk_data.get('daily_trades', [])
 
-                if daily_trades:
+                # 오늘 날짜로 필터링 (지난 거래는 DB에만 저장, 화면 출력 X)
+                today = datetime.now().date()
+                today_trades = []
+                for trade in daily_trades:
+                    timestamp = trade.get('timestamp', '')
+                    if timestamp:
+                        try:
+                            # ISO format 파싱: "2026-01-05T10:01:02"
+                            trade_date = datetime.fromisoformat(timestamp).date()
+                            if trade_date == today:
+                                today_trades.append(trade)
+                        except (ValueError, AttributeError):
+                            pass  # 날짜 파싱 실패한 거래는 무시
+
+                if today_trades:
                     trade_history_table = Table(
-                        title=f"📝 오늘 거래 내역 ({len(daily_trades)}건)",
+                        title=f"📝 오늘 거래 내역 ({len(today_trades)}건)",
                         box=box.ROUNDED,
                         show_header=True,
                         header_style="bold yellow"
@@ -2971,7 +3599,7 @@ class IntegratedTradingSystem:
                     trade_history_table.add_column("평단가", justify="right", width=10)
                     trade_history_table.add_column("손익", justify="right", width=12)
 
-                    for idx, trade in enumerate(daily_trades, 1):
+                    for idx, trade in enumerate(today_trades, 1):
                         # 타임스탬프 파싱
                         timestamp = trade.get('timestamp', '')
                         if 'T' in timestamp:
@@ -3043,6 +3671,7 @@ class IntegratedTradingSystem:
         table.add_column("거래량", justify="right", width=8)
         table.add_column("기술", justify="center", width=8)  # 기술적 조건
         table.add_column("스퀴즈", justify="center", width=8)  # 스퀴즈 모멘텀
+        table.add_column("호가창", justify="center", width=8)  # 호가창 상태
         table.add_column("필터상태", justify="center", width=9)  # L0-L6 상태
         table.add_column("차단이유", style="dim", width=20)  # 상세 이유
         table.add_column("시간", style="dim", width=8)
@@ -3095,6 +3724,9 @@ class IntegratedTradingSystem:
             # 스퀴즈 모멘텀 상태
             squeeze_str = data.get('squeeze_display', '[dim]-[/dim]')
 
+            # 호가창 상태
+            orderbook_str = data.get('orderbook_display', '[dim]-[/dim]')
+
             # 차단 이유
             rejection = data.get('rejection_info', '')
 
@@ -3109,6 +3741,7 @@ class IntegratedTradingSystem:
                 vol_change_str,
                 tech_str,
                 squeeze_str,  # 스퀴즈 추가
+                orderbook_str,  # 호가창 추가
                 filter_str,
                 rejection,
                 data['time']
@@ -3120,7 +3753,12 @@ class IntegratedTradingSystem:
         # 스퀴즈 모멘텀 범례 (enabled일 때만 표시)
         squeeze_config = self.config.get('squeeze_momentum', {})
         if squeeze_config.get('enabled', False):
-            console.print("[dim]스퀴즈: [bold green]🟢BG[/bold green]=Bright Green(진입/보유) | [yellow]🟡DG[/yellow]=Dark Green(부분익절) | [red]🔴DR[/red]=Dark Red(청산) | [bold red]🟠BR[/bold red]=Bright Red(청산) | ⚪--=미확인[/dim]")
+            console.print("[dim]스퀴즈: [bold green]🟢BG[/bold green]=Bright Green(진입/보유) | [yellow]🟡DG[/yellow]=Dark Green(부분익절) | [red]🔴DR[/red]=Dark Red(청산) | [bold red]🟠BR[/bold red]=Bright Red(청산)[/dim]")
+
+            # 호가창 범례 (squeeze_with_orderbook 모드일 때만 표시)
+            entry_mode = squeeze_config.get('entry_mode', 'squeeze_only')
+            if entry_mode == "squeeze_with_orderbook":
+                console.print("[dim]호가창: [green]✓N/6[/green]=N개 조건 통과 | [red]✗N/6[/red]=N개만 통과 (차단) | 조건: ①Squeeze OFF, ②거래량1.05배, ③VWAP상단, ④매도호가감소, ⑤체결강도80%, ⑥가격정체[/dim]")
 
         console.print()
 
@@ -3243,12 +3881,41 @@ class IntegratedTradingSystem:
     async def check_entry_signal(self, stock_code: str, kiwoom_df: pd.DataFrame = None):
         """매수 신호 체크 (SignalOrchestrator 사용 - L0~L6 통합)"""
         try:
-            # 🔧 FIX: 문서 기반의 안전 장치로, 모든 진입 평가 전 시간 필터 강제 적용
-            time_ok, time_reason = self._is_valid_entry_time()
-            if not time_ok:
-                # 장 시간이 아니면 조용히 종료 (로그 최소화)
-                console.print(f"[yellow]⏰ {stock_code}: {time_reason}[/yellow]")
+            # 진입 모드 확인 (시간 필터 조건부 적용)
+            squeeze_config = self.config.get('squeeze_momentum', {})
+            entry_mode = squeeze_config.get('entry_mode', 'squeeze_only')
+
+            # 🔧 FIX: 모든 모드에서 14:59 이후 진입 차단 (15:00 강제 청산과 충돌 방지)
+            from datetime import time as time_class
+            current_time = datetime.now().time()
+            LATE_ENTRY_CUTOFF = time_class(14, 59, 0)
+            MORNING_CUTOFF = time_class(12, 0, 0)   # 🔧 FIX: 오전장 마감 12:00
+            LUNCH_START = time_class(12, 0, 0)      # 🔧 NEW: 점심시간 시작 (11:30→12:00 완화)
+            LUNCH_END = time_class(13, 0, 0)        # 🔧 NEW: 점심시간 종료
+            GOLDEN_TIME_START = time_class(10, 0, 0)   # 🔧 NEW: 골든타임 시작
+            GOLDEN_TIME_END = time_class(10, 30, 0)    # 🔧 NEW: 골든타임 종료
+
+            if current_time > LATE_ENTRY_CUTOFF:
+                console.print(f"[yellow]⏰ {stock_code}: 14:59 이후 신규 진입 차단 ({current_time.strftime('%H:%M:%S')})[/yellow]")
                 return
+
+            # 🔧 NEW: squeeze_2tf 모드는 점심시간(12:00~13:00) 진입 차단 (제이엔비 손실 분석 반영)
+            if entry_mode == "squeeze_2tf":
+                if LUNCH_START <= current_time <= LUNCH_END:
+                    console.print(f"[yellow]⏰ {stock_code}: 점심시간 진입 차단 - 12:00~13:00 변동성 낮음 ({current_time.strftime('%H:%M:%S')})[/yellow]")
+                    return
+
+            # 🔧 NEW: 골든타임 여부 체크 (10:00~10:30) - 나중에 신뢰도 가중치로 사용
+            is_golden_time = GOLDEN_TIME_START <= current_time <= GOLDEN_TIME_END
+
+            # ma_cross, squeeze_2tf 모드는 점심시간 등 다른 시간 제한 없음
+            if entry_mode not in ["ma_cross", "squeeze_2tf"]:
+                # 🔧 FIX: 문서 기반의 안전 장치로, 모든 진입 평가 전 시간 필터 강제 적용
+                time_ok, time_reason = self._is_valid_entry_time()
+                if not time_ok:
+                    # 장 시간이 아니면 조용히 종료 (로그 최소화)
+                    console.print(f"[yellow]⏰ {stock_code}: {time_reason}[/yellow]")
+                    return
 
             console.print(f"[green]🔍 {stock_code}: 매수 신호 체크 시작[/green]")
 
@@ -3350,6 +4017,9 @@ class IntegratedTradingSystem:
             squeeze_config = self.config.get('squeeze_momentum', {})
             entry_mode = squeeze_config.get('entry_mode', 'squeeze_only')  # 기본값: squeeze_only
 
+            # 진입 이유 초기화 (각 모드에서 설정)
+            entry_reason = None
+
             # 3. 모드별 진입 조건 체크
             if entry_mode == "squeeze_only":
                 # ========================================
@@ -3389,7 +4059,8 @@ class IntegratedTradingSystem:
                 try:
                     orderbook_data = self.api.get_stock_quote(stock_code)
 
-                    if orderbook_data.get('return_code') != 0:
+                    # 🔥 FIX: None 체크 추가
+                    if orderbook_data is None or orderbook_data.get('return_code') != 0:
                         console.print(f"[yellow]⚠️  {stock_name}: 호가 데이터 조회 실패, 스퀴즈만 사용[/yellow]")
                         # 호가 데이터 없으면 기존 스퀴즈만 사용
                         from utils.squeeze_momentum_realtime import check_squeeze_momentum_filter
@@ -3464,6 +4135,15 @@ class IntegratedTradingSystem:
                         else:
                             console.print(f"[green]✅ {stock_name}: {reason}[/green]")
 
+                            # 호가창 상세 정보 출력 (성공 시에도)
+                            if 'orderbook' in details:
+                                passed = sum([1 for r in details['orderbook'].values() if r.get('pass')])
+                                total = len(details['orderbook'])
+                                console.print(f"[green]  호가창: {passed}/{total} 통과[/green]")
+                                for cond, result in details['orderbook'].items():
+                                    status = "✓" if result.get('pass') else "✗"
+                                    console.print(f"[dim]    {status} {cond}: {result.get('reason', 'N/A')}[/dim]")
+
                             # 티어 기반 신뢰도 조정
                             tier = details.get('squeeze', {}).get('tier', 1)
                             if tier >= 3:
@@ -3476,10 +4156,282 @@ class IntegratedTradingSystem:
                                 entry_confidence = 0.75
                                 position_size_mult = 0.8
 
-                            console.print(f"[green]  Tier {tier} 진입 (신뢰도: {entry_confidence*100:.0f}%)[/green]")
+                            console.print(f"[green]  Tier {tier} 진입 (신뢰도: {entry_confidence*100:.0f}%, 포지션: {position_size_mult*100:.0f}%)[/green]")
 
                 except Exception as e:
                     console.print(f"[red]❌ {stock_name}: 호가창 데이터 처리 실패 - {e}[/red]")
+                    import traceback
+                    traceback.print_exc()
+                    return
+
+            elif entry_mode == "ma_cross":
+                # ========================================
+                # 모드: MA 골든크로스/데드크로스 전략
+                # - 5분봉 MA5/MA10 골든크로스만
+                # - 추가 조건 없음
+                # - 시간 제한 없음
+                # - 호가창 필터 없음
+                # ========================================
+                console.print(f"[cyan]📊 진입 모드: 5분봉 MA 골든크로스 전략[/cyan]")
+
+                # 1분봉 데이터 그대로 사용
+                df_1min = df.copy()
+
+                # 5분봉으로 리샘플링
+                try:
+                    # cntr_tm을 DatetimeIndex로 변환 (예: 20260109090500 → 2026-01-09 09:05:00)
+                    if 'cntr_tm' in df_1min.columns:
+                        df_1min['datetime'] = pd.to_datetime(df_1min['cntr_tm'], format='%Y%m%d%H%M%S', errors='coerce')
+                        df_1min = df_1min.set_index('datetime')
+                    elif not isinstance(df_1min.index, pd.DatetimeIndex):
+                        console.print(f"[red]❌ {stock_name}: 시간 정보 없음 (cntr_tm 컬럼 없음)[/red]")
+                        return
+
+                    # 1분봉을 5분봉으로 변환
+                    df_5min = df_1min.resample('5min').agg({
+                        'open': 'first',
+                        'high': 'max',
+                        'low': 'min',
+                        'close': 'last',
+                        'volume': 'sum'
+                    }).dropna()
+
+                    # 인덱스 리셋 (MA 계산 시 인덱스 접근 편의성)
+                    df_5min = df_5min.reset_index(drop=True)
+
+                    console.print(f"[dim]  ✓ 5분봉 리샘플링 완료: {len(df_5min)}개 봉[/dim]")
+
+                    # MA Cross 전략 진입 체크 (5분봉만)
+                    signal, reason, details = self.ma_cross_strategy.check_entry_signal(
+                        df_5min=df_5min,
+                        debug=True
+                    )
+
+                    if not signal:
+                        console.print(f"[yellow]⚠️  {stock_name} ({stock_code}): {reason}[/yellow]")
+                        return
+                    else:
+                        console.print(f"[green]✅ {stock_name}: {reason}[/green]")
+
+                    # MA Cross는 고정 신뢰도
+                    entry_confidence = 0.8
+                    position_size_mult = 1.0
+
+                    # 진입 이유 생성 (시간 + 전략 상세)
+                    entry_reason = f"{datetime.now().strftime('%H:%M')} 5분봉 {reason}"
+
+                except Exception as e:
+                    console.print(f"[red]❌ {stock_name}: MA Cross 처리 실패 - {e}[/red]")
+                    import traceback
+                    traceback.print_exc()
+                    return
+
+            elif entry_mode == "squeeze_2tf":
+                # ========================================
+                # 모드: 2-타임프레임 전략 (30분봉 방향 + 하위봉 진입)
+                # - 30분봉: MA5/MA20 골든크로스 + Squeeze OFF + 모멘텀 상승
+                # - 5분봉 (또는 3분봉): 골든크로스 또는 눌림 후 반등
+                # ========================================
+                console.print(f"[cyan]📊 진입 모드: 2-타임프레임 전략 (30분봉 + {self.two_tf_strategy.lower_tf})[/cyan]")
+
+                # 1분봉 데이터 준비
+                df_1min = df.copy()
+
+                try:
+                    # cntr_tm을 DatetimeIndex로 변환
+                    if 'cntr_tm' in df_1min.columns:
+                        df_1min['datetime'] = pd.to_datetime(df_1min['cntr_tm'], format='%Y%m%d%H%M%S', errors='coerce')
+                        df_1min = df_1min.set_index('datetime')
+                    elif not isinstance(df_1min.index, pd.DatetimeIndex):
+                        console.print(f"[red]❌ {stock_name}: 시간 정보 없음 (cntr_tm 컬럼 없음)[/red]")
+                        return
+
+                    # 30분봉으로 리샘플링
+                    df_30min = df_1min.resample('30min').agg({
+                        'open': 'first',
+                        'high': 'max',
+                        'low': 'min',
+                        'close': 'last',
+                        'volume': 'sum'
+                    }).dropna()
+
+                    # 5분봉으로 리샘플링 (또는 config에서 설정된 하위봉)
+                    lower_tf = self.two_tf_strategy.lower_tf
+                    df_lower = df_1min.resample(lower_tf).agg({
+                        'open': 'first',
+                        'high': 'max',
+                        'low': 'min',
+                        'close': 'last',
+                        'volume': 'sum'
+                    }).dropna()
+
+                    console.print(f"[dim]  ✓ 30분봉: {len(df_30min)}개, {lower_tf}: {len(df_lower)}개[/dim]")
+
+                    # 데이터 충분성 체크
+                    if len(df_30min) < 25:
+                        console.print(f"[yellow]⚠️  {stock_name}: 30분봉 데이터 부족 ({len(df_30min)}개 < 25개)[/yellow]")
+                        return
+
+                    if len(df_lower) < 25:
+                        console.print(f"[yellow]⚠️  {stock_name}: {lower_tf} 데이터 부족 ({len(df_lower)}개 < 25개)[/yellow]")
+                        return
+
+                    # 2-타임프레임 전략 체크
+                    signal, reason, details = self.two_tf_strategy.check_entry_signal(
+                        df_higher=df_30min,
+                        df_lower=df_lower,
+                        debug=True
+                    )
+
+                    if not signal:
+                        console.print(f"[yellow]⚠️  {stock_name} ({stock_code}): {reason}[/yellow]")
+                        return
+                    else:
+                        console.print(f"[green]✅ {stock_name}: {reason}[/green]")
+
+                    # 신뢰도 설정 (상위봉 + 하위봉 모두 충족)
+                    entry_confidence = 0.85
+                    position_size_mult = 1.0
+
+                    # 🔧 NEW: 골든타임 보너스 (10:00~10:30 진입 시 신뢰도 상향)
+                    if is_golden_time:
+                        entry_confidence = 0.95
+                        position_size_mult = 1.2
+                        console.print(f"[green]⭐ 골든타임 진입! 신뢰도 0.95, 포지션 1.2배[/green]")
+
+                    # 진입 이유 생성 (시간 + 전략 상세)
+                    higher_details = details.get('higher_tf', {})
+                    momentum_color = higher_details.get('momentum_color', 'N/A')
+                    golden_tag = " [골든타임]" if is_golden_time else ""
+                    entry_reason = f"{datetime.now().strftime('%H:%M')} 30분봉 MA5/MA20 골든크로스 + Squeeze OFF + 모멘텀({momentum_color}) + {self.two_tf_strategy.lower_tf} 진입{golden_tag}"
+
+                except Exception as e:
+                    console.print(f"[red]❌ {stock_name}: 2-타임프레임 전략 처리 실패 - {e}[/red]")
+                    import traceback
+                    traceback.print_exc()
+                    return
+
+            elif entry_mode == "smc":
+                # ========================================
+                # 모드: SMC (Smart Money Concepts) 전략
+                # - CHoCH (Change of Character) 감지
+                # - Liquidity Sweep 확인
+                # - Order Block 영역 체크
+                # ========================================
+                console.print(f"[cyan]📊 진입 모드: SMC (Smart Money Concepts)[/cyan]")
+
+                # 1분봉 데이터 준비
+                df_1min = df.copy()
+
+                try:
+                    # cntr_tm을 DatetimeIndex로 변환
+                    if 'cntr_tm' in df_1min.columns:
+                        df_1min['datetime'] = pd.to_datetime(df_1min['cntr_tm'], format='%Y%m%d%H%M%S', errors='coerce')
+                        df_1min = df_1min.set_index('datetime')
+                    elif not isinstance(df_1min.index, pd.DatetimeIndex):
+                        console.print(f"[red]❌ {stock_name}: 시간 정보 없음 (cntr_tm 컬럼 없음)[/red]")
+                        return
+
+                    # 5분봉으로 리샘플링 (SMC 분석용)
+                    df_5min = df_1min.resample('5min').agg({
+                        'open': 'first',
+                        'high': 'max',
+                        'low': 'min',
+                        'close': 'last',
+                        'volume': 'sum'
+                    }).dropna()
+
+                    console.print(f"[dim]  ✓ 5분봉: {len(df_5min)}개[/dim]")
+
+                    # 데이터 충분성 체크
+                    if len(df_5min) < 50:
+                        console.print(f"[yellow]⚠️  {stock_name}: 5분봉 데이터 부족 ({len(df_5min)}개 < 50개)[/yellow]")
+                        return
+
+                    # 🔧 2026-01-29: MTF Bias 필터용 30분봉 데이터 생성
+                    df_30min = None
+                    smc_config = self.config.get('smc', {})
+                    mtf_config = smc_config.get('mtf_bias', {})
+                    mtf_enabled = mtf_config.get('enabled', True)
+
+                    if mtf_enabled:
+                        try:
+                            df_30min = df_1min.resample('30min').agg({
+                                'open': 'first',
+                                'high': 'max',
+                                'low': 'min',
+                                'close': 'last',
+                                'volume': 'sum'
+                            }).dropna()
+
+                            if len(df_30min) >= 20:
+                                console.print(f"[dim]  ✓ 30분봉: {len(df_30min)}개 (MTF Bias 필터용)[/dim]")
+                            else:
+                                console.print(f"[yellow]⚠️  30분봉 부족 ({len(df_30min)}개) - MTF Bias 비활성[/yellow]")
+                                df_30min = None
+                        except Exception as e:
+                            console.print(f"[dim]⚠️  30분봉 생성 실패: {e} - MTF Bias 비활성[/dim]")
+                            df_30min = None
+
+                    # ✅ BB(30,1) 관측 (진입 X, 로깅만) - 5분봉 실데이터 검증
+                    try:
+                        from utils.squeeze_momentum import calculate_squeeze_momentum
+                        df_5min_sqz = calculate_squeeze_momentum(df_5min.copy())
+                        self.bb30_observer.observe(
+                            stock_code=stock_code,
+                            stock_name=stock_name,
+                            df=df_5min_sqz,
+                            current_price=current_price
+                        )
+                    except Exception as e:
+                        pass  # 관측 실패 시 무시 (진입에 영향 없음)
+
+                    # SMC 전략 체크 (🔧 2026-01-29: MTF Bias 필터 추가)
+                    signal, reason, details = self.smc_strategy.check_entry_signal(
+                        df=df_5min,
+                        debug=True,
+                        df_htf=df_30min  # 30분봉 데이터 (MTF Bias 필터용)
+                    )
+
+                    if not signal:
+                        console.print(f"[yellow]⚠️  {stock_name} ({stock_code}): {reason}[/yellow]")
+                        return
+                    else:
+                        console.print(f"[green]✅ {stock_name}: {reason}[/green]")
+
+                    # 방향 확인 (롱온리 전략의 경우)
+                    direction = details.get('direction', 'none')
+                    if direction != 'long':
+                        console.print(f"[yellow]⚠️  {stock_name}: 숏 신호 무시 (롱온리)[/yellow]")
+                        return
+
+                    # 🔧 2026-01-23: 신뢰도 + CHoCH 등급 기반 포지션 크기
+                    entry_confidence = details.get('confidence', 0.7)
+                    weight_multiplier = details.get('weight_multiplier', 1.0)  # 등급별 비중
+
+                    # 신뢰도 기반 배율
+                    confidence_mult = 0.8 if entry_confidence < 0.8 else 1.0
+
+                    # 최종 포지션 크기 = 신뢰도 배율 × 등급 배율
+                    position_size_mult = confidence_mult * weight_multiplier
+
+                    # 등급 정보 로깅
+                    choch_grade_info = details.get('choch_grade', {})
+                    choch_grade = choch_grade_info.get('grade', 'B')
+                    if weight_multiplier < 1.0:
+                        console.print(f"[yellow]📊 CHoCH {choch_grade}급: 비중 {weight_multiplier*100:.0f}% 적용[/yellow]")
+
+                    # 🔧 2026-02-06: 구조 기반 손절가 저장
+                    structure_stop_price = details.get('structure_stop_price')
+                    if structure_stop_price:
+                        console.print(f"[cyan]📍 구조 손절가: {structure_stop_price:,.0f}원[/cyan]")
+
+                    # 진입 이유 생성
+                    choch_info = details.get('choch', {})
+                    entry_reason = f"{datetime.now().strftime('%H:%M')} SMC {reason}"
+
+                except Exception as e:
+                    console.print(f"[red]❌ {stock_name}: SMC 전략 처리 실패 - {e}[/red]")
                     import traceback
                     traceback.print_exc()
                     return
@@ -3552,8 +4504,32 @@ class IntegratedTradingSystem:
             console.print(f"[green]✅ {stock_name} ({stock_code}): 매수 시그널 발생![/green]")
             console.print(f"  신뢰도: {entry_confidence*100:.0f}%, 포지션 조정: {position_size_mult*100:.0f}%")
 
-            # execute_buy 호출 (포지션 사이즈 + 진입 신뢰도 반영)
-            self.execute_buy(stock_code, stock_name, current_price, df, position_size_mult, entry_confidence)
+            # entry_reason이 설정되지 않은 모드는 기본값 사용
+            if entry_reason is None:
+                entry_reason = f"{datetime.now().strftime('%H:%M')} {entry_mode} 모드 진입"
+
+            # execute_buy 호출 (포지션 사이즈 + 진입 신뢰도 + 진입 이유 반영)
+            self.execute_buy(stock_code, stock_name, current_price, df, position_size_mult, entry_confidence, entry_reason)
+
+            # 🔧 2026-02-06: SMC 진입 시 추가 정보를 포지션에 저장
+            if entry_mode == "smc" and stock_code in self.positions:
+                try:
+                    # 구조 기반 손절가 저장 (structure_stop_price는 SMC 분기에서 details로부터 추출됨)
+                    if structure_stop_price is not None:
+                        self.positions[stock_code]['structure_stop_price'] = structure_stop_price
+                        console.print(f"[cyan]📍 {stock_name}: 구조 손절가 {structure_stop_price:,.0f}원 저장[/cyan]")
+
+                    # HTF 추세 일치 여부 저장 (조건부 보유 시간 연장용)
+                    mtf_bias_info = details.get('mtf_bias', {})
+                    self.positions[stock_code]['htf_trend_aligned'] = mtf_bias_info.get('is_uptrend', False)
+                    self.positions[stock_code]['direction'] = 'long'
+
+                    # 🔧 2026-02-07: 진입 시 ATR 저장 (Early Failure Structure 필터용)
+                    if 'atr' in df_5min.columns and len(df_5min) > 0:
+                        self.positions[stock_code]['atr_at_entry'] = float(df_5min['atr'].iloc[-1])
+                except Exception:
+                    self.positions[stock_code]['htf_trend_aligned'] = False
+                    self.positions[stock_code]['direction'] = 'long'
 
         except Exception as e:
             console.print(f"[red]❌ {stock_code} 매수 신호 체크 실패: {e}[/red]")
@@ -3625,6 +4601,84 @@ class IntegratedTradingSystem:
                 console.print(f"[red]❌ {stock_code}: 비정상 현재가 {current_price}[/red]")
                 return
 
+            # MA Cross 모드: 데드크로스 우선 체크
+            squeeze_config = self.config.get('squeeze_momentum', {})
+            entry_mode = squeeze_config.get('entry_mode', 'squeeze_only')
+
+            if entry_mode == "ma_cross":
+                try:
+                    # cntr_tm을 DatetimeIndex로 변환
+                    df_temp = df.copy()
+                    if 'cntr_tm' in df_temp.columns:
+                        df_temp['datetime'] = pd.to_datetime(df_temp['cntr_tm'], format='%Y%m%d%H%M%S', errors='coerce')
+                        df_temp = df_temp.set_index('datetime')
+
+                    # DatetimeIndex가 있어야 리샘플링 가능
+                    if isinstance(df_temp.index, pd.DatetimeIndex):
+                        # 1분봉을 5분봉으로 리샘플링
+                        df_5min = df_temp.resample('5min').agg({
+                            'open': 'first',
+                            'high': 'max',
+                            'low': 'min',
+                            'close': 'last',
+                            'volume': 'sum'
+                        }).dropna()
+
+                        df_5min = df_5min.reset_index(drop=True)
+
+                        # 데드크로스 체크 (5분봉)
+                        should_exit_ma, exit_reason_ma, exit_details_ma = self.ma_cross_strategy.check_exit_signal(
+                            df_5min=df_5min,
+                            debug=True
+                        )
+
+                        if should_exit_ma:
+                            # 데드크로스 즉시 청산
+                            profit_pct = ((current_price - position['entry_price']) / position['entry_price']) * 100
+                            exit_reason_with_time = f"{datetime.now().strftime('%H:%M')} {exit_reason_ma}"
+                            self.execute_sell(stock_code, current_price, profit_pct, exit_reason_with_time, use_market_order=False)
+                            return
+                    else:
+                        console.print(f"[yellow]⚠️  {stock_code}: 시간 정보 없음, MA Cross 데드크로스 체크 스킵[/yellow]")
+
+                except Exception as e:
+                    console.print(f"[yellow]⚠️  MA Cross 데드크로스 체크 실패: {e}[/yellow]")
+
+            elif entry_mode == "squeeze_2tf":
+                # 2-타임프레임 전략 청산 체크 (30분봉 기준)
+                try:
+                    df_temp = df.copy()
+                    if 'cntr_tm' in df_temp.columns:
+                        df_temp['datetime'] = pd.to_datetime(df_temp['cntr_tm'], format='%Y%m%d%H%M%S', errors='coerce')
+                        df_temp = df_temp.set_index('datetime')
+
+                    if isinstance(df_temp.index, pd.DatetimeIndex):
+                        # 30분봉으로 리샘플링
+                        df_30min = df_temp.resample('30min').agg({
+                            'open': 'first',
+                            'high': 'max',
+                            'low': 'min',
+                            'close': 'last',
+                            'volume': 'sum'
+                        }).dropna()
+
+                        # 청산 조건 체크 (30분봉 데드크로스)
+                        should_exit_2tf, exit_reason_2tf, exit_details_2tf = self.two_tf_strategy.check_exit_signal(
+                            df_higher=df_30min,
+                            debug=True
+                        )
+
+                        if should_exit_2tf:
+                            profit_pct = ((current_price - position['entry_price']) / position['entry_price']) * 100
+                            exit_reason_with_time = f"{datetime.now().strftime('%H:%M')} {exit_reason_2tf}"
+                            self.execute_sell(stock_code, current_price, profit_pct, exit_reason_with_time, use_market_order=False)
+                            return
+                    else:
+                        console.print(f"[yellow]⚠️  {stock_code}: 시간 정보 없음, 2-타임프레임 청산 체크 스킵[/yellow]")
+
+                except Exception as e:
+                    console.print(f"[yellow]⚠️  2-타임프레임 청산 체크 실패: {e}[/yellow]")
+
             # 최적화된 청산 로직 호출
             should_exit, exit_reason, exit_info = self.exit_logic.check_exit_signal(
                 position=position,
@@ -3662,7 +4716,8 @@ class IntegratedTradingSystem:
             # 전량 청산 실행
             if should_exit:
                 use_market_order = exit_info.get('use_market_order', False) if exit_info else False
-                self.execute_sell(stock_code, current_price, profit_pct, exit_reason, use_market_order)
+                exit_reason_with_time = f"{datetime.now().strftime('%H:%M')} {exit_reason}"
+                self.execute_sell(stock_code, current_price, profit_pct, exit_reason_with_time, use_market_order)
 
         except Exception as e:
             console.print(f"[red]❌ {stock_code} 매도 신호 체크 실패: {e}[/red]")
@@ -3678,7 +4733,14 @@ class IntegratedTradingSystem:
             total_pnl = 0.0
             for trade in trades_today:
                 trade_time = trade.get('trade_time', '')
-                if trade_time.startswith(today):
+
+                # 🔧 FIX: datetime 객체를 문자열로 변환
+                if isinstance(trade_time, datetime):
+                    trade_time_str = trade_time.strftime('%Y-%m-%d')
+                else:
+                    trade_time_str = str(trade_time) if trade_time else ''
+
+                if trade_time_str.startswith(today):
                     realized_profit = trade.get('realized_profit', 0)
                     # 🔧 CRITICAL FIX: bytes/string 안전 변환
                     total_pnl += safe_float(realized_profit)
@@ -3723,22 +4785,27 @@ class IntegratedTradingSystem:
         squeeze_config = self.config.get('squeeze_momentum', {})
         entry_mode = squeeze_config.get('entry_mode', 'squeeze_only')  # 기본값: squeeze_only
 
-        if entry_mode == 'squeeze_only':
-            # 스퀴즈 전용 모드에서는 점심시간 매수 허용
+        # 🔥 수정: squeeze_2tf, ma_cross, smc 모드도 점심시간 허용
+        if entry_mode in ['squeeze_only', 'squeeze_with_orderbook', 'squeeze_2tf', 'ma_cross', 'smc']:
+            # 스퀴즈/MA/SMC 기반 모드에서는 점심시간 매수 허용
             return True, ""
 
-        # 🔴 점심시간 차단 (12:00-14:00) - 신규 진입 + 재진입 모두
+        # 🔴 점심시간 차단 (12:00-14:00) - legacy_only, hybrid 모드만
         if MIDDAY_START <= t < MIDDAY_END:
             return False, f"🚫 점심시간 진입 차단 ({t.strftime('%H:%M:%S')})"
 
         return True, ""
 
-    def execute_buy(self, stock_code: str, stock_name: str, price: float, df: pd.DataFrame, position_size_mult: float = 1.0, entry_confidence: float = 1.0):
+    def execute_buy(self, stock_code: str, stock_name: str, price: float, df: pd.DataFrame, position_size_mult: float = 1.0, entry_confidence: float = 1.0, entry_reason: str = None):
         """매수 실행 (실계좌 기반 리스크 관리 + SignalOrchestrator 포지션 조정)
 
         Args:
             entry_confidence: 진입 신뢰도 (0.0~1.0, TIER_1=1.0, TIER_2=0.7, TIER_3=0.5)
+            entry_reason: 매수 이유 (예: "12:34 30분봉 MA5/MA20 골든크로스 + Squeeze OFF")
         """
+        # 🔧 2026-02-07: 진입 시도 카운트 (쿨다운 체크 이전)
+        self.reentry_metrics.record_entry_signal()
+
         # 🔧 FIX: 시간 필터 최우선 체크 (모든 경로 강제 적용)
         time_ok, time_reason = self._is_valid_entry_time()
         if not time_ok:
@@ -3750,18 +4817,45 @@ class IntegratedTradingSystem:
             console.print(f"[red]🚫 {stock_name}: 3회 연속 손실로 당일 진입 금지[/red]")
             return
 
-        # 🔧 FIX: 쿨다운 체크 (손절 30분, 일반 20분 대기)
-        # 🔴 GPT 개선: 손절/익절 구분하여 쿨다운 시간 다르게 적용
+        # 🔧 2026-02-07 v2: exit_reason 기반 차등 쿨다운
         if stock_code in self.stock_cooldown:
-            last_exit, is_loss = self.stock_cooldown[stock_code]
-            cooldown_required = self.loss_cooldown_minutes if is_loss else self.cooldown_minutes
-            elapsed = (datetime.now() - last_exit).total_seconds() / 60
-            if elapsed < cooldown_required:
-                remaining = cooldown_required - elapsed
-                cooldown_type = "손절" if is_loss else "익절"
-                console.print(f"[yellow]⏸️  {stock_name}: {cooldown_type} 쿨다운 {remaining:.1f}분 남음 (총 {cooldown_required}분)[/yellow]")
-                return
-            # 쿨다운 만료 → 제거
+            cooldown_data = self.stock_cooldown[stock_code]
+            last_exit, is_loss = cooldown_data[0], cooldown_data[1]
+            exit_reason = cooldown_data[2] if len(cooldown_data) > 2 else ''
+
+            # v2: exit_reason → 표준 카테고리 → config 기반 쿨다운 시간 결정
+            if self._cooldown_v2_enabled and self._cooldown_by_reason:
+                reason_category = self._categorize_exit_reason(exit_reason)
+                cooldown_required = self._cooldown_by_reason.get(
+                    reason_category,
+                    self._cooldown_by_reason.get('default', 30)
+                )
+            else:
+                # fallback: 기존 v1 로직
+                cooldown_required = self.loss_cooldown_minutes if is_loss else self.cooldown_minutes
+
+            # 쿨다운 0분 → 차단하지 않음 (take_profit 등)
+            if cooldown_required > 0:
+                elapsed = (datetime.now() - last_exit).total_seconds() / 60
+                if elapsed < cooldown_required:
+                    remaining = cooldown_required - elapsed
+                    reason_label = self._categorize_exit_reason(exit_reason) if self._cooldown_v2_enabled else ("손절" if is_loss else "익절")
+                    console.print(f"[yellow]⏸️  {stock_name}: [{reason_label}] 쿨다운 {remaining:.1f}분 남음 (총 {cooldown_required}분)[/yellow]")
+
+                    # 쿨다운 차단 이벤트 기록
+                    from metrics.reentry_metrics import ReentryBlockedEvent
+                    self.reentry_metrics.record_blocked(ReentryBlockedEvent(
+                        timestamp=datetime.now(),
+                        symbol=stock_code,
+                        symbol_name=stock_name,
+                        direction='long',
+                        elapsed_min=elapsed,
+                        cooldown_min=cooldown_required,
+                        is_loss_cooldown=is_loss,
+                        exit_reason=exit_reason,
+                    ))
+                    return
+            # 쿨다운 만료 또는 0분 → 제거
             del self.stock_cooldown[stock_code]
 
         # 🔧 CRITICAL FIX: 이미 포지션이 있으면 추가 매수 금지 (중복 매수 방지)
@@ -3909,6 +5003,8 @@ class IntegratedTradingSystem:
             'eod_score': 0.0,  # EOD 시점 재계산 점수 (0.0-1.0)
             'eod_forced_exit': False,  # EOD 강제 청산 여부 (분석/우선감시 리스트용)
             'gap_reentered_today': False,  # 🔥 ChatGPT Fix: 갭업 재진입 중복 방지
+            'structure_stop_price': None,  # 🔧 2026-02-06: 구조 기반 손절가 (SMC)
+            'atr_at_entry': None,           # 🔧 2026-02-07: 진입 시 ATR (Early Failure Structure 필터용)
         }
 
         # 진입 시 overnight 판단 결과 로깅
@@ -3933,7 +5029,7 @@ class IntegratedTradingSystem:
             'order_no': order_no,  # 🔧 주문번호 추가
             'condition_name': 'VWAP+AI',
             'strategy_config': 'hybrid',
-            'entry_reason': f"VWAP 상향 돌파 (종합점수: {analysis.get('total_score', 0):.1f})",
+            'entry_reason': entry_reason or f"{entry_time.strftime('%H:%M')} 진입 (신뢰도: {entry_confidence:.0%})",
 
             # VWAP 백테스트 결과 (🔧 numpy → Python 변환)
             'vwap_validation_score': float(stats.get('avg_profit_pct', 0)) if stats.get('avg_profit_pct') is not None else 0,
@@ -3967,7 +5063,8 @@ class IntegratedTradingSystem:
             trade_type='BUY',
             quantity=quantity,
             price=price,
-            realized_pnl=0
+            realized_pnl=0,
+            reason=entry_reason  # 매수 이유 전달
         )
 
         console.print(f"✅ 매수 완료 (DB ID: {trade_id})")
@@ -4411,13 +5508,15 @@ class IntegratedTradingSystem:
 
                     # 🔥 ChatGPT Fix: 갭업 재진입 실행 및 플래그 설정
                     console.print(f"[green]🚀 갭업 재진입: {candidate['stock_name']} ({candidate['stock_code']})[/green]")
+                    gap_entry_reason = f"{datetime.now().strftime('%H:%M')} 갭업 재진입 (신뢰도: {candidate['confidence']:.0%})"
                     self.execute_buy(
                         stock_code=candidate['stock_code'],
                         stock_name=candidate['stock_name'],
                         price=candidate['current_price'],
                         df=candidate['df'],
                         position_size_mult=1.0,
-                        entry_confidence=candidate['confidence']
+                        entry_confidence=candidate['confidence'],
+                        entry_reason=gap_entry_reason
                     )
 
                     # 재진입 플래그 설정 (중복 방지)
@@ -4576,13 +5675,15 @@ class IntegratedTradingSystem:
             self.db.insert_trade(partial_sell_trade)
 
         # 리스크 관리자에 거래 기록
+        partial_sell_reason = f"{datetime.now().strftime('%H:%M')} 부분청산 {stage}단계 (+{profit_pct:.1f}%)"
         self.risk_manager.record_trade(
             stock_code=stock_code,
             stock_name=position['name'],
             trade_type='SELL',
             quantity=partial_quantity,
             price=price,
-            realized_pnl=realized_profit
+            realized_pnl=realized_profit,
+            reason=partial_sell_reason
         )
 
         # ✅ TradeStateManager에 부분 청산 기록
@@ -4605,8 +5706,9 @@ class IntegratedTradingSystem:
         # 🔧 CRITICAL FIX: 부분 청산 후에도 쿨다운 설정 (재진입 방지)
         if position['quantity'] > 0:
             # 아직 포지션이 남아있지만 쿨다운 시작 (부분 청산은 익절이므로 is_loss=False)
-            self.stock_cooldown[stock_code] = (datetime.now(), False)
-            console.print(f"[yellow]⏸️  {position['name']}: 부분청산 후 쿨다운 {self.cooldown_minutes}분 시작[/yellow]")
+            self.stock_cooldown[stock_code] = (datetime.now(), False, '부분청산')
+            partial_cd = self._cooldown_by_reason.get('partial_exit', self.cooldown_minutes) if self._cooldown_v2_enabled else self.cooldown_minutes
+            console.print(f"[yellow]⏸️  {position['name']}: [partial_exit] 쿨다운 {partial_cd}분 시작[/yellow]")
 
         console.print(f"✅ 부분 청산 완료 (주문번호: {order_no})")
         console.print("=" * 80, style="yellow")
@@ -4758,7 +5860,8 @@ class IntegratedTradingSystem:
             trade_type='SELL',
             quantity=position['quantity'],
             price=price,
-            realized_pnl=realized_profit
+            realized_pnl=realized_profit,
+            reason=reason  # 매도 이유 전달
         )
 
         # 🔧 FIX: 손실 스트릭 업데이트 및 쿨다운 설정
@@ -4828,11 +5931,21 @@ class IntegratedTradingSystem:
                 cooldown_file.write_text(json.dumps(cooldown_data, indent=2, ensure_ascii=False))
                 console.print(f"[red]🔒 쿨다운 활성화: {cooldown_until[:10]}까지 모든 거래 중지[/red]")
 
-            # 🔴 GPT 개선: 손실 거래 → 30분 쿨다운 (VWAP 재탈환 대기)
+            # 🔧 2026-02-07 v2: exit_reason 기반 차등 쿨다운
             is_loss = profit_pct < 0
-            cooldown_time = self.loss_cooldown_minutes if is_loss else self.cooldown_minutes
-            self.stock_cooldown[stock_code] = (datetime.now(), is_loss)
-            console.print(f"[yellow]⏸️  {position['name']}: 쿨다운 {cooldown_time}분 시작 ({'손절' if is_loss else '익절'})[/yellow]")
+            self.stock_cooldown[stock_code] = (datetime.now(), is_loss, reason)
+
+            # v2: config 기반 쿨다운 시간 표시
+            if self._cooldown_v2_enabled and self._cooldown_by_reason:
+                reason_category = self._categorize_exit_reason(reason)
+                cooldown_time = self._cooldown_by_reason.get(
+                    reason_category,
+                    self._cooldown_by_reason.get('default', 30)
+                )
+                console.print(f"[yellow]⏸️  {position['name']}: [{reason_category}] 쿨다운 {cooldown_time}분 시작[/yellow]")
+            else:
+                cooldown_time = self.loss_cooldown_minutes if is_loss else self.cooldown_minutes
+                console.print(f"[yellow]⏸️  {position['name']}: 쿨다운 {cooldown_time}분 시작 ({'손절' if is_loss else '익절'})[/yellow]")
 
         # ✅ TradeStateManager에 매도 기록
         strategy_tag = position.get('strategy_tag', self.default_strategy_tag)  # ✅ 동적 기본값
@@ -4990,7 +6103,7 @@ class IntegratedTradingSystem:
 
         # 처음 한 번만 목표 시간 출력 (순수 print 사용 - Rich와 충돌 방지)
         print(f"⏰ 목표: {target_time.strftime('%m/%d %H:%M')} ({target_time.strftime('%A')})")
-        print(f"💡 언제든지 [Enter] 키를 눌러 메인 메뉴로 돌아갈 수 있습니다.")
+        print(f"💡 [Enter] 키를 누르면 대기를 건너뛰고 즉시 시작합니다.")
         print()  # 한 줄 띄우기
         sys.stdout.flush()  # 🔧 FIX: nohup 환경에서 즉시 출력되도록 flush
 
@@ -5017,7 +6130,7 @@ class IntegratedTradingSystem:
             minutes = int((time_diff % 3600) // 60)
 
             # 같은 줄에서 업데이트 (carriage return 사용)
-            sys.stdout.write(f"\r⏰ 대기 중... 남은 시간: {hours:02d}시간 {minutes:02d}분 ([Enter]로 종료)   ")
+            sys.stdout.write(f"\r⏰ 대기 중... 남은 시간: {hours:02d}시간 {minutes:02d}분 ([Enter]로 즉시시작)   ")
             sys.stdout.flush()
 
             # Enter 키 입력 확인 (non-blocking)
@@ -5043,9 +6156,8 @@ class IntegratedTradingSystem:
                         if line:  # Enter 키 감지
                             print()
                             sys.stdout.flush()
-                            console.print("[yellow]⚠️  사용자가 대기를 중단했습니다.[/yellow]")
-                            self.running = False
-                            break
+                            console.print("[cyan]⏩ 대기 건너뛰기 - 즉시 시작합니다.[/cyan]")
+                            break  # 대기만 중단, 프로그램은 계속 실행
 
                     await asyncio.sleep(1)  # 1초 대기
             except Exception:
