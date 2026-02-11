@@ -69,13 +69,68 @@ re_entry:
   reentry_cooldown:
     enabled: true
     by_exit_reason:
-      early_failure: 60          # 구조 실패 → 가장 위험, 60분
+      # 🔧 2026-02-08: EF subtype별 차등 쿨다운
+      ef_no_follow: 20           # 구조 살아있음, 타이밍만 실패 → 짧은 대기
+      ef_no_demand: 45           # 수급 부재, 가짜 신호 → 긴 대기
+      early_failure: 60          # 미분류 EF fallback → 가장 위험, 60분
       stop_loss: 45              # 명확한 손절 → 45분
       trailing_stop: 30          # 트레일링 스탑 → 30분
       time_exit: 20              # 시간 기반 청산 → 짧게 20분
       take_profit: 0             # 익절 → 차단하지 않음
       partial_exit: 10           # 부분 청산 → 짧게 10분
       default: 30                # 분류 불가 → 안전 fallback 30분
+
+    # 🔧 2026-02-07: 쿨다운 Override (강한 신호가 쿨다운 bypass)
+    override_rules:
+      enabled: true
+      blocked_reasons:             # 이 카테고리는 절대 override 불가
+        - early_failure            # 미분류 EF
+        - ef_no_demand             # 수급 부재 → 절대 불가
+        # ef_no_follow는 override 허용 (구조 살아있으므로)
+      squeeze_override:
+        enabled: true
+        bb_width_percentile_max: 15   # BB width percentile ≤ 15 (극심한 수축)
+        volume_mult_min: 2.5          # 거래량 ≥ 20일 평균의 2.5배
+        require_squeeze_on: true      # Squeeze ON 상태 필수
+      momentum_override:
+        enabled: true
+        roc3_min_pct: 2.5             # ROC(3) ≥ 2.5% (강한 단기 모멘텀)
+        rsi14_min: 65                 # RSI(14) ≥ 65 (상승 모멘텀)
+        require_above_vwap: true      # VWAP 위 필수
+
+      # 🔧 2026-02-08 R2: Override 남용 방지
+      override_abuse_guard:
+        enabled: true
+        max_override_ratio_pct: 30    # override / ef_no_follow 차단 비율 상한 (30%)
+        min_samples: 3                # 최소 차단 횟수 (이하면 비율 판단 안 함)
+        action: "disable_today"       # disable_today | warn_only
+
+      # 🔧 2026-02-08: 종가 전용 Override (14:30~15:20)
+      # ❗ T3 실매매 로그 검증 전까지 OFF
+      close_override:
+        enabled: false                    # ← T3 통과 전까지 OFF
+        time_start: "14:30"               # 종가 구간 시작
+        time_end: "15:20"                 # 종가 구간 종료
+        require_above_vwap: true          # close > VWAP 필수
+        require_above_ema20: true         # close > EMA20 필수
+        volume_ratio_min: 1.5             # 최근 5봉 avg / 20봉 avg ≥ 1.5
+        volume_lookback: 5                # 최근 거래량 평균 봉 수
+        # 종가 진입 시 필터 조정 (main에서 참조)
+        entry_filter_overrides:
+          min_choch_grade: "B"            # CHoCH 등급 완화 (평소 A → B)
+          min_hold_minutes: 10            # 최소 보유 시간 축소 (평소 20~30)
+          disable_ef_check: true          # 종가 진입에는 EF 관찰 비활성화
+          stop_atr_multiplier: 0.5        # 손절 ATR 배수 축소 (평소 0.7)
+
+    # 🔧 2026-02-10: Market Sensor (EF 기반 시장 상태 판별 → 진입 차단)
+    # EF를 손절 도구 → 시장 판별 센서로 격상
+    # 규칙 ①: 오전 EF N회 → 오후 진입 중단
+    # 규칙 ②: no_follow N회 누적 → Risk OFF Day
+    market_sensor:
+      enabled: true
+      morning_ef_limit: 2              # 오전 EF 2회 → 오후 진입 차단
+      morning_cutoff: "12:00"          # 오전/오후 구분 시각
+      risk_off_no_follow_limit: 3      # no_follow 3회 누적 → Risk OFF Day (신규 진입 전면 중단)
 
 risk_management:
   initial_capital: 10000000
@@ -140,6 +195,8 @@ risk_control:
     score_threshold: 3                 # 조기 청산 임계값
     atr_decay_ratio: 0.85             # ATR 감쇠 비율 (< 0.85 = 모멘텀 소실)
     volume_dry_ratio: 0.8             # 거래량 고갈 비율 (< 0.8 = 고갈)
+    mfe_ratio: 0.25                   # MFE 실패 비율 (MFE < ATR × 0.25 = 방향성 부족)
+    follow_through_candles: 3          # 추종 실패 캔들 수 (N캔들 종가 모두 진입가 반대)
     action: "exit_market"              # exit_market | reduce_half | trail_stop
 
   # 🔧 2026-01-27: 오버나잇 전용 Exit 로직 (아진엑스텍 사례 반영)

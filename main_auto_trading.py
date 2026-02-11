@@ -4767,7 +4767,9 @@ class IntegratedTradingSystem:
 
         # Hard-coded 시간 체크 (설정 파일 무관)
         from datetime import time as time_class
-        ENTRY_START = time_class(10, 0, 0)  # 10시 이후 매수 (장초반 가격 불안정)
+        # 🔧 2026-02-10 F5: 10:30 이전 진입 차단 (장 초반 변동성 구간)
+        # 데이터 근거: 09시 진입 6건 전패, 10시 초반도 승률 낮음
+        ENTRY_START = time_class(10, 30, 0)  # 10:30 이후 매수
         # ENTRY_END = time_class(14, 59, 0)  # ❌ 비활성화: 시간 제한 없음
 
         # 🔴 GPT 개선: 점심시간 완전 차단 (재진입 포함)
@@ -4775,7 +4777,7 @@ class IntegratedTradingSystem:
         MIDDAY_END = time_class(14, 0, 0)
 
         if t < ENTRY_START:
-            return False, f"❌ 10:00 이전 진입 차단 ({t.strftime('%H:%M:%S')})"
+            return False, f"❌ 10:30 이전 진입 차단 ({t.strftime('%H:%M:%S')})"
 
         # ❌ 14:59 진입 차단 비활성화
         # if t > ENTRY_END:
@@ -4784,6 +4786,12 @@ class IntegratedTradingSystem:
         # ✅ 스퀴즈 모멘텀 모드: 점심시간 매수 허용
         squeeze_config = self.config.get('squeeze_momentum', {})
         entry_mode = squeeze_config.get('entry_mode', 'squeeze_only')  # 기본값: squeeze_only
+
+        # 🔧 2026-02-10 F1: SMC 모드 14:00 이후 진입 차단
+        # 데이터 근거: 14시+ 진입 19건 승률 15.8%, -12,480원 (최악 시간대)
+        AFTERNOON_CUT = time_class(14, 0, 0)
+        if entry_mode == 'smc' and t >= AFTERNOON_CUT:
+            return False, f"🚫 SMC 14:00 이후 진입 차단 ({t.strftime('%H:%M:%S')})"
 
         # 🔥 수정: squeeze_2tf, ma_cross, smc 모드도 점심시간 허용
         if entry_mode in ['squeeze_only', 'squeeze_with_orderbook', 'squeeze_2tf', 'ma_cross', 'smc']:
@@ -4817,6 +4825,13 @@ class IntegratedTradingSystem:
             console.print(f"[red]🚫 {stock_name}: 3회 연속 손실로 당일 진입 금지[/red]")
             return
 
+        # 🔧 2026-02-10: Market Sensor 체크 (EF 기반 시장 상태 → 진입 차단)
+        ms_config = self.config.get('re_entry.reentry_cooldown.market_sensor', {})
+        can_enter, ms_reason = self.reentry_metrics.can_enter_trade(ms_config)
+        if not can_enter:
+            console.print(f"[bold red]🔴 {stock_name}: {ms_reason} — 진입 차단[/bold red]")
+            return
+
         # 🔧 2026-02-07 v2: exit_reason 기반 차등 쿨다운
         if stock_code in self.stock_cooldown:
             cooldown_data = self.stock_cooldown[stock_code]
@@ -4838,13 +4853,11 @@ class IntegratedTradingSystem:
             if cooldown_required > 0:
                 elapsed = (datetime.now() - last_exit).total_seconds() / 60
                 if elapsed < cooldown_required:
-                    remaining = cooldown_required - elapsed
                     reason_label = self._categorize_exit_reason(exit_reason) if self._cooldown_v2_enabled else ("손절" if is_loss else "익절")
-                    console.print(f"[yellow]⏸️  {stock_name}: [{reason_label}] 쿨다운 {remaining:.1f}분 남음 (총 {cooldown_required}분)[/yellow]")
 
-                    # 쿨다운 차단 이벤트 기록
+                    # 쿨다운 차단 이벤트 기록 (override 판단 전에 먼저 기록 — R2 분모용)
                     from metrics.reentry_metrics import ReentryBlockedEvent
-                    self.reentry_metrics.record_blocked(ReentryBlockedEvent(
+                    blocked_event = ReentryBlockedEvent(
                         timestamp=datetime.now(),
                         symbol=stock_code,
                         symbol_name=stock_name,
@@ -4853,8 +4866,41 @@ class IntegratedTradingSystem:
                         cooldown_min=cooldown_required,
                         is_loss_cooldown=is_loss,
                         exit_reason=exit_reason,
-                    ))
-                    return
+                    )
+                    self.reentry_metrics.record_blocked(blocked_event)
+
+                    # 🔧 2026-02-07: 쿨다운 Override 체크 (강신호 bypass)
+                    # 🔧 2026-02-08 R2: override_disabled_today 체크 추가
+                    override_config = self.config.get('re_entry.reentry_cooldown.override_rules', {})
+                    if (override_config.get('enabled', False)
+                            and not self.reentry_metrics.override_disabled_today):
+                        from metrics.reentry_metrics import check_cooldown_override
+                        reason_cat = self._categorize_exit_reason(exit_reason)
+                        can_override, override_reason = check_cooldown_override(df, reason_cat, override_config)
+                        if can_override:
+                            console.print(
+                                f"[green]⚡ {stock_name}: 쿨다운 Override! "
+                                f"[{reason_label}] {override_reason}[/green]"
+                            )
+                            self.reentry_metrics.record_override()
+
+                            # 🔧 R2: Override 남용 방지 체크
+                            abuse_config = override_config.get('override_abuse_guard', {})
+                            is_abused, abuse_msg = self.reentry_metrics.check_override_abuse(abuse_config)
+                            if is_abused:
+                                console.print(f"[red]⚠️  {abuse_msg}[/red]")
+
+                            del self.stock_cooldown[stock_code]
+                            # fall through to buy logic below
+                        else:
+                            remaining = cooldown_required - elapsed
+                            console.print(f"[yellow]⏸️  {stock_name}: [{reason_label}] 쿨다운 {remaining:.1f}분 남음 (총 {cooldown_required}분)[/yellow]")
+                            return
+                    else:
+                        remaining = cooldown_required - elapsed
+                        disabled_tag = " [override 비활성화]" if self.reentry_metrics.override_disabled_today else ""
+                        console.print(f"[yellow]⏸️  {stock_name}: [{reason_label}] 쿨다운 {remaining:.1f}분 남음 (총 {cooldown_required}분){disabled_tag}[/yellow]")
+                        return
             # 쿨다운 만료 또는 0분 → 제거
             del self.stock_cooldown[stock_code]
 
@@ -5934,6 +5980,15 @@ class IntegratedTradingSystem:
             # 🔧 2026-02-07 v2: exit_reason 기반 차등 쿨다운
             is_loss = profit_pct < 0
             self.stock_cooldown[stock_code] = (datetime.now(), is_loss, reason)
+
+            # 🔧 2026-02-10: Market Sensor — EF 발동 시 시장 상태 업데이트
+            reason_cat = self._categorize_exit_reason(reason)
+            if reason_cat in ('ef_no_follow', 'ef_no_demand'):
+                ef_subtype = 'no_follow' if reason_cat == 'ef_no_follow' else 'no_demand'
+                ms_config = self.config.get('re_entry.reentry_cooldown.market_sensor', {})
+                ms_result = self.reentry_metrics.record_ef_event(ef_subtype, ms_config)
+                if ms_result.get('message'):
+                    console.print(f"[bold red]🔴 {ms_result['message']}[/bold red]")
 
             # v2: config 기반 쿨다운 시간 표시
             if self._cooldown_v2_enabled and self._cooldown_by_reason:
