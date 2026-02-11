@@ -70,7 +70,7 @@ class LiquidityShiftDetector:
                 unit_tp="1000"   # 천원
             )
 
-            if result.get('return_code') != 0:
+            if result is None or result.get('return_code') != 0:
                 return None
 
             # output에서 데이터 추출
@@ -109,7 +109,7 @@ class LiquidityShiftDetector:
             # 여기서는 간단히 get_stock_price로 대체
             result = self.api.get_stock_price(stock_code)
 
-            if result.get('return_code') != 0:
+            if result is None or result.get('return_code') != 0:
                 return None
 
             # 호가 데이터 추출

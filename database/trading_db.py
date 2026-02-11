@@ -2,6 +2,7 @@
 거래 이력 및 분석 데이터 관리 데이터베이스 (PostgreSQL)
 """
 import psycopg2
+from psycopg2 import pool
 from psycopg2.extras import RealDictCursor
 import json
 import os
@@ -17,7 +18,7 @@ class TradingDatabase:
     def __init__(self):
         """PostgreSQL 연결 초기화"""
         # 연결 풀 생성
-        self.pool = psycopg2.pool.SimpleConnectionPool(
+        self.pool = pool.SimpleConnectionPool(
             1, 10,
             host=os.getenv('POSTGRES_HOST', 'localhost'),
             port=int(os.getenv('POSTGRES_PORT', 5432)),
@@ -311,6 +312,101 @@ class TradingDatabase:
                 )
             """)
 
+            # 7. MA Cross 복기 테이블 (전략 개선용)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS trade_review (
+                    trade_id TEXT PRIMARY KEY,
+                    symbol TEXT NOT NULL,
+                    trade_date DATE NOT NULL,
+
+                    timeframe TEXT NOT NULL,
+
+                    entry_time TIMESTAMP NOT NULL,
+                    exit_time TIMESTAMP,
+
+                    entry_price NUMERIC(10,2),
+                    exit_price NUMERIC(10,2),
+
+                    pnl_pct NUMERIC(6,2),
+
+                    exit_type TEXT CHECK (
+                        exit_type IN ('dead_cross', 'hard_stop')
+                    ),
+
+                    -- MA Cross 관련
+                    ma_cross_timing TEXT CHECK (
+                        ma_cross_timing IN ('immediate', 'delayed')
+                    ),
+                    ma_cross_delay_bars INT,
+
+                    golden_cross_duration_bars INT,
+
+                    -- 리스크 분석
+                    max_adverse_excursion_pct NUMERIC(6,2),
+
+                    -- 캔들 / 위치 / 시간대
+                    entry_candle_type TEXT CHECK (
+                        entry_candle_type IN ('strong_bull', 'weak_bull', 'doji', 'bear')
+                    ),
+
+                    price_location TEXT CHECK (
+                        price_location IN ('breakout', 'box_top', 'box_middle', 'box_bottom')
+                    ),
+
+                    time_slot TEXT CHECK (
+                        time_slot IN (
+                            '09:00_09:30',
+                            '09:30_10:30',
+                            '10:30_13:30',
+                            '13:30_14:30',
+                            'after_14:30'
+                        )
+                    ),
+
+                    volume_ratio NUMERIC(6,2),
+
+                    -- 실패 패턴 플래그
+                    late_entry BOOLEAN DEFAULT FALSE,
+                    no_volume BOOLEAN DEFAULT FALSE,
+                    near_resistance BOOLEAN DEFAULT FALSE,
+                    chasing_entry BOOLEAN DEFAULT FALSE,
+                    sudden_drop_before_dead BOOLEAN DEFAULT FALSE,
+
+                    result TEXT CHECK (
+                        result IN ('profit', 'loss', 'breakeven')
+                    ),
+
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+
+            # 8. 키움 API 거래내역 비교 테이블 (불일치 감지용)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS trade_reconciliation (
+                    reconcile_id SERIAL PRIMARY KEY,
+                    check_time TIMESTAMP DEFAULT NOW(),
+                    trade_date DATE NOT NULL,
+
+                    -- 시스템 DB 집계
+                    db_trade_count INT,
+                    db_buy_count INT,
+                    db_sell_count INT,
+                    db_total_amount NUMERIC(20, 2),
+
+                    -- 키움 API 집계
+                    api_trade_count INT,
+                    api_buy_count INT,
+                    api_sell_count INT,
+                    api_total_amount NUMERIC(20, 2),
+
+                    -- 불일치 정보
+                    is_matched BOOLEAN,
+                    missing_trades JSONB,
+                    extra_trades JSONB,
+                    discrepancy_detail TEXT
+                )
+            """)
+
             # 인덱스 생성
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_trades_stock ON trades(stock_code)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_trades_time ON trades(trade_time)")
@@ -323,6 +419,11 @@ class TradingDatabase:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_archive_stock ON archive_candidates(stock_code)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_archive_date ON archive_candidates(date_detected)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_archive_training ON archive_candidates(used_in_training)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_trade_review_date ON trade_review(trade_date)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_trade_review_symbol ON trade_review(symbol, trade_date)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_trade_review_exit_type ON trade_review(exit_type)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_trade_review_result ON trade_review(result)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_reconcile_date ON trade_reconciliation(trade_date)")
 
             # ML 학습용 뷰 생성
             cursor.execute("""
@@ -1128,6 +1229,238 @@ class TradingDatabase:
 
             conn.commit()
             cursor.close()
+        finally:
+            self._put_conn(conn)
+
+    # ==================== MA Cross 복기 시스템 ====================
+
+    def insert_trade_review(self, review_data: Dict[str, Any]) -> bool:
+        """MA Cross 복기 데이터 추가"""
+        conn = self._get_conn()
+        try:
+            cursor = conn.cursor()
+
+            cursor.execute("""
+                INSERT INTO trade_review (
+                    trade_id, symbol, trade_date, timeframe,
+                    entry_time, exit_time,
+                    entry_price, exit_price, pnl_pct,
+                    exit_type,
+                    ma_cross_timing, ma_cross_delay_bars,
+                    golden_cross_duration_bars,
+                    max_adverse_excursion_pct,
+                    entry_candle_type,
+                    price_location, time_slot,
+                    volume_ratio,
+                    late_entry, no_volume, near_resistance, chasing_entry, sudden_drop_before_dead,
+                    result
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s
+                ) ON CONFLICT (trade_id) DO UPDATE SET
+                    exit_time = EXCLUDED.exit_time,
+                    exit_price = EXCLUDED.exit_price,
+                    pnl_pct = EXCLUDED.pnl_pct,
+                    exit_type = EXCLUDED.exit_type,
+                    golden_cross_duration_bars = EXCLUDED.golden_cross_duration_bars,
+                    max_adverse_excursion_pct = EXCLUDED.max_adverse_excursion_pct,
+                    result = EXCLUDED.result
+            """, (
+                review_data['trade_id'],
+                review_data['symbol'],
+                review_data['trade_date'],
+                review_data['timeframe'],
+                review_data['entry_time'],
+                review_data.get('exit_time'),
+                review_data['entry_price'],
+                review_data.get('exit_price'),
+                review_data.get('pnl_pct'),
+                review_data.get('exit_type'),
+                review_data['ma_cross_timing'],
+                review_data['ma_cross_delay_bars'],
+                review_data.get('golden_cross_duration_bars'),
+                review_data.get('max_adverse_excursion_pct'),
+                review_data['entry_candle_type'],
+                review_data['price_location'],
+                review_data['time_slot'],
+                review_data.get('volume_ratio'),
+                review_data.get('late_entry', False),
+                review_data.get('no_volume', False),
+                review_data.get('near_resistance', False),
+                review_data.get('chasing_entry', False),
+                review_data.get('sudden_drop_before_dead', False),
+                review_data.get('result')
+            ))
+
+            conn.commit()
+            cursor.close()
+            return True
+        except Exception as e:
+            print(f"❌ trade_review 저장 실패: {e}")
+            return False
+        finally:
+            self._put_conn(conn)
+
+    def get_trade_reviews(self, symbol: Optional[str] = None,
+                          start_date: Optional[str] = None,
+                          end_date: Optional[str] = None,
+                          exit_type: Optional[str] = None) -> List[Dict]:
+        """MA Cross 복기 데이터 조회"""
+        conn = self._get_conn()
+        try:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+            query = "SELECT * FROM trade_review WHERE 1=1"
+            params = []
+
+            if symbol:
+                query += " AND symbol = %s"
+                params.append(symbol)
+
+            if start_date:
+                query += " AND trade_date >= %s"
+                params.append(start_date)
+
+            if end_date:
+                query += " AND trade_date <= %s"
+                params.append(end_date)
+
+            if exit_type:
+                query += " AND exit_type = %s"
+                params.append(exit_type)
+
+            query += " ORDER BY trade_date DESC, entry_time DESC"
+
+            cursor.execute(query, tuple(params))
+            results = cursor.fetchall()
+            cursor.close()
+            return [dict(r) for r in results]
+        finally:
+            self._put_conn(conn)
+
+    def get_trade_review_stats(self, days: int = 30) -> Dict[str, Any]:
+        """MA Cross 복기 통계 분석"""
+        conn = self._get_conn()
+        try:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+            # 전체 통계
+            cursor.execute("""
+                SELECT
+                    COUNT(*) AS total_trades,
+                    COUNT(*) FILTER (WHERE exit_type = 'hard_stop') AS hard_stop_count,
+                    ROUND(AVG(pnl_pct), 2) AS avg_pnl,
+                    ROUND(AVG(CASE WHEN result = 'profit' THEN pnl_pct END), 2) AS avg_win,
+                    ROUND(AVG(CASE WHEN result = 'loss' THEN pnl_pct END), 2) AS avg_loss,
+                    COUNT(*) FILTER (WHERE result = 'profit') AS win_count,
+                    COUNT(*) FILTER (WHERE result = 'loss') AS loss_count,
+                    ROUND(AVG(max_adverse_excursion_pct), 2) AS avg_mae
+                FROM trade_review
+                WHERE trade_date >= CURRENT_DATE - INTERVAL '%s days'
+            """ % days)
+            overall = dict(cursor.fetchone())
+
+            # 캔들 타입별 통계
+            cursor.execute("""
+                SELECT
+                    entry_candle_type,
+                    COUNT(*) AS trades,
+                    ROUND(AVG(pnl_pct), 2) AS avg_pnl
+                FROM trade_review
+                WHERE trade_date >= CURRENT_DATE - INTERVAL '%s days'
+                GROUP BY entry_candle_type
+            """ % days)
+            candle_stats = [dict(r) for r in cursor.fetchall()]
+
+            # 늦은 진입 분석
+            cursor.execute("""
+                SELECT
+                    ma_cross_delay_bars,
+                    COUNT(*) AS trades,
+                    ROUND(AVG(pnl_pct), 2) AS avg_pnl
+                FROM trade_review
+                WHERE trade_date >= CURRENT_DATE - INTERVAL '%s days'
+                GROUP BY ma_cross_delay_bars
+                ORDER BY ma_cross_delay_bars
+            """ % days)
+            delay_stats = [dict(r) for r in cursor.fetchall()]
+
+            # 실패 패턴 분석
+            cursor.execute("""
+                SELECT *
+                FROM trade_review
+                WHERE trade_date >= CURRENT_DATE - INTERVAL '%s days'
+                  AND (late_entry::int + no_volume::int + chasing_entry::int + near_resistance::int) >= 2
+            """ % days)
+            failure_patterns = [dict(r) for r in cursor.fetchall()]
+
+            cursor.close()
+
+            return {
+                'overall': overall,
+                'by_candle_type': candle_stats,
+                'by_delay': delay_stats,
+                'failure_patterns': failure_patterns
+            }
+        finally:
+            self._put_conn(conn)
+
+    # ==================== 거래내역 비교 (키움 API vs DB) ====================
+
+    def insert_trade_reconciliation(self, reconcile_data: Dict[str, Any]) -> int:
+        """거래내역 비교 결과 저장"""
+        conn = self._get_conn()
+        try:
+            cursor = conn.cursor()
+
+            cursor.execute("""
+                INSERT INTO trade_reconciliation (
+                    trade_date,
+                    db_trade_count, db_buy_count, db_sell_count, db_total_amount,
+                    api_trade_count, api_buy_count, api_sell_count, api_total_amount,
+                    is_matched, missing_trades, extra_trades, discrepancy_detail
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                ) RETURNING reconcile_id
+            """, (
+                reconcile_data['trade_date'],
+                reconcile_data['db_trade_count'],
+                reconcile_data['db_buy_count'],
+                reconcile_data['db_sell_count'],
+                reconcile_data['db_total_amount'],
+                reconcile_data['api_trade_count'],
+                reconcile_data['api_buy_count'],
+                reconcile_data['api_sell_count'],
+                reconcile_data['api_total_amount'],
+                reconcile_data['is_matched'],
+                json.dumps(reconcile_data.get('missing_trades', [])),
+                json.dumps(reconcile_data.get('extra_trades', [])),
+                reconcile_data.get('discrepancy_detail')
+            ))
+
+            reconcile_id = cursor.fetchone()[0]
+            conn.commit()
+            cursor.close()
+            return reconcile_id
+        finally:
+            self._put_conn(conn)
+
+    def get_reconciliation_history(self, days: int = 7) -> List[Dict]:
+        """거래내역 비교 이력 조회"""
+        conn = self._get_conn()
+        try:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+            cursor.execute("""
+                SELECT * FROM trade_reconciliation
+                WHERE trade_date >= CURRENT_DATE - INTERVAL '%s days'
+                ORDER BY trade_date DESC, check_time DESC
+            """ % days)
+
+            results = cursor.fetchall()
+            cursor.close()
+            return [dict(r) for r in results]
         finally:
             self._put_conn(conn)
 

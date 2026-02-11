@@ -77,7 +77,7 @@ def print_menu():
         ("4", "📊 Ranker 학습 (Candidate Ranker)"),
         ("5", "🧪 Ranker 테스트 (예측 및 랭킹)"),
         ("6", "📈 백테스트 실행"),
-        ("7", "📄 리포트 생성 (일일/주간)"),
+        ("7", "📄 리포트 생성 (WIN/DRAW/LOSS 분석)"),
         ("8", "💬 Telegram 알림 테스트"),
         ("9", "⚙️  시스템 설정"),
         ("h", "📚 도움말"),
@@ -1194,49 +1194,95 @@ async def run_backtest():
 async def generate_report():
     """리포트 생성"""
     console.print("\n" + "=" * 70, style="cyan")
-    console.print("[bold cyan]📄 리포트 생성...[/bold cyan]")
+    console.print("[bold cyan]📄 리포트 생성[/bold cyan]")
     console.print("=" * 70, style="cyan")
 
     try:
-        from reporting import ReportGenerator
-
         console.print("\n[bold]리포트 타입 선택:[/bold]")
-        console.print("[1] 일일 리포트")
-        console.print("[2] 주간 리포트")
+        console.print("[1] 일일 리포트 (기존)")
+        console.print("[2] 주간 리포트 (기존)")
+        console.print("[3] 📊 주간 성과 리포트 (WIN/DRAW/LOSS) ⭐ 신규")
 
-        choice = console.input("\n[yellow]선택 (기본: 1): [/yellow]").strip() or "1"
+        choice = console.input("\n[yellow]선택 (기본: 3): [/yellow]").strip() or "3"
 
-        # 샘플 거래 데이터
-        sample_trades = [
-            {'date': '2025-11-01', 'symbol': '005930', 'strategy': 'momentum', 'profit': 50000, 'time': '09:30'},
-            {'date': '2025-11-01', 'symbol': '000660', 'strategy': 'breakout', 'profit': -10000, 'time': '10:15'},
-            {'date': '2025-11-01', 'symbol': '035420', 'strategy': 'vwap', 'profit': 30000, 'time': '14:20'},
-        ]
+        if choice == "3":
+            # 🔧 2026-01-27: 새로운 WIN/DRAW/LOSS 주간 리포트
+            import json
+            import yaml
+            from reports.weekly_report_generator import WeeklyReportGenerator
 
-        generator = ReportGenerator(output_dir="./reports")
+            # Config 로드
+            try:
+                with open('config/strategy_hybrid.yaml', 'r') as f:
+                    config = yaml.safe_load(f)
+            except:
+                config = {}
 
-        if choice == "1":
-            report = generator.generate_daily_report(sample_trades)
-            json_path = generator.save_report_json(report)
-            html_path = generator.save_report_html(report)
+            # risk_log.json 로드
+            try:
+                with open('data/risk_log.json', 'r') as f:
+                    data = json.load(f)
+            except FileNotFoundError:
+                console.print("[red]❌ data/risk_log.json 파일을 찾을 수 없습니다.[/red]")
+                console.input("\n[dim][Enter]를 눌러 메인 메뉴로 돌아가기...[/dim]")
+                return
 
-            console.print(f"\n[green]✅ 일일 리포트 생성 완료![/green]")
-            console.print(f"   JSON: [dim]{json_path}[/dim]")
-            console.print(f"   HTML: [dim]{html_path}[/dim]")
+            # 주간 거래 추출
+            weekly_trades = data.get('weekly_trades', [])
+            week_start = data.get('week_start')
+
+            if not weekly_trades:
+                console.print("[yellow]⚠️ 이번 주 거래 내역이 없습니다.[/yellow]")
+                console.input("\n[dim][Enter]를 눌러 메인 메뉴로 돌아가기...[/dim]")
+                return
+
+            # 리포트 생성
+            generator = WeeklyReportGenerator(config)
+            report = generator.generate_report(weekly_trades, week_start)
+
+            # 출력
+            console.print("\n")
+            print(report)
+
+            # 파일 저장
+            filepath = generator.save_report(report)
+            console.print(f"\n[green]✅ 리포트 저장: {filepath}[/green]")
+
         else:
-            report = generator.generate_weekly_report(sample_trades)
-            json_path = generator.save_report_json(report)
-            html_path = generator.save_report_html(report)
+            # 기존 리포트 로직
+            from reporting import ReportGenerator
 
-            console.print(f"\n[green]✅ 주간 리포트 생성 완료![/green]")
-            console.print(f"   JSON: [dim]{json_path}[/dim]")
-            console.print(f"   HTML: [dim]{html_path}[/dim]")
+            # 샘플 거래 데이터
+            sample_trades = [
+                {'date': '2025-11-01', 'symbol': '005930', 'strategy': 'momentum', 'profit': 50000, 'time': '09:30'},
+                {'date': '2025-11-01', 'symbol': '000660', 'strategy': 'breakout', 'profit': -10000, 'time': '10:15'},
+                {'date': '2025-11-01', 'symbol': '035420', 'strategy': 'vwap', 'profit': 30000, 'time': '14:20'},
+            ]
 
-        console.print(f"\n[bold]📊 요약:[/bold]")
-        summary = report.get('summary', {})
-        console.print(f"   총 거래: [cyan]{summary.get('total_trades')}건[/cyan]")
-        console.print(f"   승률: [cyan]{summary.get('win_rate')}[/cyan]")
-        console.print(f"   총 손익: [cyan]{summary.get('total_profit')}[/cyan]")
+            generator = ReportGenerator(output_dir="./reports")
+
+            if choice == "1":
+                report = generator.generate_daily_report(sample_trades)
+                json_path = generator.save_report_json(report)
+                html_path = generator.save_report_html(report)
+
+                console.print(f"\n[green]✅ 일일 리포트 생성 완료![/green]")
+                console.print(f"   JSON: [dim]{json_path}[/dim]")
+                console.print(f"   HTML: [dim]{html_path}[/dim]")
+            else:
+                report = generator.generate_weekly_report(sample_trades)
+                json_path = generator.save_report_json(report)
+                html_path = generator.save_report_html(report)
+
+                console.print(f"\n[green]✅ 주간 리포트 생성 완료![/green]")
+                console.print(f"   JSON: [dim]{json_path}[/dim]")
+                console.print(f"   HTML: [dim]{html_path}[/dim]")
+
+            console.print(f"\n[bold]📊 요약:[/bold]")
+            summary = report.get('summary', {})
+            console.print(f"   총 거래: [cyan]{summary.get('total_trades')}건[/cyan]")
+            console.print(f"   승률: [cyan]{summary.get('win_rate')}[/cyan]")
+            console.print(f"   총 손익: [cyan]{summary.get('total_profit')}[/cyan]")
 
     except Exception as e:
         logger.error(f"리포트 생성 오류: {e}")

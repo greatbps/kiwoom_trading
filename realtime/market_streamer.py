@@ -289,7 +289,7 @@ class MarketStreamer:
 
             self._websocket = await websockets.connect(
                 self.config.ws_url,
-                extra_headers=headers,
+                additional_headers=headers,  # websockets 15.0+ uses additional_headers
                 ping_interval=20,  # 20초마다 ping
                 ping_timeout=10,   # 10초 타임아웃
             )

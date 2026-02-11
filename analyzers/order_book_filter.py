@@ -83,9 +83,11 @@ class OrderBookFilter:
         squeeze_off_count: int
     ) -> Tuple[bool, str]:
         """
-        ✅ 핵심: Squeeze OFF 첫 봉인지 확인
+        ✅ 핵심: Squeeze OFF 1~2봉 허용
 
-        "변동성 압축이 끝나고, 처음으로 방향성이 발생한 순간"
+        🔥 GPT 분석 반영: 실전에서는 2번째 봉에서 방향 확정되는 경우 많음
+        - 첫 봉: 호가창 정신없음
+        - 2번째 봉: 방향 확정 후 안정적 진입
 
         Args:
             current_squeeze: 현재 봉 squeeze 상태 (True=ON, False=OFF)
@@ -96,23 +98,24 @@ class OrderBookFilter:
             (is_first_off, reason)
 
         Example:
-            # 올바른 진입
-            prev=True, current=False, count=1 → True
+            # 올바른 진입 (1~2봉)
+            count=1 → True
+            count=2 → True
 
-            # 추격 매수 (차단)
-            prev=False, current=False, count=3 → False
+            # 추격 매수 차단 (3봉 이상)
+            count=3 → False
         """
         # ❌ Squeeze ON 상태
         if current_squeeze:
             return False, "Squeeze 아직 ON (압축 중)"
 
-        # ❌ 이미 여러 봉 지난 추격
-        if squeeze_off_count > 1:
+        # ❌ 3봉 이상 지난 추격
+        if squeeze_off_count > 2:  # 🔥 GPT 권장: 1 → 2 (1~2봉 허용)
             return False, f"Squeeze OFF 후 {squeeze_off_count}봉 경과 (추격 금지)"
 
-        # ✅ 첫 해제 봉!
-        if prev_squeeze and not current_squeeze and squeeze_off_count == 1:
-            return True, "Squeeze OFF 첫 봉 - 진입 타이밍!"
+        # ✅ 1~2봉 진입 허용!
+        if not current_squeeze and squeeze_off_count <= 2:
+            return True, f"Squeeze OFF {squeeze_off_count}봉 - 진입 타이밍!"
 
         return False, "Squeeze OFF 조건 미충족"
 
@@ -121,16 +124,21 @@ class OrderBookFilter:
         stock_code: str,
         recent_5min_volume: float,
         prev_5min_volume: float,
-        threshold: float = 1.3
+        threshold: float = 1.05  # 🔥 실전 반영: 1.1 → 1.05 (대형주 5% 증가도 유의미)
     ) -> Tuple[bool, str]:
         """
-        진입 조건 ②: 거래량 ≥ 직전 5분 평균 × 1.3
+        진입 조건 ②: 거래량 ≥ 직전 5분 평균 × 1.05
+
+        🔥 실전 분석 반영: 대형주는 거래량이 안정적
+        - 1.3배 급증은 중소형주 기준
+        - 대형주는 1.05배(5% 증가)도 의미있는 신호
+        - 실전: 464080 종목이 1.05배로 차단됨 → 완화
 
         Args:
             stock_code: 종목코드
             recent_5min_volume: 최근 5분 거래량
             prev_5min_volume: 직전 5분 평균 거래량
-            threshold: 증가율 임계값 (기본 1.3 = 30% 증가)
+            threshold: 증가율 임계값 (기본 1.05 = 5% 증가)
 
         Returns:
             (pass, reason)
@@ -141,7 +149,7 @@ class OrderBookFilter:
         surge_ratio = recent_5min_volume / prev_5min_volume
 
         if surge_ratio >= threshold:
-            return True, f"거래량 급증 ({surge_ratio:.1f}배)"
+            return True, f"거래량 증가 ({surge_ratio:.2f}배)"
 
         return False, f"거래량 부족 ({surge_ratio:.2f}배 < {threshold}배)"
 
@@ -156,6 +164,10 @@ class OrderBookFilter:
 
         매도 물량 감소 = 체결 임박 신호
 
+        🔥 실전 반영: 평균 데이터가 없으면 스킵 (통과 처리)
+        - main_auto_trading.py에서 현재값을 평균으로 전달 (간소화)
+        - 실제 평균 데이터 구현 전까지는 이 조건 스킵
+
         Args:
             current_sell_1st: 현재 매도 1호가 잔량
             avg_sell_1st_1min: 직전 1분 평균 매도 1호가
@@ -164,8 +176,13 @@ class OrderBookFilter:
         Returns:
             (pass, reason)
         """
+        # 🔥 평균 데이터 없음 OR 현재값=평균값 (실제 평균 아님) → 스킵
         if avg_sell_1st_1min == 0:
-            return False, "매도호가 평균 데이터 없음"
+            return True, "매도호가 평균 데이터 없음 (조건 스킵)"
+
+        # 🔥 현재값 = 평균값 → 간소화 모드 (실제 평균 아님)
+        if abs(current_sell_1st - avg_sell_1st_1min) < 0.01:
+            return True, "매도호가 평균 미구현 (조건 스킵)"
 
         reduction_ratio = current_sell_1st / avg_sell_1st_1min
 
@@ -179,22 +196,22 @@ class OrderBookFilter:
         stock_code: str,
         current_strength: float,
         stock_avg_strength: float,
-        absolute_min: float = 90.0,
-        relative_multiplier: float = 1.1
+        absolute_min: float = 80.0,  # 🔥 GPT 권장: 90 → 80 (대형주 적합)
+        relative_multiplier: float = 1.05  # 🔥 GPT 권장: 1.1 → 1.05 (완화)
     ) -> Tuple[bool, str]:
         """
-        진입 조건 ⑤: 체결강도 ≥ max(90%, 종목평균 × 1.1)
+        진입 조건 ⑤: 체결강도 ≥ max(80%, 종목평균 × 1.05)
 
-        ⚠️ 중요: 종목별 상대 기준 사용
-        - 삼성전자: 평균 100% → 110% 이상 필요
-        - 코스닥 저가주: 평균 120% → 132% 이상 필요
+        🔥 GPT 분석 반영: 대형주는 80-85%가 매수 우위
+        - 기존 90%는 상한가급 상황에서만 가능
+        - 1.1배도 과도하게 까다로움
 
         Args:
             stock_code: 종목코드
             current_strength: 현재 체결강도
             stock_avg_strength: 종목 20일 평균 체결강도
-            absolute_min: 절대 하한 (기본 90%)
-            relative_multiplier: 상대 배수 (기본 1.1)
+            absolute_min: 절대 하한 (기본 80%)
+            relative_multiplier: 상대 배수 (기본 1.05)
 
         Returns:
             (pass, reason)
@@ -247,21 +264,31 @@ class OrderBookFilter:
         execution_strength: float,
         stock_avg_strength: float,
         price_stable_sec: float,
-        recent_high_5min: float
+        recent_high_5min: float,
+        debug: bool = True  # 🔥 GPT 권장: 디버그 로그 옵션
     ) -> Tuple[bool, str, Dict]:
         """
         Phase 1 전체 진입 조건 검사
+
+        🔥 GPT 권장: 실패 즉시 return + 상세 로그
 
         Returns:
             (pass, reason, details)
         """
         results = {}
 
+        # 🔥 디버그 로그 시작
+        if debug:
+            console.print(f"[cyan]호가창 체크: {stock_code}[/cyan]")
+
         # ① Squeeze OFF 첫 봉
         sq_pass, sq_reason = self.check_squeeze_off_first_bar(
             squeeze_current, squeeze_prev, squeeze_off_count
         )
         results['squeeze_off'] = {'pass': sq_pass, 'reason': sq_reason}
+        if debug:
+            status = "✓" if sq_pass else "✗"
+            console.print(f"  {status} ① Squeeze OFF: {sq_reason}")
         if not sq_pass:
             return False, sq_reason, results
 
@@ -269,7 +296,11 @@ class OrderBookFilter:
         vol_pass, vol_reason = self.check_volume_surge(
             stock_code, recent_5min_volume, prev_5min_volume
         )
+        vol_ratio = recent_5min_volume / prev_5min_volume if prev_5min_volume > 0 else 0
         results['volume'] = {'pass': vol_pass, 'reason': vol_reason}
+        if debug:
+            status = "✓" if vol_pass else "✗"
+            console.print(f"  {status} ② 거래량: {vol_ratio:.2f}배 (기준: 1.1)")
         if not vol_pass:
             return False, vol_reason, results
 
@@ -277,6 +308,9 @@ class OrderBookFilter:
         vwap_pass = current_price > vwap
         vwap_reason = f"현재가 {current_price:,.0f} > VWAP {vwap:,.0f}" if vwap_pass else f"VWAP 이탈"
         results['vwap'] = {'pass': vwap_pass, 'reason': vwap_reason}
+        if debug:
+            status = "✓" if vwap_pass else "✗"
+            console.print(f"  {status} ③ VWAP: {current_price:,.0f} vs {vwap:,.0f}")
         if not vwap_pass:
             return False, vwap_reason, results
 
@@ -285,6 +319,9 @@ class OrderBookFilter:
             sell_1st_qty, sell_1st_avg_1min
         )
         results['sell_order'] = {'pass': sell_pass, 'reason': sell_reason}
+        if debug:
+            status = "✓" if sell_pass else "✗"
+            console.print(f"  {status} ④ 매도1호가: {sell_1st_qty:,.0f} vs 평균 {sell_1st_avg_1min:,.0f}")
         if not sell_pass:
             return False, sell_reason, results
 
@@ -293,17 +330,156 @@ class OrderBookFilter:
             stock_code, execution_strength, stock_avg_strength
         )
         results['execution_strength'] = {'pass': exec_pass, 'reason': exec_reason}
+        if debug:
+            status = "✓" if exec_pass else "✗"
+            console.print(f"  {status} ⑤ 체결강도: {execution_strength:.1f}% (기준: 80%)")
         if not exec_pass:
             return False, exec_reason, results
 
         # ⑥ 가격 정체 체크
         price_pass, price_reason = self.check_price_stability(price_stable_sec)
         results['price_stability'] = {'pass': price_pass, 'reason': price_reason}
+        if debug:
+            status = "✓" if price_pass else "✗"
+            console.print(f"  {status} ⑥ 가격정체: {price_stable_sec:.1f}초 (기준: 5초)")
         if not price_pass:
             return False, price_reason, results
 
         # ✅ 모든 조건 통과!
+        if debug:
+            console.print(f"[green]  ✅ 호가창 6개 조건 모두 통과![/green]")
         return True, "Phase 1 전체 진입 조건 충족", results
+
+    def check_entry_conditions_loose(
+        self,
+        stock_code: str,
+        current_price: float,
+        vwap: float,
+        squeeze_current: bool,
+        squeeze_prev: bool,
+        squeeze_off_count: int,
+        recent_5min_volume: float,
+        prev_5min_volume: float,
+        sell_1st_qty: float,
+        sell_1st_avg_1min: float,
+        execution_strength: float,
+        stock_avg_strength: float,
+        price_stable_sec: float,
+        recent_high_5min: float,
+        min_pass: int = 2,  # 최소 N개 조건 통과하면 OK
+        debug: bool = True
+    ) -> Tuple[bool, str, Dict]:
+        """
+        느슨한 진입 조건 - N/6 통과면 OK
+
+        Args:
+            min_pass: 최소 통과 조건 수 (기본 2개)
+
+        Returns:
+            (pass, reason, details)
+        """
+        results = {}
+
+        if debug:
+            console.print(f"[cyan]호가창 체크 (느슨): {stock_code} (최소 {min_pass}/6)[/cyan]")
+
+        # ① Squeeze OFF 첫 봉
+        sq_pass, sq_reason = self.check_squeeze_off_first_bar(
+            squeeze_current, squeeze_prev, squeeze_off_count
+        )
+        results['squeeze_off'] = {'pass': sq_pass, 'reason': sq_reason}
+
+        # ② 거래량 급증
+        vol_pass, vol_reason = self.check_volume_surge(
+            stock_code, recent_5min_volume, prev_5min_volume
+        )
+        results['volume'] = {'pass': vol_pass, 'reason': vol_reason}
+
+        # ③ VWAP 상단 (보조 조건 - 실패해도 진행)
+        vwap_pass = current_price > vwap
+        vwap_reason = f"현재가 {current_price:,.0f} > VWAP {vwap:,.0f}" if vwap_pass else f"VWAP 이탈"
+        results['vwap'] = {'pass': vwap_pass, 'reason': vwap_reason}
+
+        # ④ 매도호가 감소 (스킵 가능)
+        sell_pass, sell_reason = self.check_sell_order_reduction(
+            sell_1st_qty, sell_1st_avg_1min
+        )
+        results['sell_order'] = {'pass': sell_pass, 'reason': sell_reason}
+
+        # ⑤ 체결강도 (보조 조건)
+        exec_pass, exec_reason = self.check_execution_strength_relative(
+            stock_code, execution_strength, stock_avg_strength
+        )
+        results['execution'] = {'pass': exec_pass, 'reason': exec_reason}
+
+        # ⑥ 가격 안정성 (보조 조건)
+        price_pass, price_reason = self.check_price_stability(price_stable_sec)
+        results['price_stability'] = {'pass': price_pass, 'reason': price_reason}
+
+        # 통과한 조건 개수 계산
+        passed_count = sum([1 for r in results.values() if r.get('pass', False)])
+
+        if debug:
+            for key, result in results.items():
+                status = "✓" if result.get('pass') else "✗"
+                console.print(f"  {status} {key}: {result.get('reason', 'N/A')}")
+            console.print(f"[cyan]  → 통과: {passed_count}/6 (최소 {min_pass}개 필요)[/cyan]")
+
+        # min_pass개 이상 통과하면 OK
+        if passed_count >= min_pass:
+            return True, f"호가창 {passed_count}/6 통과 (최소 {min_pass})", results
+        else:
+            return False, f"호가창 {passed_count}/6 통과 부족 (최소 {min_pass} 필요)", results
+
+    def check_block_conditions(
+        self,
+        execution_strength: float,
+        sell_total_current: float,
+        sell_total_avg: float,
+        squeeze_color: str = None,
+        debug: bool = True
+    ) -> Tuple[bool, str]:
+        """
+        차단 조건 체크 - 하나라도 걸리면 진입 차단
+
+        Args:
+            execution_strength: 현재 체결강도
+            sell_total_current: 현재 매도호가 총합
+            sell_total_avg: 평균 매도호가 총합
+            squeeze_color: 스퀴즈 색상 (bright_green, dark_green, dark_red, bright_red)
+
+        Returns:
+            (blocked, reason)
+        """
+        # ❌ 차단 1: 체결강도 < 60%
+        if execution_strength < 60.0:
+            if debug:
+                console.print(f"[red]  ❌ 차단: 체결강도 {execution_strength:.1f}% < 60%[/red]")
+            return True, f"체결강도 약함 ({execution_strength:.1f}% < 60%)"
+
+        # ❌ 차단 2: 매도호가 급증 (30% 이상)
+        if sell_total_avg > 0:
+            sell_surge = (sell_total_current / sell_total_avg - 1) * 100
+            if sell_surge > 30:
+                if debug:
+                    console.print(f"[red]  ❌ 차단: 매도호가 급증 {sell_surge:.1f}% > 30%[/red]")
+                return True, f"매도호가 급증 ({sell_surge:.1f}%)"
+
+        # ❌ 차단 3: 스퀴즈 색상 변경 (🟡DG, 🔴DR, 🟠BR)
+        if squeeze_color in ['dark_green', 'dark_red', 'bright_red']:
+            color_map = {
+                'dark_green': '🟡DG',
+                'dark_red': '🔴DR',
+                'bright_red': '🟠BR'
+            }
+            if debug:
+                console.print(f"[red]  ❌ 차단: 스퀴즈 {color_map.get(squeeze_color)} 전환[/red]")
+            return True, f"스퀴즈 {color_map.get(squeeze_color)} 전환"
+
+        # ✅ 차단 조건 없음
+        if debug:
+            console.print(f"[green]  ✅ 차단 조건 없음[/green]")
+        return False, ""
 
     def check_entry_blockers_phase1(
         self,
@@ -315,6 +491,10 @@ class OrderBookFilter:
     ) -> Tuple[bool, str]:
         """
         진입 금지 조건 (하나라도 걸리면 차단)
+
+        🔥 GPT 분석 반영: 체결강도 중복 체크 제거
+        - 이미 check_execution_strength_relative에서 체크함
+        - 중복 필터는 승률이 아니라 미체결만 증가
 
         Returns:
             (blocked, reason)
@@ -331,9 +511,8 @@ class OrderBookFilter:
             if sell_surge > 30:
                 return True, f"매도호가 {sell_surge:.1f}% 급증 (대량 물량)"
 
-        # ❌ 금지 3: 체결강도 90% 미만
-        if execution_strength < 90.0:
-            return True, f"체결강도 {execution_strength:.1f}% < 90% (매도 우위)"
+        # 🔥 금지 3 삭제: 체결강도 중복 체크 제거 (GPT 권장)
+        # 이미 Phase 1 진입조건에서 80% 이상 체크함
 
         # ✅ 진입 가능
         return False, ""

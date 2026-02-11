@@ -547,3 +547,125 @@ Traceback (most recent call last):
     self.file.flush()
 BrokenPipeError: [Errno 32] Broken pipe
 
+2026-01-09 09:09:50,367 - ERROR - ❌ 053700: [Errno 32] Broken pipe
+Traceback (most recent call last):
+  File "/home/greatbps/projects/kiwoom_trading/main_auto_trading.py", line 3377, in check_entry_signal
+    console.print(f"[green]🔍 {stock_code}: 매수 신호 체크 시작[/green]")
+  File "/usr/lib/python3/dist-packages/rich/console.py", line 1673, in print
+    with self:
+  File "/usr/lib/python3/dist-packages/rich/console.py", line 865, in __exit__
+    self._exit_buffer()
+  File "/usr/lib/python3/dist-packages/rich/console.py", line 823, in _exit_buffer
+    self._check_buffer()
+  File "/usr/lib/python3/dist-packages/rich/console.py", line 2065, in _check_buffer
+    self.file.flush()
+BrokenPipeError: [Errno 32] Broken pipe
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/greatbps/projects/kiwoom_trading/main_auto_trading.py", line 2701, in check_all_stocks
+    await self.check_entry_signal(stock_code, df)  # 키움 데이터 전달 (async)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/greatbps/projects/kiwoom_trading/main_auto_trading.py", line 3751, in check_entry_signal
+  File "/usr/lib/python3/dist-packages/rich/console.py", line 1673, in print
+    with self:
+  File "/usr/lib/python3/dist-packages/rich/console.py", line 865, in __exit__
+    self._exit_buffer()
+  File "/usr/lib/python3/dist-packages/rich/console.py", line 823, in _exit_buffer
+    self._check_buffer()
+  File "/usr/lib/python3/dist-packages/rich/console.py", line 2065, in _check_buffer
+    self.file.flush()
+BrokenPipeError: [Errno 32] Broken pipe
+
+2026-01-14 10:35:15,277 - ERROR - ❌ 082920: [Errno 32] Broken pipe
+Traceback (most recent call last):
+  File "/home/greatbps/projects/kiwoom_trading/main_auto_trading.py", line 3377, in check_entry_signal
+    console.print(f"[green]🔍 {stock_code}: 매수 신호 체크 시작[/green]")
+  File "/usr/lib/python3/dist-packages/rich/console.py", line 1673, in print
+    with self:
+  File "/usr/lib/python3/dist-packages/rich/console.py", line 865, in __exit__
+    self._exit_buffer()
+  File "/usr/lib/python3/dist-packages/rich/console.py", line 823, in _exit_buffer
+    self._check_buffer()
+  File "/usr/lib/python3/dist-packages/rich/console.py", line 2065, in _check_buffer
+    self.file.flush()
+BrokenPipeError: [Errno 32] Broken pipe
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/greatbps/projects/kiwoom_trading/main_auto_trading.py", line 2701, in check_all_stocks
+    await self.check_entry_signal(stock_code, df)  # 키움 데이터 전달 (async)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/greatbps/projects/kiwoom_trading/main_auto_trading.py", line 3752, in check_entry_signal
+    console.print(f"[red]❌ {stock_code} 매수 신호 체크 실패: {e}[/red]")
+  File "/usr/lib/python3/dist-packages/rich/console.py", line 1673, in print
+    with self:
+  File "/usr/lib/python3/dist-packages/rich/console.py", line 865, in __exit__
+    self._exit_buffer()
+  File "/usr/lib/python3/dist-packages/rich/console.py", line 823, in _exit_buffer
+    self._check_buffer()
+  File "/usr/lib/python3/dist-packages/rich/console.py", line 2065, in _check_buffer
+    self.file.flush()
+BrokenPipeError: [Errno 32] Broken pipe
+
+2026-01-18 07:23:11,236 - ERROR - ❌ 318060: [Errno 32] Broken pipe
+Traceback (most recent call last):
+  File "/home/greatbps/projects/kiwoom_trading/main_auto_trading.py", line 2422, in check_all_stocks
+    console.print(f"[dim]  ✓ {stock_code}: 야후 {len(df)}개 봉[/dim]")
+  File "/usr/lib/python3/dist-packages/rich/console.py", line 1673, in print
+    with self:
+  File "/usr/lib/python3/dist-packages/rich/console.py", line 865, in __exit__
+    self._exit_buffer()
+  File "/usr/lib/python3/dist-packages/rich/console.py", line 823, in _exit_buffer
+    self._check_buffer()
+  File "/usr/lib/python3/dist-packages/rich/console.py", line 2065, in _check_buffer
+    self.file.flush()
+BrokenPipeError: [Errno 32] Broken pipe
+
+2026-01-22 12:34:06,794 - ERROR - ❌ 071670: [Errno 32] Broken pipe
+Traceback (most recent call last):
+  File "/home/greatbps/projects/kiwoom_trading/main_auto_trading.py", line 3420, in check_entry_signal
+    if not time_ok:
+        ^^^^^^^^^^^^
+  File "/usr/lib/python3/dist-packages/rich/console.py", line 1673, in print
+    with self:
+  File "/usr/lib/python3/dist-packages/rich/console.py", line 865, in __exit__
+    self._exit_buffer()
+  File "/usr/lib/python3/dist-packages/rich/console.py", line 823, in _exit_buffer
+    self._check_buffer()
+  File "/usr/lib/python3/dist-packages/rich/console.py", line 2065, in _check_buffer
+    self.file.flush()
+BrokenPipeError: [Errno 32] Broken pipe
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/greatbps/projects/kiwoom_trading/main_auto_trading.py", line 2724, in check_all_stocks
+    if orchestrator_status == "✅통과":
+  File "/home/greatbps/projects/kiwoom_trading/main_auto_trading.py", line 3962, in check_entry_signal
+  File "/usr/lib/python3/dist-packages/rich/console.py", line 1673, in print
+    with self:
+  File "/usr/lib/python3/dist-packages/rich/console.py", line 865, in __exit__
+    self._exit_buffer()
+  File "/usr/lib/python3/dist-packages/rich/console.py", line 823, in _exit_buffer
+    self._check_buffer()
+  File "/usr/lib/python3/dist-packages/rich/console.py", line 2065, in _check_buffer
+    self.file.flush()
+BrokenPipeError: [Errno 32] Broken pipe
+
+2026-01-23 10:01:22,011 - ERROR - ❌ 059120: [Errno 32] Broken pipe
+Traceback (most recent call last):
+  File "/home/greatbps/projects/kiwoom_trading/main_auto_trading.py", line 2441, in check_all_stocks
+    df = yahoo_df
+  File "/usr/lib/python3/dist-packages/rich/console.py", line 1673, in print
+    with self:
+  File "/usr/lib/python3/dist-packages/rich/console.py", line 865, in __exit__
+    self._exit_buffer()
+  File "/usr/lib/python3/dist-packages/rich/console.py", line 823, in _exit_buffer
+    self._check_buffer()
+  File "/usr/lib/python3/dist-packages/rich/console.py", line 2065, in _check_buffer
+    self.file.flush()
+BrokenPipeError: [Errno 32] Broken pipe
+

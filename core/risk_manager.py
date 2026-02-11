@@ -263,7 +263,8 @@ class RiskManager:
         current_balance: float,
         current_price: float,
         stop_loss_price: float,
-        entry_confidence: float = 1.0
+        entry_confidence: float = 1.0,
+        structure_stop_price: float = None
     ) -> dict:
         """
         포지션 크기 계산 (리스크 기반)
@@ -273,6 +274,7 @@ class RiskManager:
             current_price: 진입 가격
             stop_loss_price: 손절가
             entry_confidence: 진입 신뢰도 (0.0 ~ 1.0)
+            structure_stop_price: 구조 기반 손절가 (SMC, 있으면 우선 사용)
 
         Returns:
             {
@@ -283,6 +285,15 @@ class RiskManager:
                 'max_loss': 최대 손실
             }
         """
+        # 🔧 2026-02-06: 구조 기반 손절가 우선 사용
+        if structure_stop_price is not None and structure_stop_price > 0:
+            # 안전장치: 구조 손절이 -3% 초과하면 -3%로 cap
+            max_stop_pct = 0.03
+            if (current_price - structure_stop_price) / current_price > max_stop_pct:
+                stop_loss_price = current_price * (1 - max_stop_pct)
+            else:
+                stop_loss_price = structure_stop_price
+
         # 1. 리스크 기반 계산
         risk_amount = current_balance * self.RISK_PER_TRADE
         risk_per_share = abs(current_price - stop_loss_price)
@@ -336,7 +347,8 @@ class RiskManager:
         trade_type: str,  # 'BUY' or 'SELL'
         quantity: int,
         price: float,
-        realized_pnl: float = 0.0
+        realized_pnl: float = 0.0,
+        reason: str = None  # 매수/매도 이유
     ):
         """
         거래 기록
@@ -348,6 +360,7 @@ class RiskManager:
             quantity: 수량
             price: 가격
             realized_pnl: 실현 손익 (매도시만)
+            reason: 매수/매도 이유 (예: "12:34 30분봉 MA5/MA20 골든크로스")
         """
         # 날짜가 바뀌면 초기화
         today = date.today().isoformat()
@@ -369,7 +382,8 @@ class RiskManager:
             'quantity': int(quantity),
             'price': float(price),
             'amount': float(quantity * price),
-            'realized_pnl': float(realized_pnl) if realized_pnl is not None else 0.0
+            'realized_pnl': float(realized_pnl) if realized_pnl is not None else 0.0,
+            'reason': reason  # 매수/매도 이유 (예: "12:34 30분봉 MA5/MA20 골든크로스")
         }
 
         self.daily_trades.append(trade)

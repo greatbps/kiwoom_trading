@@ -184,8 +184,34 @@ class SqueezeWithOrderBook:
             else:
                 squeeze_off_count = 1
 
-        # 4. 호가창 진입 조건
-        ob_pass, ob_reason, ob_details = self.orderbook.check_entry_conditions_phase1(
+        # 4. 스퀴즈 색상 확인 (차단 조건용)
+        from utils.squeeze_momentum_realtime import get_current_squeeze_signal
+        from utils.squeeze_momentum_realtime import calculate_squeeze_momentum
+        df_for_color = calculate_squeeze_momentum(df.copy())
+        signal_info = get_current_squeeze_signal(df_for_color)
+        squeeze_color = signal_info.get('color', 'gray')
+
+        # 5. 차단 조건 우선 체크 (하나라도 걸리면 진입 차단)
+        blocked, block_reason = self.orderbook.check_block_conditions(
+            execution_strength=execution_strength,
+            sell_total_current=sell_total_current or 0,
+            sell_total_avg=sell_total_avg or 1,
+            squeeze_color=squeeze_color,
+            debug=True
+        )
+
+        if blocked:
+            self.stats['orderbook_blocked'] += 1
+            return False, f"차단: {block_reason}", details
+
+        # 6. 호가창 진입 조건 (느슨: 2/6 통과면 OK)
+        # Tier 3 신호는 1/6만 통과해도 허용 (높은 신호 강도)
+        min_pass = 2
+        if squeeze_tier >= 3:
+            min_pass = 1  # Tier 3는 1개 조건만 통과해도 OK
+            console.print(f"[cyan]  ⭐ Tier 3 신호 → 호가창 기준 완화 (1/6)[/cyan]")
+
+        ob_pass, ob_reason, ob_details = self.orderbook.check_entry_conditions_loose(
             stock_code=stock_code,
             current_price=current_price,
             vwap=vwap,
@@ -199,30 +225,33 @@ class SqueezeWithOrderBook:
             execution_strength=execution_strength,
             stock_avg_strength=stock_avg_strength,
             price_stable_sec=price_stable_sec,
-            recent_high_5min=recent_high_5min
+            recent_high_5min=recent_high_5min,
+            min_pass=min_pass,
+            debug=True
         )
 
         details['orderbook'] = ob_details
+        details['squeeze_color'] = squeeze_color
 
         if not ob_pass:
             self.stats['orderbook_blocked'] += 1
-            return False, f"호가창 차단: {ob_reason}", details
-
-        # 5. 진입 금지 조건
-        blocked, block_reason = self.orderbook.check_entry_blockers_phase1(
-            current_price=current_price,
-            recent_high_5min=recent_high_5min,
-            sell_total_current=sell_total_current or 0,
-            sell_total_avg=sell_total_avg or 1,
-            execution_strength=execution_strength
-        )
-
-        if blocked:
-            self.stats['orderbook_blocked'] += 1
-            return False, f"진입 금지: {block_reason}", details
+            return False, f"호가창 부족: {ob_reason}", details
 
         # ✅ 모든 조건 통과!
         self.stats['orderbook_pass'] += 1
+
+        # 진입 성공 시 쿨다운 설정 (재진입 방지)
+        cooldown_minutes = 3  # 기본 3분
+        if squeeze_tier >= 3:
+            cooldown_minutes = 5  # Tier 3는 5분 (더 신중)
+
+        cooldown_end = datetime.now() + timedelta(minutes=cooldown_minutes)
+        self.cooldown_until[stock_code] = cooldown_end
+        console.print(
+            f"[cyan]⏸️  {stock_code} 재진입 쿨다운 {cooldown_minutes}분 "
+            f"(종료: {cooldown_end.strftime('%H:%M')})[/cyan]"
+        )
+
         return True, f"스퀴즈 Tier{squeeze_tier} + 호가창 진입 확정", details
 
     def check_exit_signal(

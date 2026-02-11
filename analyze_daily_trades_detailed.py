@@ -145,10 +145,14 @@ def analyze_today_detailed(date_str: str = None):
 
                     time_gap = f"[dim]({time_diff:.0f}분 후)[/dim]"
 
+                # 매수 이유 표시
+                buy_reason = buy.get('reason', '')
+                reason_str = f"[cyan]({buy_reason})[/cyan]" if buy_reason else ""
+
                 console.print(
                     f"  [{i}] {ts.strftime('%H:%M:%S')} - "
                     f"{qty}주 @ {price:,}원 = {amount:,}원 "
-                    f"{price_change} {time_gap}"
+                    f"{price_change} {time_gap} {reason_str}"
                 )
 
             avg_price = total_amount / total_qty if total_qty > 0 else 0
@@ -185,11 +189,15 @@ def analyze_today_detailed(date_str: str = None):
 
                 pnl_color = "green" if pnl >= 0 else "red"
 
+                # 매도 이유 표시
+                sell_reason = sell.get('reason', '')
+                reason_str = f"[magenta]({sell_reason})[/magenta]" if sell_reason else ""
+
                 console.print(
                     f"  [{i}] {ts.strftime('%H:%M:%S')} - "
                     f"{qty}주 @ {price:,}원 (매수가: {buy_price:,.0f}원) "
                     f"[{pnl_color}]P&L: {pnl:+,.0f}원 ({pnl_pct:+.2f}%)[/{pnl_color}] "
-                    f"[dim](보유 {hold_time_str})[/dim]"
+                    f"[dim](보유 {hold_time_str})[/dim] {reason_str}"
                 )
 
             console.print()

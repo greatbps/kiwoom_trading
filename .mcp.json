@@ -8,6 +8,16 @@
         "mcp_server_analyzer"
       ],
       "env": {}
+    },
+    "filesystem": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/home/greatbps/projects/kiwoom_trading"
+      ],
+      "env": {}
     }
   }
 }
