@@ -26,3 +26,6 @@ data/*.lock
 # OS
 .DS_Store
 Thumbs.db
+
+backups/
+ai/models/*.pkl
