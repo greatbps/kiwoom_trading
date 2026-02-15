@@ -5296,13 +5296,20 @@ class IntegratedTradingSystem:
         console.print("=" * 60, style="bold yellow")
 
         closed_count = 0
+        allowed_count = 0
         for stock_code in list(self.positions.keys()):
             pos = self.positions[stock_code]
             stock_name = pos.get('stock_name', stock_code)
+            has_grade = 'choch_grade' in pos
             grade = pos.get('choch_grade', 'B')  # 미저장 시 B로 간주
+
+            if not has_grade:
+                logging.warning(f"[OVERNIGHT_CLOSE] reason=NO_GRADE symbol={stock_name} code={stock_code} → B급 간주, 강제 청산 대상")
 
             if grade in exempt_grades:
                 console.print(f"[green]  V {stock_name}: CHoCH {grade}급 - 오버나이트 허용[/green]")
+                logging.info(f"[OVERNIGHT_POLICY] symbol={stock_name} grade={grade} action=ALLOW time={datetime.now().strftime('%H:%M')}")
+                allowed_count += 1
                 continue
 
             # 현재가 조회
@@ -5312,11 +5319,12 @@ class IntegratedTradingSystem:
 
             reason = f"{datetime.now().strftime('%H:%M')} 오버나이트 차단 (CHoCH {grade}급, 당일 강제 청산)"
             console.print(f"[red]  X {stock_name}: CHoCH {grade}급 - 강제 청산 ({profit_pct:+.2f}%)[/red]")
+            logging.info(f"[OVERNIGHT_POLICY] symbol={stock_name} grade={grade} action=FORCE_CLOSE pnl={profit_pct:+.2f}% time={datetime.now().strftime('%H:%M')}")
 
             self.execute_sell(stock_code, current_price, profit_pct, reason, use_market_order=use_market)
             closed_count += 1
 
-        console.print(f"\n  결과: {closed_count}건 강제 청산")
+        console.print(f"\n  결과: 강제 청산 {closed_count}건 / 오버나이트 허용 {allowed_count}건")
         console.print("=" * 60, style="bold yellow")
 
     async def handle_eod(self):
