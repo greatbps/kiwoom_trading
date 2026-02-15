@@ -2638,6 +2638,7 @@ class IntegratedTradingSystem:
         last_status_update = datetime.now()
         last_kis_check = datetime.now() - timedelta(seconds=kis_interval)  # 즉시 첫 체크
         eod_executed = False  # ✅ EOD 프로세스 실행 여부 플래그
+        overnight_close_executed = False  # 🔧 2026-02-15: 오버나이트 강제 청산 실행 여부
 
         # ✅ 초기 한투 포지션 조회 및 체크
         self.run_kis_pre_market_check()
@@ -2671,6 +2672,11 @@ class IntegratedTradingSystem:
 
                 # 장 시간인지 체크
                 if self.is_market_open():
+                    # 🔧 2026-02-15: 오버나이트 강제 청산 (14:50, CHoCH A급 제외)
+                    if not overnight_close_executed and current_time.hour == 14 and current_time.minute >= 50:
+                        await self.force_close_overnight()
+                        overnight_close_executed = True
+
                     # ✅ EOD 프로세스 체크 (14:55-14:59 사이에 1회 실행)
                     if not eod_executed and current_time.hour == 14 and 55 <= current_time.minute <= 59:
                         await self.handle_eod()
@@ -4524,6 +4530,9 @@ class IntegratedTradingSystem:
                     self.positions[stock_code]['htf_trend_aligned'] = mtf_bias_info.get('is_uptrend', False)
                     self.positions[stock_code]['direction'] = 'long'
 
+                    # 🔧 2026-02-15: CHoCH 등급 저장 (오버나이트 강제 청산 판단용)
+                    self.positions[stock_code]['choch_grade'] = choch_grade  # 'A' or 'B'
+
                     # 🔧 2026-02-07: 진입 시 ATR 저장 (Early Failure Structure 필터용)
                     if 'atr' in df_5min.columns and len(df_5min) > 0:
                         self.positions[stock_code]['atr_at_entry'] = float(df_5min['atr'].iloc[-1])
@@ -5266,6 +5275,49 @@ class IntegratedTradingSystem:
             import traceback
             traceback.print_exc()
             return False, 0.0
+
+    async def force_close_overnight(self):
+        """🔧 2026-02-15: 오버나이트 강제 청산 (CHoCH A급 제외)"""
+        config = self.config.get_section('overnight_close')
+        if not config or not config.get('enabled', True):
+            console.print("[dim]overnight_close 비활성화[/dim]")
+            return
+
+        if not self.positions:
+            console.print("[dim]보유 포지션 없음 - 오버나이트 체크 스킵[/dim]")
+            return
+
+        exempt_grades = config.get('exempt_grades', ['A'])
+        use_market = config.get('use_market_order', True)
+
+        console.print()
+        console.print("=" * 60, style="bold yellow")
+        console.print("오버나이트 강제 청산 체크", style="bold yellow")
+        console.print("=" * 60, style="bold yellow")
+
+        closed_count = 0
+        for stock_code in list(self.positions.keys()):
+            pos = self.positions[stock_code]
+            stock_name = pos.get('stock_name', stock_code)
+            grade = pos.get('choch_grade', 'B')  # 미저장 시 B로 간주
+
+            if grade in exempt_grades:
+                console.print(f"[green]  V {stock_name}: CHoCH {grade}급 - 오버나이트 허용[/green]")
+                continue
+
+            # 현재가 조회
+            current_price = pos.get('current_price', pos['entry_price'])
+            entry_price = pos['entry_price']
+            profit_pct = (current_price - entry_price) / entry_price * 100
+
+            reason = f"{datetime.now().strftime('%H:%M')} 오버나이트 차단 (CHoCH {grade}급, 당일 강제 청산)"
+            console.print(f"[red]  X {stock_name}: CHoCH {grade}급 - 강제 청산 ({profit_pct:+.2f}%)[/red]")
+
+            self.execute_sell(stock_code, current_price, profit_pct, reason, use_market_order=use_market)
+            closed_count += 1
+
+        console.print(f"\n  결과: {closed_count}건 강제 청산")
+        console.print("=" * 60, style="bold yellow")
 
     async def handle_eod(self):
         """
