@@ -4841,6 +4841,17 @@ class IntegratedTradingSystem:
             console.print(f"[bold red]🔴 {stock_name}: {ms_reason} — 진입 차단[/bold red]")
             return
 
+        # 🔧 2026-02-16: Conservative Mode 적용값 로드
+        cm_config = self.config.get('risk_control.conservative_mode', {})
+        cm_adj = self.reentry_metrics.get_conservative_adjustments(cm_config)
+        if cm_adj['active'] and cm_adj['max_positions'] is not None:
+            if len(self.positions) >= cm_adj['max_positions']:
+                console.print(
+                    f"[bold yellow]⚠️ [CONSERVATIVE] {stock_name}: "
+                    f"보유 {len(self.positions)}/{cm_adj['max_positions']} — 추가 진입 차단[/bold yellow]"
+                )
+                return
+
         # 🔧 2026-02-07 v2: exit_reason 기반 차등 쿨다운
         if stock_code in self.stock_cooldown:
             cooldown_data = self.stock_cooldown[stock_code]
@@ -4857,6 +4868,10 @@ class IntegratedTradingSystem:
             else:
                 # fallback: 기존 v1 로직
                 cooldown_required = self.loss_cooldown_minutes if is_loss else self.cooldown_minutes
+
+            # 🔧 2026-02-16: Conservative Mode — 쿨다운 배수 적용
+            if cm_adj['active'] and cm_adj['cooldown_mult'] != 1.0:
+                cooldown_required = int(cooldown_required * cm_adj['cooldown_mult'])
 
             # 쿨다운 0분 → 차단하지 않음 (take_profit 등)
             if cooldown_required > 0:
@@ -4950,6 +4965,11 @@ class IntegratedTradingSystem:
             stop_loss_price=stop_loss_price,
             entry_confidence=entry_confidence
         )
+
+        # 🔧 2026-02-16: Conservative Mode — 포지션 사이즈 축소
+        if cm_adj['active']:
+            position_size_mult *= cm_adj['position_size_mult']
+            console.print(f"[yellow]⚠️ [CONSERVATIVE] 포지션 사이즈 {cm_adj['position_size_mult']*100:.0f}% 적용[/yellow]")
 
         # SignalOrchestrator의 포지션 조정 반영
         # 🔧 FIX: 최소 1주 보장 (이중 축소 방지)
@@ -6049,6 +6069,15 @@ class IntegratedTradingSystem:
                 ms_result = self.reentry_metrics.record_ef_event(ef_subtype, ms_config)
                 if ms_result.get('message'):
                     console.print(f"[bold red]🔴 {ms_result['message']}[/bold red]")
+
+            # 🔧 2026-02-16: Conservative Mode — Hard Stop 발동 시 보수 모드 활성화
+            if reason_cat == 'hard_stop':
+                cm_config = self.config.get('risk_control.conservative_mode', {})
+                cm_result = self.reentry_metrics.record_hard_stop_event(
+                    cm_config, symbol=position['name'], pnl_pct=profit_pct
+                )
+                if cm_result.get('message'):
+                    console.print(f"[bold red]{cm_result['message']}[/bold red]")
 
             # v2: config 기반 쿨다운 시간 표시
             if self._cooldown_v2_enabled and self._cooldown_by_reason:

@@ -73,6 +73,7 @@ re_entry:
       ef_no_follow: 20           # 구조 살아있음, 타이밍만 실패 → 짧은 대기
       ef_no_demand: 45           # 수급 부재, 가짜 신호 → 긴 대기
       early_failure: 60          # 미분류 EF fallback → 가장 위험, 60분
+      hard_stop: 60              # Hard Stop → 이상 이벤트, 60분
       stop_loss: 45              # 명확한 손절 → 45분
       trailing_stop: 30          # 트레일링 스탑 → 30분
       time_exit: 20              # 시간 기반 청산 → 짧게 20분
@@ -86,6 +87,7 @@ re_entry:
       blocked_reasons:             # 이 카테고리는 절대 override 불가
         - early_failure            # 미분류 EF
         - ef_no_demand             # 수급 부재 → 절대 불가
+        - hard_stop                # Hard Stop → 이상 이벤트, override 불가
         # ef_no_follow는 override 허용 (구조 살아있으므로)
       squeeze_override:
         enabled: true
@@ -207,6 +209,14 @@ risk_control:
     morning_protection_end: "09:30:00"      # 보호 구간 종료
     use_open_range: true                    # Open Range (09:00~09:30) 기반 스탑 사용
     open_range_multiplier: 1.5              # OR Low - (OR Range × 1.5) 이탈 시 청산
+
+  # 🔧 2026-02-16: Conservative Mode (Hard Stop 발동 시 자동 보수 전환)
+  # Hard Stop은 오버나이트 강제 청산 이후 이상 이벤트 — 발생 시 노출도 자동 축소
+  conservative_mode:
+    enabled: true
+    max_positions: 1              # 동시 보유 3 → 1로 축소
+    position_size_mult: 0.5       # 포지션 사이즈 50% 축소
+    cooldown_mult: 1.5            # 쿨다운 시간 1.5배 연장
 
   # 🔧 2026-01-27: 무승부(Draw) 거래 정의
   # +0.2% 미만 & 6시간+ 보유 = WIN/LOSS가 아닌 DRAW로 분류

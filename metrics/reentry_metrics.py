@@ -22,7 +22,8 @@ _EXIT_REASON_KEYWORDS = [
     ('ef_no_follow',  ['early failure[no_follow]', 'ef[no_follow]']),
     ('ef_no_demand',  ['early failure[no_demand]', 'ef[no_demand]']),
     ('early_failure', ['early failure', 'early_failure', 'ef ']),
-    ('stop_loss',     ['hard stop', 'hard_stop', '손절', '구조 손절', 'structure_stop', 'stop_loss']),
+    ('hard_stop',     ['hard stop', 'hard_stop']),
+    ('stop_loss',     ['손절', '구조 손절', 'structure_stop', 'stop_loss']),
     ('trailing_stop', ['트레일링', 'trailing', 'atr 트레일링']),
     ('time_exit',     ['시간 기반', 'time_exit', '시간기반', '강제청산', '생명주기']),
     ('take_profit',   ['부분익절', 'take_profit', 'squeeze']),
@@ -307,6 +308,11 @@ class ReentryMetrics:
         self._ms_risk_off: bool = False            # Risk OFF Day
         self._ms_risk_off_at: str = ''             # Risk OFF 선언 시점
 
+        # 🔧 2026-02-16: Conservative Mode (Hard Stop → 자동 보수 전환)
+        self._conservative_mode: bool = False
+        self._conservative_activated_at: str = ''
+        self._conservative_hard_stop_count: int = 0
+
     def record_entry_signal(self):
         """진입 시도 카운트 (쿨다운 체크 직전)"""
         self.total_entry_signals += 1
@@ -425,6 +431,82 @@ class ReentryMetrics:
                 )
 
         return True, ''
+
+    # ─── 🔧 2026-02-16: Conservative Mode ───
+
+    def record_hard_stop_event(self, config: Dict,
+                               symbol: str = '', pnl_pct: float = 0.0) -> Dict:
+        """
+        Hard Stop 발동 기록 → Conservative Mode 활성화.
+
+        Args:
+            config: conservative_mode config dict
+            symbol: 트리거 종목명 (로그용)
+            pnl_pct: 해당 거래 손익률 (로그용)
+
+        Returns:
+            dict with keys: activated, message
+        """
+        import logging
+        logger = logging.getLogger('conservative_mode')
+
+        self._conservative_hard_stop_count += 1
+
+        trigger_info = f"symbol={symbol}, pnl={pnl_pct:+.2f}%" if symbol else ""
+
+        if not config.get('enabled', False):
+            return {'activated': False, 'message': ''}
+
+        if self._conservative_mode:
+            # 이미 활성화 상태 → 카운트만 증가
+            msg = (
+                f"[CONSERVATIVE_MODE] Hard Stop 추가 발동 "
+                f"(누적 {self._conservative_hard_stop_count}회) — 보수 모드 유지 중"
+                f"{f' | {trigger_info}' if trigger_info else ''}"
+            )
+            logger.warning(msg)
+            return {'activated': False, 'message': msg}
+
+        self._conservative_mode = True
+        self._conservative_activated_at = datetime.now().strftime('%H:%M')
+        msg = (
+            f"[CONSERVATIVE_MODE] Hard Stop 발동 → 보수 모드 활성화 "
+            f"({self._conservative_activated_at}): "
+            f"max_positions={config.get('max_positions', 1)}, "
+            f"size={config.get('position_size_mult', 0.5)*100:.0f}%, "
+            f"cooldown×{config.get('cooldown_mult', 1.5)}"
+            f"{f' | {trigger_info}' if trigger_info else ''}"
+        )
+        logger.warning(msg)
+        return {'activated': True, 'message': msg}
+
+    # TODO: 하루 N회 hard stop 시 강제 휴식
+    # if self._conservative_hard_stop_count >= 2:
+    #     self._trading_disabled = True  # 당일 전면 중단
+    #     # 복귀: 다음 거래일 ReentryMetrics 재생성
+
+    def get_conservative_adjustments(self, config: Dict) -> Dict:
+        """
+        Conservative Mode 적용 값 반환.
+
+        Returns:
+            dict with keys: active, activated_at, max_positions, position_size_mult, cooldown_mult
+        """
+        if not self._conservative_mode or not config.get('enabled', False):
+            return {
+                'active': False,
+                'activated_at': '',
+                'max_positions': None,
+                'position_size_mult': 1.0,
+                'cooldown_mult': 1.0,
+            }
+        return {
+            'active': True,
+            'activated_at': self._conservative_activated_at,
+            'max_positions': config.get('max_positions', 1),
+            'position_size_mult': config.get('position_size_mult', 0.5),
+            'cooldown_mult': config.get('cooldown_mult', 1.5),
+        }
 
     def get_market_sensor_status(self) -> Dict:
         """Market Sensor 상태 요약 (리포트용)"""
@@ -585,6 +667,12 @@ class ReentryMetrics:
             'ef_subtype_ratio': ef_subtype_ratio,
             # 🔧 2026-02-10: Market Sensor 상태
             'market_sensor': self.get_market_sensor_status(),
+            # 🔧 2026-02-16: Conservative Mode 상태
+            'conservative_mode': {
+                'active': self._conservative_mode,
+                'activated_at': self._conservative_activated_at,
+                'hard_stop_count': self._conservative_hard_stop_count,
+            },
             'status': status,
             'status_icon': status_icon,
         }
@@ -656,6 +744,17 @@ class ReentryMetrics:
                 print(f"    Risk OFF Day   : ON ({ms['risk_off_at']})")
             else:
                 print(f"    Risk OFF Day   : OFF")
+            print()
+
+        # 🔧 2026-02-16: Conservative Mode Status
+        cm = report.get('conservative_mode', {})
+        if cm.get('active') or cm.get('hard_stop_count', 0) > 0:
+            print("  [CONSERVATIVE MODE]")
+            if cm.get('active'):
+                print(f"    Status         : ON ({cm.get('activated_at', '')})")
+            else:
+                print(f"    Status         : OFF")
+            print(f"    Hard Stop Count: {cm.get('hard_stop_count', 0)}")
             print()
 
         print("=" * 50)
