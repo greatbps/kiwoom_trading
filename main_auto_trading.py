@@ -1697,6 +1697,9 @@ class IntegratedTradingSystem:
 
             console.print(f"[green]✓ 리스크 관리자 초기화 완료 (초기 잔고: {self.current_cash:,.0f}원)[/green]")
 
+            # 🔧 2026-02-19: Loss Streak Guard 시작 시 체크
+            self._check_loss_streak_guard()
+
             # 거래 내역 검증 및 동기화 시스템 (누락 방지)
             self.reconciliation = TradeReconciliation(
                 api=self.api,
@@ -1721,6 +1724,9 @@ class IntegratedTradingSystem:
                 storage_path='data/risk_log.json',
                 config=self.config.config  # 🔧 REFACTOR: 설정 파일 전달 (수정: _config → config)
             )
+
+            # 🔧 2026-02-19: Loss Streak Guard 시작 시 체크
+            self._check_loss_streak_guard()
 
             # 거래 내역 검증 및 동기화 시스템 (누락 방지) - 기본값 경로
             self.reconciliation = TradeReconciliation(
@@ -4427,6 +4433,15 @@ class IntegratedTradingSystem:
                     if weight_multiplier < 1.0:
                         console.print(f"[yellow]📊 CHoCH {choch_grade}급: 비중 {weight_multiplier*100:.0f}% 적용[/yellow]")
 
+                    # 🔧 2026-02-19: B급 CHoCH 시간 제한
+                    if choch_grade == 'B':
+                        grade_b_cutoff_str = self.config.get('smc.choch_grade.grade_b_cutoff', '11:30')
+                        h_cut, m_cut = map(int, grade_b_cutoff_str.split(':'))
+                        from datetime import time as time_class
+                        if datetime.now().time() >= time_class(h_cut, m_cut, 0):
+                            console.print(f"[yellow]🚫 {stock_name}: B급 CHoCH {grade_b_cutoff_str} 이후 차단[/yellow]")
+                            return
+
                     # 🔧 2026-02-06: 구조 기반 손절가 저장
                     structure_stop_price = details.get('structure_stop_price')
                     if structure_stop_price:
@@ -4760,6 +4775,21 @@ class IntegratedTradingSystem:
             console.print(f"[dim]⚠️  일일 손익 계산 실패: {e}[/dim]")
             return 0.0
 
+    def _check_loss_streak_guard(self):
+        """🔧 2026-02-19: Loss Streak Guard 상태 확인 및 활성화/해제"""
+        lsg_config = self.config.get('risk_control.loss_streak_guard', {})
+        if not self.risk_manager or not lsg_config.get('enabled', False):
+            return
+        lsg_result = self.reentry_metrics.activate_loss_streak_guard(
+            self.risk_manager.consecutive_losses, lsg_config
+        )
+        if lsg_result['changed']:
+            color = 'red' if lsg_result['active'] else 'green'
+            console.print(f"[bold {color}]🛡️ {lsg_result['message']}[/bold {color}]")
+        # EF threshold override 설정/해제
+        lsg_adj = self.reentry_metrics.get_loss_streak_adjustments(lsg_config)
+        self.exit_logic.ef_threshold_override = lsg_adj['ef_score_threshold']  # None when inactive
+
     def _is_valid_entry_time(self, current_time: datetime = None) -> Tuple[bool, str]:
         """
         시간 필터 강제 체크 (모든 진입 경로에서 체크)
@@ -4796,11 +4826,12 @@ class IntegratedTradingSystem:
         squeeze_config = self.config.get('squeeze_momentum', {})
         entry_mode = squeeze_config.get('entry_mode', 'squeeze_only')  # 기본값: squeeze_only
 
-        # 🔧 2026-02-10 F1: SMC 모드 14:00 이후 진입 차단
-        # 데이터 근거: 14시+ 진입 19건 승률 15.8%, -12,480원 (최악 시간대)
-        AFTERNOON_CUT = time_class(14, 0, 0)
-        if entry_mode == 'smc' and t >= AFTERNOON_CUT:
-            return False, f"🚫 SMC 14:00 이후 진입 차단 ({t.strftime('%H:%M:%S')})"
+        # 🔧 2026-02-19: SMC 시간 필터 강화 (YAML 설정 기반, 기존 14:00 → 12:30)
+        smc_cutoff_str = self.config.get('time_filter.smc_afternoon_cutoff', '12:30')
+        h_cut, m_cut = map(int, smc_cutoff_str.split(':'))
+        SMC_AFTERNOON_CUT = time_class(h_cut, m_cut, 0)
+        if entry_mode == 'smc' and t >= SMC_AFTERNOON_CUT:
+            return False, f"🚫 SMC {smc_cutoff_str} 이후 진입 차단 ({t.strftime('%H:%M:%S')})"
 
         # 🔥 수정: squeeze_2tf, ma_cross, smc 모드도 점심시간 허용
         if entry_mode in ['squeeze_only', 'squeeze_with_orderbook', 'squeeze_2tf', 'ma_cross', 'smc']:
@@ -4970,6 +5001,14 @@ class IntegratedTradingSystem:
         if cm_adj['active']:
             position_size_mult *= cm_adj['position_size_mult']
             console.print(f"[yellow]⚠️ [CONSERVATIVE] 포지션 사이즈 {cm_adj['position_size_mult']*100:.0f}% 적용[/yellow]")
+
+        # 🔧 2026-02-19: Loss Streak Guard — 포지션 사이즈 축소
+        lsg_config = self.config.get('risk_control.loss_streak_guard', {})
+        lsg_adj = self.reentry_metrics.get_loss_streak_adjustments(lsg_config)
+        if lsg_adj['active']:
+            position_size_mult *= lsg_adj['position_size_mult']
+            console.print(f"[red]🛡️ [LOSS STREAK] 포지션 {lsg_adj['position_size_mult']*100:.0f}% "
+                         f"({lsg_adj['consecutive']}연패)[/red]")
 
         # SignalOrchestrator의 포지션 조정 반영
         # 🔧 FIX: 최소 1주 보장 (이중 축소 방지)
@@ -6078,6 +6117,11 @@ class IntegratedTradingSystem:
                 )
                 if cm_result.get('message'):
                     console.print(f"[bold red]{cm_result['message']}[/bold red]")
+                if cm_result.get('trading_halted'):
+                    console.print(f"[bold red]🚨 당일 거래 종료! (Hard Stop {cm_result.get('hard_stop_count', 0)}회)[/bold red]")
+
+            # 🔧 2026-02-19: Loss Streak Guard 상태 업데이트 (매도 후 연패 수 변동)
+            self._check_loss_streak_guard()
 
             # v2: config 기반 쿨다운 시간 표시
             if self._cooldown_v2_enabled and self._cooldown_by_reason:

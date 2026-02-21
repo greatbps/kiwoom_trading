@@ -71,6 +71,9 @@ class OptimizedExitLogic:
         self.min_hold_enabled = self.min_hold_time.get('enabled', False)
         self.min_hold_minutes = self.min_hold_time.get('minutes', 30)
 
+        # 🔧 2026-02-19: Loss Streak Guard — EF threshold override
+        self.ef_threshold_override: Optional[int] = None
+
         # 🔧 2026-01-20: 당일 매수 종목 강화 손절 설정
         self.same_day_entry = self.risk_control.get('same_day_entry', {})
         self.same_day_enabled = self.same_day_entry.get('enabled', False)
@@ -270,7 +273,10 @@ class OptimizedExitLogic:
 
         observe_minutes = config.get('observe_minutes', 15)
         min_observe_minutes = config.get('min_observe_minutes', 5)
-        threshold = config.get('score_threshold', 3)
+        # 🔧 2026-02-19: Loss Streak Guard — EF threshold override
+        threshold = (self.ef_threshold_override
+                     if self.ef_threshold_override is not None
+                     else config.get('score_threshold', 3))
 
         # 관찰 구간 체크: min_observe ~ observe_minutes 사이만 판단
         if elapsed_minutes < min_observe_minutes or elapsed_minutes > observe_minutes:

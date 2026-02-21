@@ -6,10 +6,11 @@ Re-entry Cooldown Trigger Report
 - 2026-02-10: MarketSensor (EF 기반 시장 상태 판별 → 진입 차단)
 """
 import json
+import logging
 import os
 from dataclasses import dataclass, asdict
 from datetime import datetime
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 from collections import Counter
 
 import numpy as np
@@ -312,6 +313,14 @@ class ReentryMetrics:
         self._conservative_mode: bool = False
         self._conservative_activated_at: str = ''
         self._conservative_hard_stop_count: int = 0
+        self._trading_halted: bool = False
+        self._trading_halted_at: str = ''
+
+        # 🔧 2026-02-19: Loss Streak Guard (연패 보호 장치)
+        self._loss_streak_guard: bool = False
+        self._loss_streak_activated_at: str = ''
+        self._loss_streak_consecutive: int = 0
+        self._ms_risk_off_no_follow_override: Optional[int] = None
 
     def record_entry_signal(self):
         """진입 시도 카운트 (쿨다운 체크 직전)"""
@@ -381,7 +390,10 @@ class ReentryMetrics:
                 messages.append(msg)
 
         # 규칙 ②: no_follow N회 → Risk OFF Day
-        risk_off_limit = config.get('risk_off_no_follow_limit', 3)
+        # 🔧 2026-02-19: Loss Streak Guard override (1회로 축소 가능)
+        risk_off_limit = (self._ms_risk_off_no_follow_override
+                         if self._ms_risk_off_no_follow_override is not None
+                         else config.get('risk_off_no_follow_limit', 3))
         if not self._ms_risk_off and self._ms_ef_no_follow >= risk_off_limit:
             self._ms_risk_off = True
             self._ms_risk_off_at = now_str
@@ -407,6 +419,13 @@ class ReentryMetrics:
         """
         if not config.get('enabled', False):
             return True, ''
+
+        # 🔧 2026-02-19: Hard Stop 당일 거래 종료
+        if self._trading_halted:
+            return False, (
+                f"TRADING_HALTED (Hard Stop {self._conservative_hard_stop_count}회, "
+                f"{self._trading_halted_at} 거래 종료)"
+            )
 
         now = datetime.now()
 
@@ -452,10 +471,23 @@ class ReentryMetrics:
 
         self._conservative_hard_stop_count += 1
 
+        # 🔧 2026-02-19: Hard Stop N회 → 당일 거래 종료
+        halt_threshold = config.get('trading_halt_threshold', 2)
+        if self._conservative_hard_stop_count >= halt_threshold and not self._trading_halted:
+            self._trading_halted = True
+            self._trading_halted_at = datetime.now().strftime('%H:%M')
+            halt_msg = (
+                f"[TRADING_HALT] Hard Stop {self._conservative_hard_stop_count}회 >= "
+                f"{halt_threshold} → 당일 거래 종료 ({self._trading_halted_at})"
+            )
+            logger.critical(halt_msg)
+
         trigger_info = f"symbol={symbol}, pnl={pnl_pct:+.2f}%" if symbol else ""
 
         if not config.get('enabled', False):
-            return {'activated': False, 'message': ''}
+            return {'activated': False, 'message': '',
+                    'trading_halted': self._trading_halted,
+                    'hard_stop_count': self._conservative_hard_stop_count}
 
         if self._conservative_mode:
             # 이미 활성화 상태 → 카운트만 증가
@@ -465,7 +497,9 @@ class ReentryMetrics:
                 f"{f' | {trigger_info}' if trigger_info else ''}"
             )
             logger.warning(msg)
-            return {'activated': False, 'message': msg}
+            return {'activated': False, 'message': msg,
+                    'trading_halted': self._trading_halted,
+                    'hard_stop_count': self._conservative_hard_stop_count}
 
         self._conservative_mode = True
         self._conservative_activated_at = datetime.now().strftime('%H:%M')
@@ -478,12 +512,9 @@ class ReentryMetrics:
             f"{f' | {trigger_info}' if trigger_info else ''}"
         )
         logger.warning(msg)
-        return {'activated': True, 'message': msg}
-
-    # TODO: 하루 N회 hard stop 시 강제 휴식
-    # if self._conservative_hard_stop_count >= 2:
-    #     self._trading_disabled = True  # 당일 전면 중단
-    #     # 복귀: 다음 거래일 ReentryMetrics 재생성
+        return {'activated': True, 'message': msg,
+                'trading_halted': self._trading_halted,
+                'hard_stop_count': self._conservative_hard_stop_count}
 
     def get_conservative_adjustments(self, config: Dict) -> Dict:
         """
@@ -506,6 +537,53 @@ class ReentryMetrics:
             'max_positions': config.get('max_positions', 1),
             'position_size_mult': config.get('position_size_mult', 0.5),
             'cooldown_mult': config.get('cooldown_mult', 1.5),
+        }
+
+    # ─── 🔧 2026-02-19: Loss Streak Guard ───
+
+    def activate_loss_streak_guard(self, consecutive_losses: int, config: Dict) -> Dict:
+        """연패 수에 따라 Loss Streak Guard 활성화/비활성화."""
+        if not config.get('enabled', False):
+            return {'changed': False, 'active': False, 'message': ''}
+
+        threshold = config.get('consecutive_loss_threshold', 5)
+        self._loss_streak_consecutive = consecutive_losses
+
+        if consecutive_losses >= threshold and not self._loss_streak_guard:
+            self._loss_streak_guard = True
+            self._loss_streak_activated_at = datetime.now().strftime('%H:%M')
+            self._ms_risk_off_no_follow_override = config.get('ms_risk_off_no_follow_limit', 1)
+            msg = (f"[LOSS_STREAK_GUARD] 연패 {consecutive_losses}회 >= {threshold} → "
+                   f"보호 모드 활성화 ({self._loss_streak_activated_at}): "
+                   f"size={config.get('position_size_mult',0.5)*100:.0f}%, "
+                   f"EF={config.get('ef_score_threshold',2)}, "
+                   f"MS_nf={config.get('ms_risk_off_no_follow_limit',1)}")
+            logging.getLogger('loss_streak_guard').warning(msg)
+            return {'changed': True, 'active': True, 'message': msg}
+
+        elif consecutive_losses < threshold and self._loss_streak_guard:
+            self._loss_streak_guard = False
+            self._ms_risk_off_no_follow_override = None
+            self._loss_streak_activated_at = ''
+            msg = f"[LOSS_STREAK_GUARD] 연패 해제 ({consecutive_losses}회 < {threshold}) → 보호 모드 해제"
+            logging.getLogger('loss_streak_guard').info(msg)
+            return {'changed': True, 'active': False, 'message': msg}
+
+        return {'changed': False, 'active': self._loss_streak_guard, 'message': ''}
+
+    def get_loss_streak_adjustments(self, config: Dict) -> Dict:
+        """Loss Streak Guard 적용 값 반환."""
+        if not self._loss_streak_guard or not config.get('enabled', False):
+            return {'active': False, 'position_size_mult': 1.0,
+                    'ef_score_threshold': None, 'ms_risk_off_no_follow_limit': None,
+                    'consecutive': 0, 'activated_at': ''}
+        return {
+            'active': True,
+            'activated_at': self._loss_streak_activated_at,
+            'consecutive': self._loss_streak_consecutive,
+            'position_size_mult': config.get('position_size_mult', 0.5),
+            'ef_score_threshold': config.get('ef_score_threshold', 2),
+            'ms_risk_off_no_follow_limit': config.get('ms_risk_off_no_follow_limit', 1),
         }
 
     def get_market_sensor_status(self) -> Dict:
@@ -672,6 +750,14 @@ class ReentryMetrics:
                 'active': self._conservative_mode,
                 'activated_at': self._conservative_activated_at,
                 'hard_stop_count': self._conservative_hard_stop_count,
+                'trading_halted': self._trading_halted,
+                'trading_halted_at': self._trading_halted_at,
+            },
+            # 🔧 2026-02-19: Loss Streak Guard 상태
+            'loss_streak_guard': {
+                'active': self._loss_streak_guard,
+                'activated_at': self._loss_streak_activated_at,
+                'consecutive_losses': self._loss_streak_consecutive,
             },
             'status': status,
             'status_icon': status_icon,
@@ -755,6 +841,19 @@ class ReentryMetrics:
             else:
                 print(f"    Status         : OFF")
             print(f"    Hard Stop Count: {cm.get('hard_stop_count', 0)}")
+            if cm.get('trading_halted'):
+                print(f"    TRADING HALT : ON ({cm.get('trading_halted_at', '')})")
+            print()
+
+        # 🔧 2026-02-19: Loss Streak Guard Status
+        lsg = report.get('loss_streak_guard', {})
+        if lsg.get('active') or lsg.get('consecutive_losses', 0) >= 3:
+            print("  [LOSS STREAK GUARD]")
+            if lsg.get('active'):
+                print(f"    Status         : ON ({lsg.get('activated_at', '')})")
+                print(f"    Consecutive    : {lsg.get('consecutive_losses', 0)}연패")
+            else:
+                print(f"    Status         : OFF ({lsg.get('consecutive_losses', 0)}연패)")
             print()
 
         print("=" * 50)

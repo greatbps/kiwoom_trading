@@ -49,6 +49,7 @@ time_filter:
   use_time_filter: true        # 🔧 FIX: 장 초반/마감 회피 활성화 (문서 명세)
   market_open: "09:00"
   market_close: "15:20"
+  smc_afternoon_cutoff: "12:30"    # 🔧 2026-02-19: SMC 진입 차단 (기존 14:00)
   avoid_early_minutes: 30      # 🔧 FIX: 09:30까지 회피 (문서 명세) [복원: 10→30]
   avoid_late_minutes: 21       # 🔧 FIX: 14:59까지만 진입 (15:20-21=14:59) [복원: 10→21]
 
@@ -217,6 +218,17 @@ risk_control:
     max_positions: 1              # 동시 보유 3 → 1로 축소
     position_size_mult: 0.5       # 포지션 사이즈 50% 축소
     cooldown_mult: 1.5            # 쿨다운 시간 1.5배 연장
+    trading_halt_threshold: 2    # 🔧 2026-02-19: Hard Stop N회 → 당일 거래 종료
+
+  # 🔧 2026-02-19: Loss Streak Guard (연패 보호 장치)
+  # consecutive_losses >= threshold → 포지션 축소 + EF 민감도 상향 + Market Sensor 강화
+  # 수익 거래 발생 시 자동 해제 (consecutive_losses → 0)
+  loss_streak_guard:
+    enabled: true
+    consecutive_loss_threshold: 5    # 5연패 이상 시 활성화
+    position_size_mult: 0.5          # 포지션 사이즈 50% (Conservative와 중첩 시 25%)
+    ef_score_threshold: 2            # EF 임계값 3 → 2 (조기 탈출 민감도 상향)
+    ms_risk_off_no_follow_limit: 1   # Market Sensor no_follow 1회 → 즉시 Risk OFF Day
 
   # 🔧 2026-01-27: 무승부(Draw) 거래 정의
   # +0.2% 미만 & 6시간+ 보유 = WIN/LOSS가 아닌 DRAW로 분류
@@ -489,6 +501,7 @@ smc:
     enabled: true                      # 등급 필터 활성화
     min_grade: "B"                     # 최소 허용 등급 (A/B/C) - C급 차단
     grade_b_weight: 0.5                # B급 CHoCH 비중 배율 (50%)
+    grade_b_cutoff: "11:30"            # 🔧 2026-02-19: B급 CHoCH 시간 제한
     # A급: HTF 구조 일치 + Sweep + OB 명확 + Squeeze 수축 (70점+)
     # B급: 일부 조건 미충족 (40-69점)
     # C급: 횡보 내 CHoCH, 저품질 (40점 미만) → 진입 금지
