@@ -8810,10 +8810,12 @@ class IntegratedTradingSystem:
             logger.debug(f"[ML_GATE] {stock_code} 오류 (무시): {_ml_e}")
 
         # ── EQ ML Filter (Entry Quality, 2026-05-01) ─────────────────────
+        _eq_pwin_final = None   # size scaling에서 사용
         try:
             if getattr(self, 'eq_model', None) and self.eq_model.enabled:
                 _eq_feat = self._build_eq_features(stock_code, price, df, entry_confidence, entry_reason)
                 _eq_block, _eq_pwin = self.eq_model.should_block(_eq_feat)
+                _eq_pwin_final = _eq_pwin
                 _eq_tag = '[EQ_SHADOW]' if self.eq_model.shadow_mode else '[EQ_FILTER]'
                 logger.info(
                     f"{_eq_tag} {stock_code} {stock_name}: "
@@ -8826,6 +8828,37 @@ class IntegratedTradingSystem:
                     return
         except Exception as _eq_e:
             logger.debug(f"[EQ_GATE] {stock_code} 오류 (무시): {_eq_e}")
+
+        # ── EQ Size Scaling (P(win) → 수량 조정, shadow_mode=False 전용) ────
+        try:
+            _eq_scale_cfg = (self.config.get('eq_ml_filter') or {}).get('size_scaling', {})
+            if (
+                _eq_scale_cfg.get('enabled', False)
+                and _eq_pwin_final is not None
+                and getattr(self, 'eq_model', None)
+                and self.eq_model.enabled
+                and not self.eq_model.shadow_mode
+                and self.eq_model._model is not None
+            ):
+                _pwin = _eq_pwin_final
+                _thr  = self.eq_model.threshold
+                if _pwin >= _eq_scale_cfg.get('high_threshold', 0.60):
+                    _eq_sz_mult = float(_eq_scale_cfg.get('high_mult', 1.2))
+                elif _pwin < _thr:
+                    _eq_sz_mult = float(_eq_scale_cfg.get('low_mult', 0.8))
+                else:
+                    _eq_sz_mult = 1.0
+
+                if abs(_eq_sz_mult - 1.0) > 0.01:
+                    _old_qty = quantity
+                    quantity = max(1, int(quantity * _eq_sz_mult))
+                    amount   = amount * _eq_sz_mult
+                    logger.info(
+                        f"[EQ_SIZE] {stock_code} P(win)={_pwin:.2f} "
+                        f"×{_eq_sz_mult:.1f} {_old_qty}→{quantity}주"
+                    )
+        except Exception as _eq_sz_e:
+            logger.debug(f"[EQ_SIZE_ERR] {stock_code}: {_eq_sz_e}")
 
         # Dry-run 모드 체크
         if self.dry_run_mode:
@@ -10759,6 +10792,26 @@ class IntegratedTradingSystem:
             )
         except Exception as _re:
             logger.debug(f"[DRIFT_REC_ERR] {stock_code}: {_re}")
+
+        # ── EQ 모델 드리프트 기반 재학습 ─────────────────────────────────────
+        try:
+            if (getattr(self, 'drift_detector', None)
+                    and self.drift_detector.needs_retrain()
+                    and getattr(self, 'eq_model', None)
+                    and self.eq_model.enabled):
+                _drift_data = self.eq_feature_logger.load_labeled(
+                    min_samples=self.eq_model.min_samples
+                )
+                if _drift_data:
+                    logger.info(
+                        f"[EQ_DRIFT_RETRAIN] 드리프트 RETRAIN 감지 → EQ 재학습 "
+                        f"n={len(_drift_data)}"
+                    )
+                    if self.eq_model.train(_drift_data):
+                        self.drift_detector.ack_retrain()
+                        logger.info("[EQ_DRIFT_RETRAIN] 완료, retrain 플래그 해제")
+        except Exception as _dre:
+            logger.debug(f"[EQ_DRIFT_RETRAIN_ERR] {_dre}")
 
         # 🔧 2026-04-24: OnlineStats EMA 업데이트
         try:

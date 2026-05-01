@@ -1317,3 +1317,10 @@ eq_ml_filter:
   threshold: 0.40             # P(win) < 0.40 → 차단 (shadow=false일 때)
   min_train_samples: 50       # 학습 최소 건수
   retrain_interval_trades: 20 # N거래마다 자동 재학습
+
+  # P(win) 기반 포지션 사이즈 조정 (shadow_mode=false + 모델 학습 완료 후 활성화)
+  size_scaling:
+    enabled: false            # Phase 2 이후 활성화
+    high_threshold: 0.60      # P(win) >= 0.60 → high_mult 적용
+    high_mult: 1.20           # 고확신 진입: +20%
+    low_mult:  0.80           # threshold 미달이나 차단 안 된 경우: -20%
