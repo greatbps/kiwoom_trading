@@ -30,3 +30,8 @@ backups/
 backup/
 ai/models/*.pkl
 
+*.pid
+.coverage
+coverage.xml
+htmlcov/
+*.pyc

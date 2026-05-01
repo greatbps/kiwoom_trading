@@ -37,12 +37,14 @@ V2_LIFECYCLE_D1_PARTIAL = 0.5          # D+1 부분청산 비율
 V2_LIFECYCLE_D3_PROFIT_THRESHOLD = 3.0 # D+3 익절 기준
 V2_LIFECYCLE_D5_FORCE = True           # D+5 강제청산
 
+import logging
 from datetime import datetime, time
 from typing import Dict, Tuple, Optional
 import pandas as pd
 from rich.console import Console
 
 console = Console()
+logger = logging.getLogger(__name__)
 
 
 class OptimizedExitLogic:
