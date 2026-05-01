@@ -39,6 +39,7 @@ console = Console()
 
 # 파일 로거 설정
 signal_logger = logging.getLogger('signal_orchestrator')
+logger = logging.getLogger(__name__)
 signal_logger.setLevel(logging.INFO)
 log_file = Path(__file__).parent.parent / 'logs' / 'signal_orchestrator.log'
 log_file.parent.mkdir(exist_ok=True)
@@ -78,7 +79,8 @@ class SignalOrchestrator:
         # L2: RS 필터
         self.rs_filter = RelativeStrengthFilter(
             lookback_days=60,
-            min_rs_rating=80  # 초기 30%, 실전 20%로 조정
+            min_rs_rating=80,  # 초기 30%, 실전 20%로 조정
+            api=api,
         )
 
         # L3: MTF V2 (Confidence-based)
@@ -354,7 +356,7 @@ class SignalOrchestrator:
 
         # 폴백 모드 로깅
         if fallback_stage > 0:
-            console.print(f"[yellow]⚠️  {stock_code}: L6 Fallback Stage {fallback_stage}, entry_ratio={entry_ratio}[/yellow]")
+            logger.debug(f"[L6_FALLBACK] {stock_code} stage={fallback_stage}")
 
         # 🔧 FIX: fallback_stage도 반환 (문서 명세: Stage 결정에 필요)
         return allowed, reason, entry_ratio, fallback_stage
@@ -459,7 +461,7 @@ class SignalOrchestrator:
         if not l1_pass:
             result['rejection_level'] = 'L1'
             result['rejection_reason'] = l1_reason
-            console.print(f"[red]❌ REJECT[/red] {stock_code} | L1 | {l1_reason}")
+            logger.debug(f"[REJECT_L1] {stock_code} | {l1_reason}")
             return result
 
         # L3-L6: Confidence-based 필터링
@@ -473,7 +475,7 @@ class SignalOrchestrator:
         if not l3_result.passed:
             result['rejection_level'] = 'L3'
             result['rejection_reason'] = l3_result.reason
-            console.print(f"[red]❌ REJECT[/red] {stock_code} @{current_price:.0f}원 | L3 | {l3_result.reason[:60]}")
+            logger.debug(f"[REJECT_L3] {stock_code} | {l3_result.reason[:60]}")
             return result
 
         # L4: Liquidity Shift
@@ -482,9 +484,8 @@ class SignalOrchestrator:
         result['details']['l4_confidence'] = l4_result.confidence
 
         # L4는 선택사항 (낮은 수급이라도 진행 가능)
-        # 단, confidence가 0이면 경고
         if not l4_result.passed:
-            console.print(f"[yellow]⚠️  {stock_code}: L4 수급 전환 없음 (진행 가능)[/yellow]")
+            logger.debug(f"[L4_SKIP] {stock_code}: 수급 전환 없음")
 
         # L5: Squeeze Momentum
         l5_result = self.squeeze.check_with_confidence(df)
@@ -493,7 +494,7 @@ class SignalOrchestrator:
 
         # L5도 선택사항 (Squeeze 없어도 VWAP 돌파만으로 진행 가능)
         if not l5_result.passed:
-            console.print(f"[yellow]⚠️  {stock_code}: L5 Squeeze 없음 (진행 가능)[/yellow]")
+            logger.debug(f"[L5_SKIP] {stock_code}: Squeeze 없음")
 
         # L6: Pre-Trade Validator
         from datetime import datetime
@@ -510,7 +511,7 @@ class SignalOrchestrator:
         if not l6_result.passed:
             result['rejection_level'] = 'L6'
             result['rejection_reason'] = l6_result.reason
-            console.print(f"[red]❌ REJECT[/red] {stock_code} @{current_price:.0f}원 | L6 | {l6_result.reason[:60]}")
+            logger.debug(f"[REJECT_L6] {stock_code} | {l6_result.reason[:60]}")
             return result
 
         # Confidence 결합
@@ -530,9 +531,8 @@ class SignalOrchestrator:
             # Confidence 부족 (< 0.4)
             result['rejection_level'] = 'CONFIDENCE'
             result['rejection_reason'] = aggregation_reason
-            msg = f"❌ REJECT {stock_code} @{current_price:.0f}원 | CONFIDENCE | {aggregation_reason}"
-            console.print(f"[red]{msg}[/red]")
-            signal_logger.info(msg)
+            msg = f"[REJECT_CONF] {stock_code} | {aggregation_reason}"
+            logger.debug(msg)
             return result
 
         # Phase 2: Multi-Alpha Engine 실행
@@ -556,7 +556,7 @@ class SignalOrchestrator:
             self.stats['alpha_rejected'] += 1
             result['rejection_level'] = 'ALPHA'
             result['rejection_reason'] = f"Multi-Alpha 점수 부족 ({aggregate_score:+.2f} <= {ALPHA_THRESHOLD})"
-            console.print(f"[red]❌ REJECT[/red] {stock_code} @{current_price:.0f}원 | ALPHA | score={aggregate_score:+.2f} (threshold={ALPHA_THRESHOLD})")
+            logger.debug(f"[REJECT_ALPHA] {stock_code} | score={aggregate_score:+.2f}")
             return result
 
         # 모든 레벨 통과!

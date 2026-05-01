@@ -173,7 +173,7 @@ class KoreaInvestOverseasBroker(BrokerBase):
             return False
 
     def get_positions(self) -> List[Position]:
-        """보유 포지션 조회"""
+        """보유 포지션 조회 (현재가는 yfinance 기준)"""
         if not self.api:
             return []
 
@@ -181,16 +181,48 @@ class KoreaInvestOverseasBroker(BrokerBase):
         if not result['success']:
             return []
 
+        # yfinance로 현재가 일괄 조회
+        symbols = [h.get('ovrs_pdno', '') for h in result['data'] if h.get('ovrs_pdno')]
+        live_prices: dict = {}
+        if symbols:
+            try:
+                import yfinance as yf
+                tickers = yf.Tickers(' '.join(symbols))
+                for sym in symbols:
+                    try:
+                        info = tickers.tickers[sym].info
+                        price = info.get('regularMarketPrice') or info.get('currentPrice')
+                        if not price:
+                            hist = tickers.tickers[sym].history(period='2d')
+                            price = float(hist['Close'].iloc[-1]) if not hist.empty else 0.0
+                        live_prices[sym] = float(price)
+                    except Exception:
+                        live_prices[sym] = 0.0
+            except Exception:
+                pass
+
         positions = []
         for h in result['data']:
+            symbol = h.get('ovrs_pdno', '')
+            avg_price = float(h.get('pchs_avg_pric', 0))
+            quantity = int(h.get('ovrs_cblc_qty', 0))
+
+            # yfinance 현재가 우선, 없으면 API fallback
+            current_price = live_prices.get(symbol, 0.0)
+            if current_price <= 0:
+                current_price = float(h.get('now_pric2', 0))
+
+            profit_pct = ((current_price - avg_price) / avg_price * 100) if avg_price > 0 else 0.0
+            eval_amount = current_price * quantity
+
             pos = Position(
-                symbol=h.get('ovrs_pdno', ''),
-                name=h.get('ovrs_item_name', h.get('ovrs_pdno', '')),
-                quantity=int(h.get('ovrs_cblc_qty', 0)),
-                avg_price=float(h.get('pchs_avg_pric', 0)),
-                current_price=float(h.get('now_pric2', 0)),
-                profit_pct=float(h.get('evlu_pfls_rt', 0)),
-                eval_amount=float(h.get('ovrs_stck_evlu_amt', 0)),
+                symbol=symbol,
+                name=h.get('ovrs_item_name', symbol),
+                quantity=quantity,
+                avg_price=avg_price,
+                current_price=current_price,
+                profit_pct=profit_pct,
+                eval_amount=eval_amount,
                 market=Market.US,
                 currency="USD"
             )

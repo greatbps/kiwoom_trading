@@ -76,7 +76,7 @@ def print_menu():
         ("3", "💰 거래 내역 조회 (오늘/최근/전체)"),
         ("4", "📊 Ranker 학습 (Candidate Ranker)"),
         ("5", "🧪 Ranker 테스트 (예측 및 랭킹)"),
-        ("6", "📈 백테스트 실행"),
+        ("6", "📈 백테스트 실행 (Ranker / SMC 4전략 / TP·SL 최적화)"),
         ("7", "📄 리포트 생성 (WIN/DRAW/LOSS 분석)"),
         ("8", "💬 Telegram 알림 테스트"),
         ("9", "⚙️  시스템 설정"),
@@ -888,8 +888,100 @@ async def test_ml_prediction():
     console.input("\n[dim][Enter]를 눌러 메인 메뉴로 돌아가기...[/dim]")
 
 
+async def run_smc_backtest():
+    """SMC 백테스트 (일봉 4전략 비교 + TP/SL 그리드 서치)"""
+    console.print("\n" + "=" * 70, style="bold cyan")
+    console.print("[bold cyan]  SMC 백테스트[/bold cyan]")
+    console.print("=" * 70, style="bold cyan")
+
+    console.print("\n[bold]실행 모드를 선택하세요:[/bold]")
+    console.print("  [1] 4전략 비교  (B / B+HTF / B+VOL / B+HTF+VOL)")
+    console.print("  [2] TP/SL 그리드 서치  (B+VOL 전략, 최적 파라미터 탐색)")
+    console.print("  [0] 뒤로")
+
+    mode = console.input("\n[yellow]선택: [/yellow]").strip()
+    if mode == '0':
+        return
+
+    # 공통 파라미터
+    console.print("\n[dim]기간 설정 (기본: 2022-01-01 ~ 2024-12-31)[/dim]")
+    start = console.input("[yellow]시작일 (YYYY-MM-DD, Enter=기본): [/yellow]").strip() or '2022-01-01'
+    end   = console.input("[yellow]종료일 (YYYY-MM-DD, Enter=기본): [/yellow]").strip() or '2024-12-31'
+
+    import logging
+    logging.getLogger('backtest').setLevel(logging.INFO)
+
+    try:
+        if mode == '1':
+            # ── 4전략 비교 ─────────────────────────────────────────────
+            tp = console.input("[yellow]익절 % (기본 3.0): [/yellow]").strip()
+            sl = console.input("[yellow]손절 % (기본 2.0): [/yellow]").strip()
+            tp = float(tp) / 100 if tp else 0.03
+            sl = float(sl) / 100 if sl else 0.02
+
+            symbols_raw = console.input(
+                "[yellow]종목코드 (스페이스 구분, Enter=기본 20종목): [/yellow]"
+            ).strip()
+            symbols = symbols_raw.split() if symbols_raw else None
+
+            console.print("\n[green]백테스트를 시작합니다...[/green]\n")
+            from backtest.runner import run as smc_run
+            smc_run(symbols=symbols, start=start, end=end, tp_pct=tp, sl_pct=sl)
+
+        elif mode == '2':
+            # ── 그리드 서치 ───────────────────────────────────────────
+            tp_raw = console.input(
+                "[yellow]TP 범위 (%, 스페이스 구분, 기본 2 3 4 5): [/yellow]"
+            ).strip()
+            sl_raw = console.input(
+                "[yellow]SL 범위 (%, 스페이스 구분, 기본 1 1.5 2 2.5 3): [/yellow]"
+            ).strip()
+            tp_range = [float(x) / 100 for x in tp_raw.split()] if tp_raw else None
+            sl_range = [float(x) / 100 for x in sl_raw.split()] if sl_raw else None
+
+            symbols_raw = console.input(
+                "[yellow]종목코드 (스페이스 구분, Enter=기본 20종목): [/yellow]"
+            ).strip()
+            symbols = symbols_raw.split() if symbols_raw else None
+
+            console.print("\n[green]그리드 서치를 시작합니다...[/green]\n")
+            from backtest.runner import run_grid_search
+            run_grid_search(
+                symbols=symbols, start=start, end=end,
+                tp_range=tp_range, sl_range=sl_range,
+            )
+
+    except KeyboardInterrupt:
+        console.print("\n[yellow]백테스트가 중단되었습니다.[/yellow]")
+    except Exception as e:
+        console.print(f"[red]오류: {e}[/red]")
+        import traceback
+        traceback.print_exc()
+
+    console.input("\n[dim][Enter]를 눌러 메인 메뉴로 돌아가기...[/dim]")
+
+
 async def run_backtest():
-    """전략 성과 검증 백테스트"""
+    """백테스트 메뉴 (Ranker 기반 / SMC)"""
+    console.print("\n" + "=" * 70, style="bold cyan")
+    console.print("[bold cyan]  📈 백테스트 메뉴[/bold cyan]")
+    console.print("=" * 70, style="bold cyan")
+
+    console.print("\n  [1] Ranker 기반 백테스트  (L0-L6 전략 성과 검증)")
+    console.print("  [2] SMC 백테스트           (일봉 4전략 비교 / TP·SL 최적화)")
+    console.print("  [0] 뒤로")
+
+    sub = console.input("\n[yellow]선택: [/yellow]").strip()
+
+    if sub == '1':
+        await _run_ranker_backtest()
+    elif sub == '2':
+        await run_smc_backtest()
+    # sub == '0' or else: 그냥 리턴
+
+
+async def _run_ranker_backtest():
+    """기존 Ranker 기반 백테스트 (구 run_backtest 내용)"""
     console.print("\n" + "=" * 100, style="bold cyan")
     console.print(f"{'📈 전략 성과 검증 백테스트':^100}", style="bold cyan")
     console.print("=" * 100, style="bold cyan")

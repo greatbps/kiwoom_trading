@@ -140,6 +140,8 @@ class BB30Observer:
         squeeze_state = self.check_squeeze_state(df, idx)
 
         # 신호 정보 구성
+        bb_lower = row.get('bb30_lower', 0)
+        bb_width_pct = (bb_upper - bb_lower) / bb_mid * 100 if bb_mid > 0 else 999.0
         signal_info = {
             'timestamp': datetime.now(),
             'stock_code': stock_code,
@@ -147,6 +149,7 @@ class BB30Observer:
             'close': close,
             'bb_upper': bb_upper,
             'bb_mid': bb_mid,
+            'bb_width_pct': bb_width_pct,
             'breakout_pct': (close - bb_upper) / bb_upper * 100,
             'squeeze_on': squeeze_state['squeeze_on'],
             'momentum': squeeze_state['momentum'],

@@ -79,6 +79,10 @@ class TradingDatabase:
                     realized_profit NUMERIC(20, 2),
                     profit_rate NUMERIC(10, 2),
                     holding_duration INTEGER,
+                    -- 🔧 2026-03-08: trade_duration 분석용
+                    entry_time TIMESTAMP,
+                    exit_time TIMESTAMP,
+                    holding_minutes INTEGER,
 
                     -- 매매 컨텍스트 (ML 학습용)
                     entry_context JSONB,
@@ -407,9 +411,21 @@ class TradingDatabase:
                 )
             """)
 
+            # 🔧 2026-03-08: trade_duration 컬럼 마이그레이션 (기존 DB 호환)
+            for col, coltype in [
+                ('entry_time', 'TIMESTAMP'),
+                ('exit_time', 'TIMESTAMP'),
+                ('holding_minutes', 'INTEGER'),
+            ]:
+                cursor.execute(f"""
+                    ALTER TABLE trades ADD COLUMN IF NOT EXISTS {col} {coltype}
+                """)
+
             # 인덱스 생성
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_trades_stock ON trades(stock_code)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_trades_time ON trades(trade_time)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_trades_exit_time ON trades(exit_time)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_trades_exit_reason ON trades(exit_reason)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_filter_time ON filter_history(filter_time)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_sim_stock ON simulations(stock_code)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_scores_stock ON validation_scores(stock_code)")
@@ -483,10 +499,11 @@ class TradingDatabase:
                     sim_trade_count, sim_profit_factor,
                     news_sentiment, news_impact, news_keywords, news_titles,
                     realized_profit, profit_rate, holding_duration,
-                    entry_context, exit_context, filter_scores
+                    entry_context, exit_context, filter_scores,
+                    entry_time, exit_time, holding_minutes
                 ) VALUES (
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                 ) RETURNING trade_id
             """, (
                 trade_data['stock_code'],
@@ -512,9 +529,12 @@ class TradingDatabase:
                 trade_data.get('realized_profit'),
                 trade_data.get('profit_rate'),
                 trade_data.get('holding_duration'),
-                trade_data.get('entry_context'),
-                trade_data.get('exit_context'),
-                trade_data.get('filter_scores')
+                json.dumps(trade_data['entry_context']) if isinstance(trade_data.get('entry_context'), dict) else trade_data.get('entry_context'),
+                json.dumps(trade_data['exit_context'])  if isinstance(trade_data.get('exit_context'),  dict) else trade_data.get('exit_context'),
+                json.dumps(trade_data['filter_scores']) if isinstance(trade_data.get('filter_scores'), dict) else trade_data.get('filter_scores'),
+                trade_data.get('entry_time'),
+                trade_data.get('exit_time'),
+                trade_data.get('holding_minutes')
             ))
 
             trade_id = cursor.fetchone()[0]

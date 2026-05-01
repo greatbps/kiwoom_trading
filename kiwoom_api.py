@@ -820,6 +820,15 @@ class KiwoomAPI:
 
         try:
             response = self.session.post(url, json=data, headers=headers)
+
+            # 429 Rate Limit: raise 없이 sentinel 반환 (caller가 backoff 처리)
+            if response.status_code == 429:
+                import logging as _log
+                _log.getLogger(__name__).warning(
+                    f"[ka10001] 429 rate limit ({stock_code}) — backoff required"
+                )
+                return {'return_code': 429, 'return_msg': 'rate_limited'}
+
             response.raise_for_status()
 
             result = response.json()
@@ -1274,7 +1283,10 @@ class KiwoomAPI:
         url = f"{self.BASE_URL}/api/dostk/acnt"
 
         data = {
-            "qry_dt": qry_dt,
+            "qry_tp":       "0",    # 0=전체, 1=매수, 2=매도
+            "sell_tp":      "0",    # 0=전체, 1=매수, 2=매도
+            "stex_tp":      "0",    # 거래소구분 0=전체
+            "qry_dt":       qry_dt,
             "dmst_stex_tp": dmst_stex_tp
         }
 

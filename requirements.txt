@@ -29,3 +29,5 @@ rich>=13.0.0
 # 유틸리티
 PyYAML>=6.0.0
 python-telegram-bot>=20.0
+# PostgreSQL
+psycopg2-binary>=2.9.0

@@ -579,6 +579,79 @@ class KoreaInvestAPI:
             logger.error(f"국내주식 주문 오류: {e}")
             return {'success': False, 'error': str(e)}
 
+    def get_news_titles(
+        self,
+        stock_code: str = "",
+        count: int = 20,
+        date: str = "",
+        hour: str = "",
+        serial_no: str = ""
+    ) -> List[Dict[str, str]]:
+        """
+        HTS 종합 시황/공시 제목 조회 (국내주식-141)
+
+        TR_ID: FHKST01011800
+        URL: GET /uapi/domestic-stock/v1/quotations/news-title
+
+        Args:
+            stock_code: 종목코드 6자리 (빈 문자열 = 전체)
+            count: 반환할 최대 건수 (기본 20)
+            date: 조회 시작일 YYYYMMDD (빈 문자열 = 오늘)
+            hour: 조회 시작시간 HHMMSS (빈 문자열 = 현재)
+            serial_no: 연속 조회용 일련번호 (첫 조회 시 빈 문자열)
+
+        Returns:
+            뉴스 항목 리스트:
+              - title: 뉴스 제목
+              - date: 날짜 YYYYMMDD
+              - time: 시간 HHMMSS
+              - source_code: 뉴스 제공사 코드
+              - news_code: 뉴스 대분류 코드
+              - serial_no: 연속 조회용 일련번호
+        """
+        if not self.access_token:
+            self.get_access_token()
+
+        url = f"{self.base_url}/uapi/domestic-stock/v1/quotations/news-title"
+        headers = self._get_headers("FHKST01011800")
+        headers["custtype"] = "P"
+
+        params = {
+            "FID_NEWS_OFER_ENTP_CODE": "",
+            "FID_COND_MRKT_CLS_CODE": "",
+            "FID_INPUT_ISCD": stock_code,
+            "FID_TITL_CNTT": "",
+            "FID_INPUT_DATE_1": date,
+            "FID_INPUT_HOUR_1": hour,
+            "FID_RANK_SORT_CLS_CODE": "",
+            "FID_INPUT_SRNO": serial_no,
+        }
+
+        try:
+            response = requests.get(url, headers=headers, params=params, timeout=10)
+            result = response.json()
+
+            if result.get('rt_cd') == '0':
+                raw = result.get('output', []) or []
+                items = []
+                for item in raw[:count]:
+                    items.append({
+                        'title': item.get('hts_pbnt_titl_cntt', ''),
+                        'date': item.get('data_dt', ''),
+                        'time': item.get('data_tm', ''),
+                        'source_code': item.get('news_ofer_entp_code', ''),
+                        'news_code': item.get('news_lrdv_code', ''),
+                        'serial_no': item.get('cntt_usiq_srno', ''),
+                    })
+                return items
+            else:
+                logger.warning(f"뉴스 조회 실패: {result.get('msg1', '')} ({result.get('msg_cd', '')})")
+                return []
+
+        except Exception as e:
+            logger.error(f"뉴스 조회 오류: {e}")
+            return []
+
 
 # =============================================================================
 # 테스트

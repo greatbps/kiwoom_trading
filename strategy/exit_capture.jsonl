@@ -1,0 +1,2 @@
+{"ts": "2026-04-22T14:50:01", "date": "20260422", "stock_code": "028050", "stock_name": "삼성E&A", "exit_price": 49750, "entry_price": 51700, "pnl_pct": -3.772, "won": false, "exit_reason": "14:50 오버나이트 차단 (등급=B, HTF❌, 수익=-3.77%<1.5%)", "exit_category": "other", "duration_min": 152.1}
+{"ts": "2026-04-27T14:50:00", "date": "20260427", "stock_code": "420770", "stock_name": "기가비스", "exit_price": 99800, "entry_price": 100500, "pnl_pct": -0.697, "won": false, "exit_reason": "14:50 오버나이트 차단 (등급=B, HTF❌, 수익=-0.70%<1.5%)", "exit_category": "other", "duration_min": 340.6}

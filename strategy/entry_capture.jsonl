@@ -1,0 +1,2 @@
+{"ts": "2026-04-26T08:24:49", "date": "20260426", "stock_code": "000000", "stock_name": "테스트", "price": 10000, "ema9": null, "ema20": null, "rvol": null, "vwap": null, "atr": null, "regime": "SMC", "entry_reason": "test", "signal_meta": {}}
+{"ts": "2026-04-26T08:26:25", "date": "20260426", "stock_code": "005930", "stock_name": "삼성전자", "price": 75000.0, "ema9": 10000.0, "ema20": 10000.0, "rvol": 1.0, "vwap": 10050.0, "atr": 200.0, "regime": "SMC", "entry_reason": "TEST_REASON", "signal_meta": {}}

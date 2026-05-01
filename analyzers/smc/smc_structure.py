@@ -12,6 +12,7 @@ from enum import Enum
 import pandas as pd
 
 from .smc_utils import SwingPoint, find_swing_points
+from .smc_decision_logger import get_smc_logger
 
 
 class MarketTrend(Enum):
@@ -298,7 +299,9 @@ class SMCStructureAnalyzer:
     def detect_choch(
         self,
         df: pd.DataFrame,
-        structure: MarketStructure
+        structure: MarketStructure,
+        config: dict = None,
+        symbol: str = ''
     ) -> Optional[StructureBreakEvent]:
         """
         CHoCH (Change of Character) 탐지 - 추세 전환 (핵심!)
@@ -334,14 +337,34 @@ class SMCStructureAnalyzer:
         last_candle = df.iloc[last_idx]
         timestamp = df.index[last_idx] if isinstance(df.index, pd.DatetimeIndex) else None
 
-        # 상승 CHoCH: 하락 추세 또는 횡보 중 LH를 상향 돌파
-        # (하락에서 상승으로 전환)
-        if structure.trend in [MarketTrend.BEARISH, MarketTrend.RANGING]:
+        # 🔧 2026-03-10: Body confirmation — 위꼬리 돌파 CHoCH 차단
+        # body_ratio = |close-open| / (high-low), 0이면 도지 캔들
+        c_range = last_candle['high'] - last_candle['low']
+        c_body = abs(last_candle['close'] - last_candle['open'])
+        body_ratio = c_body / c_range if c_range > 0 else 0
+
+        # 🔧 2026-03-18: CHoCH penetration — 1원 초과 CHoCH 차단 (config 전달 시 적용)
+        _cfg = config or {}
+        choch_penetration_pct = _cfg.get('choch_penetration_pct', 0.0)
+
+        # 상승 CHoCH: 하락 추세에서 LH를 상향 돌파
+        # 🔧 2026-03-07: RANGING 제거 — 횡보장 양방향 노이즈 차단 (GPT 분석 기반)
+        # RANGING에서는 LH/HL이 모두 존재 → 상승/하락 CHoCH 동시 발동 → 노이즈 폭발
+        if structure.trend in [MarketTrend.BEARISH]:
             if structure.last_lh:
                 lh_level = structure.last_lh.price
+                # 🔧 2026-03-18: penetration 적용 — lh_level × (1 + pct/100) 초과해야 CHoCH 확정
+                penetration = lh_level * (choch_penetration_pct / 100)
 
-                # 종가가 LH를 상향 돌파
-                if last_candle['close'] > lh_level:
+                # wick(high)이 LH + penetration 초과 + 종가는 LH 위 + body 50% 이상
+                if (last_candle['high'] > lh_level + penetration
+                        and last_candle['close'] > lh_level
+                        and body_ratio >= 0.5):
+                    _pen_pct = (last_candle['high'] - lh_level) / lh_level * 100
+                    get_smc_logger().log_choch(
+                        symbol, 'bullish', lh_level,
+                        last_candle['high'], last_candle['close'], _pen_pct
+                    )
                     return StructureBreakEvent(
                         type=StructureBreak.CHOCH,
                         index=last_idx,
@@ -351,14 +374,23 @@ class SMCStructureAnalyzer:
                         timestamp=timestamp
                     )
 
-        # 하락 CHoCH: 상승 추세 또는 횡보 중 HL을 하향 돌파
-        # (상승에서 하락으로 전환)
-        if structure.trend in [MarketTrend.BULLISH, MarketTrend.RANGING]:
+        # 하락 CHoCH: 상승 추세에서 HL을 하향 돌파
+        # 🔧 2026-03-07: RANGING 제거 — 확정 추세에서만 CHoCH 허용
+        if structure.trend in [MarketTrend.BULLISH]:
             if structure.last_hl:
                 hl_level = structure.last_hl.price
+                # 🔧 2026-03-18: penetration 적용 — hl_level × (1 - pct/100) 미만으로 내려와야 CHoCH 확정
+                penetration = hl_level * (choch_penetration_pct / 100)
 
-                # 종가가 HL을 하향 돌파
-                if last_candle['close'] < hl_level:
+                # wick(low)이 HL - penetration 미만 + 종가는 HL 아래 + body 50% 이상
+                if (last_candle['low'] < hl_level - penetration
+                        and last_candle['close'] < hl_level
+                        and body_ratio >= 0.5):
+                    _pen_pct = (hl_level - last_candle['low']) / hl_level * 100
+                    get_smc_logger().log_choch(
+                        symbol, 'bearish', hl_level,
+                        last_candle['low'], last_candle['close'], _pen_pct
+                    )
                     return StructureBreakEvent(
                         type=StructureBreak.CHOCH,
                         index=last_idx,

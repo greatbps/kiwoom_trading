@@ -269,12 +269,12 @@ class PreTradeValidatorV2(PreTradeValidator):
             # ========================
             # Phase 1: RSVI + Backtest 결합
             # ========================
-            # 최종 confidence = 0.3 * backtest + 0.7 * rsvi
-            final_confidence = (0.3 * backtest_conf) + (0.7 * rsvi_score)
+            # 최종 confidence = 0.6 * backtest + 0.4 * rsvi (2026-03-05 튜닝: BT 오염 영향 완화)
+            final_confidence = (0.6 * backtest_conf) + (0.4 * rsvi_score)
             final_confidence = max(0.0, min(1.0, final_confidence))
 
             # Threshold 체크 (0.4)
-            threshold = 0.4
+            threshold = 0.25  # 2026-03-05 튜닝: 0.4 → 0.25 (BT 연패 오염 완화)
             if final_confidence < threshold:
                 reason = (
                     f"L6+RSVI: Confidence 부족 ({final_confidence:.2f} < {threshold:.2f}) | "

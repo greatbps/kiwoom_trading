@@ -140,19 +140,11 @@ class AnalysisEngine:
                     'signals': ['뉴스 데이터 없음']
                 }
 
-            # 감성 분석 (AI 대신 키워드 기반 분석 사용)
-            print(f"  [dim]⚠️  AI 감성분석 스킵 (할당량 부족), 키워드 기반 분석 사용[/dim]")
-
-            # 키워드 기반 감성 점수 계산
+            # ── 키워드 기반 감성 분석 ────────────────────────────────────────────
             sentiment_score = self._calculate_keyword_sentiment(news_list)
+            sentiment_normalized = (sentiment_score + 1) * 50
+            final_score = frequency_score * 0.5 + sentiment_normalized * 0.5
 
-            # 감성 점수(-1~1)를 0~100으로 변환
-            sentiment_normalized = (sentiment_score + 1) * 50  # -1→0, 0→50, 1→100
-
-            # 최종 점수 = 뉴스 빈도 50% + 감성 점수 50%
-            final_score = (frequency_score * 0.5 + sentiment_normalized * 0.5)
-
-            # 감성 레벨 판단
             if sentiment_score >= 0.3:
                 sentiment_level = "positive"
             elif sentiment_score <= -0.3:
@@ -161,25 +153,23 @@ class AnalysisEngine:
                 sentiment_level = "neutral"
 
             print(f"  [dim]키워드 감성: {sentiment_level} ({sentiment_score:.2f}), 최종 점수: {final_score:.1f}[/dim]")
-
-            # 시그널 생성
             signals = [
                 f"감성: {sentiment_level} (키워드 기반)",
                 f"뉴스 건수: {len(news_list)}건",
                 f"빈도 점수: {frequency_score:.0f}",
-                f"감성 점수: {sentiment_normalized:.0f}"
+                f"감성 점수: {sentiment_normalized:.0f}",
             ]
-
             return {
                 'score': final_score,
                 'sentiment': sentiment_level,
-                'confidence': abs(sentiment_score) * 100,  # 감성 강도를 신뢰도로
-                'impact': min(len(news_list) * 2, 10),  # 뉴스 개수 기반 영향도 (최대 10)
+                'confidence': abs(sentiment_score) * 100,
+                'impact': min(len(news_list) * 2, 10),
                 'news_count': len(news_list),
                 'frequency_score': frequency_score,
                 'sentiment_score_raw': sentiment_score,
                 'material_analysis': None,
-                'signals': signals
+                'signals': signals,
+                'provider': 'keyword',
             }
 
         except Exception as e:

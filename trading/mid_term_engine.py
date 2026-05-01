@@ -83,6 +83,7 @@ STOCK_GROUP_MAP = {
 
     # 해외 종목 (티커)
     "ROBO": PositionGroup.A_CORE,        # ROBO Global Robotics ETF
+    "SOXL": PositionGroup.A_CORE,        # Direxion Semi 3x (장기 보유)
     "SOFI": PositionGroup.B_TREND,       # SoFi Technologies
     "WCLD": PositionGroup.B_TREND,       # WisdomTree Cloud Computing
 }
@@ -408,10 +409,13 @@ class MidTermEngine:
 
     def display_results(self):
         """결과 테이블 표시"""
-        table = Table(title="📊 중기 투자 포지션 평가")
+        market_label = "해외 (USD)" if self.market == Market.US else "국내"
+        table = Table(title=f"📊 중기 투자 포지션 평가 [{market_label}]")
 
+        is_us = self.market == Market.US
         table.add_column("그룹", style="dim", width=3)
         table.add_column("종목명", style="cyan", width=20)
+        table.add_column("현재가", justify="right", width=10)
         table.add_column("수익률", justify="right", width=8)
         table.add_column("비중", justify="right", width=6)
         table.add_column("Action", width=15)
@@ -420,10 +424,7 @@ class MidTermEngine:
         for r in self.results:
             pos = r.position
 
-            # 수익률 색상
             profit_style = "green" if pos.profit_pct >= 0 else "red"
-
-            # Action 색상
             action_styles = {
                 Action.HOLD: "white",
                 Action.TRAILING_STOP: "green",
@@ -433,10 +434,12 @@ class MidTermEngine:
                 Action.STOP_LOSS: "red bold",
             }
             action_style = action_styles.get(r.action, "white")
+            price_str = f"${pos.current_price:.2f}" if is_us else f"{pos.current_price:,.0f}원"
 
             table.add_row(
                 pos.group.value,
                 pos.stock_name[:18],
+                price_str,
                 f"[{profit_style}]{pos.profit_pct:+.1f}%[/{profit_style}]",
                 f"{pos.weight_pct:.1f}%",
                 f"[{action_style}]{r.action.value}[/{action_style}]",
@@ -464,13 +467,16 @@ class MidTermEngine:
 
     def generate_scenario(self) -> str:
         """종목별 시나리오 자동 생성"""
+        market_label = "해외" if self.market == Market.US else "국내"
         lines = [
             "=" * 60,
-            "📋 중기 투자 시나리오",
+            f"📋 중기 투자 시나리오 ({market_label})",
             f"생성일시: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
             "=" * 60,
             ""
         ]
+
+        currency = "USD" if self.market == Market.US else "원"
 
         for r in self.results:
             pos = r.position
@@ -484,7 +490,8 @@ class MidTermEngine:
             # 시나리오 분기
             if r.action == Action.TRAILING_STOP:
                 trail_price = pos.current_price * (1 - TRAILING_STOP_PCT / 100)
-                lines.append(f"  → 트레일링 스탑가: {trail_price:,.0f}원")
+                price_fmt = f"{trail_price:.2f} {currency}" if self.market == Market.US else f"{trail_price:,.0f}{currency}"
+                lines.append(f"  → 트레일링 스탑가: {price_fmt}")
                 lines.append(f"  → 이탈 시 전량 매도")
 
             elif r.action == Action.STOP_LOSS:

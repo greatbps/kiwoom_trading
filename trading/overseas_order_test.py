@@ -122,10 +122,23 @@ class OverseasOrderTester:
         return token is not None
 
     def get_current_price(self, symbol: str, exchange: str = "NAS") -> Optional[float]:
-        """현재가 조회"""
+        """현재가 조회 (API 실패 시 yfinance fallback)"""
         result = self.api.get_overseas_price(symbol, exchange)
-        if result['success']:
+        if result['success'] and result.get('price'):
             return result['price']
+        # fallback: yfinance (장외시간, API 오류 시)
+        try:
+            import yfinance as yf
+            info = yf.Ticker(symbol).info
+            price = info.get('regularMarketPrice') or info.get('currentPrice')
+            if not price:
+                hist = yf.Ticker(symbol).history(period='2d')
+                price = float(hist['Close'].iloc[-1]) if not hist.empty else None
+            if price:
+                console.print(f"   [dim](yfinance fallback: ${float(price):.2f})[/dim]")
+                return float(price)
+        except Exception as e:
+            logger.debug(f"yfinance fallback 실패 ({symbol}): {e}")
         return None
 
     def log_order(self, order_info: Dict):
@@ -315,6 +328,129 @@ class OverseasOrderTester:
             'success': order_info.get('status') == 'success',
             'order_info': order_info
         }
+
+    def test_sell_order(
+        self,
+        symbol: str,
+        qty: int = 1,
+        price_offset_pct: float = 0.5  # 현재가 대비 % (양수=높게)
+    ) -> Dict:
+        """
+        매도 주문 테스트
+
+        Args:
+            symbol: 종목코드
+            qty: 수량 (기본 1주)
+            price_offset_pct: 현재가 대비 가격 오프셋 %
+        """
+        global daily_order_count
+
+        console.print()
+        console.print("=" * 60)
+        console.print(f"[bold magenta]📥 해외주식 매도 테스트: {symbol}[/bold magenta]")
+        console.print("=" * 60)
+
+        # 안전장치 1: 시장시간
+        is_open, market_status = is_us_market_open()
+        console.print(f"\n🕐 시장 상태: {market_status}")
+        if not is_open:
+            if BYPASS_MARKET_HOURS:
+                console.print("[yellow]⚠️ 장외시간이지만 BYPASS_MARKET_HOURS=True로 진행[/yellow]")
+            else:
+                console.print("[yellow]⚠️ 장외시간 - 주문 불가[/yellow]")
+                return {'success': False, 'reason': 'market_closed', 'status': market_status}
+
+        # 안전장치 2: 일일 한도
+        if daily_order_count >= MAX_DAILY_ORDERS:
+            console.print(f"[red]❌ 1일 최대 주문 횟수 초과 ({MAX_DAILY_ORDERS}회)[/red]")
+            return {'success': False, 'reason': 'daily_limit_exceeded'}
+
+        # 안전장치 3: 중복 주문
+        if symbol in open_orders:
+            console.print(f"[red]❌ 이미 진행 중인 주문 있음: {symbol}[/red]")
+            return {'success': False, 'reason': 'duplicate_order'}
+
+        # 현재가 조회
+        console.print(f"\n📊 현재가 조회 중...")
+        current_price = self.get_current_price(symbol)
+        if not current_price:
+            # fallback: yfinance
+            try:
+                import yfinance as yf
+                hist = yf.Ticker(symbol).history(period='2d')
+                current_price = float(hist['Close'].iloc[-1]) if not hist.empty else None
+            except Exception:
+                pass
+        if not current_price:
+            console.print("[red]❌ 현재가 조회 실패[/red]")
+            return {'success': False, 'reason': 'price_fetch_failed'}
+
+        console.print(f"   현재가: ${current_price:.2f}")
+        order_price = round(current_price * (1 + price_offset_pct / 100), 2)
+        console.print(f"   주문가: ${order_price:.2f} ({price_offset_pct:+.1f}%)")
+
+        order_info = {
+            'timestamp': datetime.now().isoformat(),
+            'action': 'SELL',
+            'symbol': symbol,
+            'qty': qty,
+            'current_price': current_price,
+            'order_price': order_price,
+            'price_offset_pct': price_offset_pct,
+            'market_status': market_status,
+            'real_trading': REAL_TRADING
+        }
+
+        console.print(f"\n📋 주문 요청:")
+        console.print(f"   종목: {symbol}")
+        console.print(f"   수량: {qty}주")
+        console.print(f"   가격: ${order_price:.2f}")
+        console.print(f"   예상금액: ${order_price * qty:.2f}")
+
+        # 안전장치 5: REAL_TRADING 스위치
+        if not REAL_TRADING:
+            console.print("\n[yellow]🔒 REAL_TRADING=False - 시뮬레이션 모드[/yellow]")
+            console.print("[dim]실제 주문이 전송되지 않았습니다.[/dim]")
+            order_info['status'] = 'simulated'
+            order_info['order_no'] = 'SIM_' + datetime.now().strftime('%H%M%S')
+            self.log_order(order_info)
+            return {'success': True, 'simulated': True, 'order_info': order_info}
+
+        # 실제 매도 주문 전송
+        console.print("\n[bold red]🚀 실제 매도 주문 전송 중...[/bold red]")
+        open_orders.add(symbol)
+        try:
+            result = self.api.order_overseas_stock(
+                symbol=symbol,
+                side="SELL",
+                qty=qty,
+                price=order_price,
+                exchange="AMEX"
+            )
+            order_info['api_response'] = result
+            order_info['status'] = 'success' if result['success'] else 'failed'
+            if result['success']:
+                order_info['order_no'] = result.get('order_no', '')
+                order_info['order_time'] = result.get('order_time', '')
+                daily_order_count += 1
+                console.print(f"\n[green]✅ 매도 주문 성공![/green]")
+                console.print(f"   주문번호: {order_info['order_no']}")
+                console.print(f"   주문시간: {order_info['order_time']}")
+            else:
+                order_info['error'] = result.get('error', '')
+                order_info['error_code'] = result.get('code', '')
+                console.print(f"\n[red]❌ 주문 실패: {order_info['error']}[/red]")
+                console.print("[yellow]⚠️ 자동 재시도 하지 않음[/yellow]")
+        except Exception as e:
+            order_info['status'] = 'exception'
+            order_info['error'] = str(e)
+            console.print(f"\n[red]❌ 예외 발생: {e}[/red]")
+        finally:
+            open_orders.discard(symbol)
+
+        self.log_order(order_info)
+        console.print(f"\n📁 로그 저장: {self.log_file}")
+        return {'success': order_info.get('status') == 'success', 'order_info': order_info}
 
     def check_order_status(self, order_no: str) -> Dict:
         """

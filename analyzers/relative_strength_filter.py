@@ -10,6 +10,7 @@ import numpy as np
 from typing import List, Dict, Tuple
 from datetime import datetime, timedelta
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import sys
 import logging
 
@@ -24,17 +25,23 @@ from rich.console import Console
 console = Console()
 
 
+KOSPI_INDEX_CODE  = "0001"   # 키움 코스피 지수 코드
+KOSDAQ_INDEX_CODE = "1001"   # 키움 코스닥 지수 코드
+
+
 class RelativeStrengthFilter:
     """IBD-RS 스타일 상대강도 필터"""
 
-    def __init__(self, lookback_days: int = 60, min_rs_rating: int = 90):
+    def __init__(self, lookback_days: int = 60, min_rs_rating: int = 90, api=None):
         """
         Args:
             lookback_days: 상대강도 계산 기간 (기본 60일 = 3개월)
             min_rs_rating: 최소 RS 등급 (0-100, 기본 90 = 상위 10%)
+            api: KiwoomAPI 인스턴스 (있으면 키움 우선, 없으면 Yahoo fallback)
         """
         self.lookback_days = lookback_days
         self.min_rs_rating = min_rs_rating
+        self.api = api
 
         # 시장 데이터 캐시
         self.market_data_cache: Dict[str, pd.DataFrame] = {}
@@ -44,102 +51,86 @@ class RelativeStrengthFilter:
         self.stock_data_cache: Dict[str, pd.DataFrame] = {}
         self.stock_cache_expiry: Dict[str, datetime] = {}
 
-    def _get_market_index_ticker(self, market: str) -> str:
-        """시장별 지수 티커 반환"""
-        if market == 'KOSPI':
-            return '^KS11'
-        elif market == 'KOSDAQ':
-            return '^KQ11'
-        else:
-            return '^KS11'  # 기본값
-
-    def _get_market_data(self, market: str) -> pd.DataFrame:
-        """
-        시장 지수 데이터 조회 (캐시 사용)
-
-        Args:
-            market: 'KOSPI' or 'KOSDAQ'
-
-        Returns:
-            시장 지수 데이터
-        """
-        # 캐시 확인
-        now = datetime.now()
-        if market in self.market_data_cache:
-            if market in self.cache_expiry and self.cache_expiry[market] > now:
-                return self.market_data_cache[market]
-
-        # 데이터 조회
-        ticker = self._get_market_index_ticker(market)
-        period = f"{int(self.lookback_days * 1.5)}d"  # 여유있게 조회
-
-        try:
-            # FutureWarning 방지: auto_adjust 명시
-            df = yf.download(ticker, period=period, interval='1d',
-                           progress=False, auto_adjust=True)
-
-            if df is not None and len(df) > 0:
-                # 캐시 저장 (30분간 유효)
-                self.market_data_cache[market] = df
-                self.cache_expiry[market] = now + timedelta(minutes=30)
-                return df
-            else:
-                console.print(f"[yellow]⚠️  {market} 지수 데이터 조회 실패[/yellow]")
-                return None
-
-        except Exception as e:
-            console.print(f"[red]❌ {market} 지수 조회 오류: {e}[/red]")
-            return None
-
     def _safe_get_value(self, series_or_value):
         """Series나 단일 값을 안전하게 float로 변환"""
         if hasattr(series_or_value, 'values'):
             return float(series_or_value.values[0])
         return float(series_or_value)
 
+    def _get_market_data(self, market: str) -> pd.DataFrame:
+        """시장 지수 데이터 조회 (Yahoo, 캐시 30분)"""
+        now = datetime.now()
+        if market in self.market_data_cache:
+            if market in self.cache_expiry and self.cache_expiry[market] > now:
+                return self.market_data_cache[market]
+        try:
+            ticker = '^KS11' if market == 'KOSPI' else '^KQ11'
+            period = f"{int(self.lookback_days * 1.5)}d"
+            df = yf.download(ticker, period=period, interval='1d', progress=False, auto_adjust=True)
+            if df is not None and len(df) > 0:
+                self.market_data_cache[market] = df
+                self.cache_expiry[market] = now + timedelta(minutes=30)
+                return df
+        except Exception as e:
+            console.print(f"[red]❌ {market} 지수 조회 오류: {e}[/red]")
+        return None
+
     def _get_stock_data(self, stock_code: str, market: str) -> pd.DataFrame:
-        """
-        종목 데이터 조회 (캐싱 사용)
-
-        Args:
-            stock_code: 종목코드
-            market: 시장 구분
-
-        Returns:
-            종목 가격 데이터
-        """
-        # 캐시 키
+        """캐시에서 종목 데이터 조회 (배치 다운로드 후 저장된 데이터)"""
         cache_key = f"{stock_code}_{market}"
-
-        # 캐시 확인 (30분간 유효)
         now = datetime.now()
         if cache_key in self.stock_data_cache:
             if cache_key in self.stock_cache_expiry and self.stock_cache_expiry[cache_key] > now:
                 return self.stock_data_cache[cache_key]
+        return None
 
-        # 종목 티커
-        ticker_suffix = '.KS' if market == 'KOSPI' else '.KQ'
-        ticker = f"{stock_code}{ticker_suffix}"
-
-        # 데이터 조회
+    def _prefetch_batch(self, candidates: list, market: str):
+        """Yahoo 배치 다운로드로 전체 종목 일봉 데이터 한 번에 수집"""
+        now = datetime.now()
+        suffix = '.KS' if market == 'KOSPI' else '.KQ'
         period = f"{int(self.lookback_days * 1.5)}d"
-        try:
-            df_stock = yf.download(ticker, period=period, interval='1d',
-                                  progress=False, auto_adjust=True)
 
-            if df_stock is not None and len(df_stock) >= self.lookback_days:
-                # 캐시 저장
-                self.stock_data_cache[cache_key] = df_stock
-                self.stock_cache_expiry[cache_key] = now + timedelta(minutes=30)
-                return df_stock
-            else:
-                return None
+        # 캐시 없는 종목만 추려서 배치 다운로드
+        miss = [c for c in candidates
+                if f"{c['stock_code']}_{c.get('market', market)}" not in self.stock_data_cache
+                or self.stock_cache_expiry.get(f"{c['stock_code']}_{c.get('market', market)}", now) <= now]
 
-        except Exception as e:
-            error_msg = str(e).lower()
-            if 'delisted' not in error_msg and 'no data found' not in error_msg:
-                console.print(f"[dim]⚠️  {stock_code} 데이터 조회 실패: {e}[/dim]")
-            return None
+        if not miss:
+            return
+
+        # 30개씩 배치 다운로드
+        batch_size = 30
+        total_batches = (len(miss) + batch_size - 1) // batch_size
+        expiry = now + timedelta(minutes=30)
+
+        for i in range(0, len(miss), batch_size):
+            batch = miss[i:i + batch_size]
+            tickers = [f"{c['stock_code']}{suffix}" for c in batch]
+            batch_num = i // batch_size + 1
+            print(f"  ⏳ 배치 {batch_num}/{total_batches} 다운로드 중 ({len(tickers)}개)...", flush=True)
+            try:
+                df_all = yf.download(tickers, period=period, interval='1d',
+                                     progress=False, auto_adjust=True, group_by='ticker',
+                                     timeout=30)
+                for c in batch:
+                    code   = c['stock_code']
+                    mkt    = c.get('market', market)
+                    key    = f"{code}_{mkt}"
+                    ticker = f"{code}{suffix}"
+                    try:
+                        if len(tickers) == 1:
+                            df_s = df_all
+                        else:
+                            lvl0 = df_all.columns.get_level_values(0)
+                            df_s = df_all[ticker] if ticker in lvl0 else None
+                        if df_s is not None and len(df_s) >= self.lookback_days:
+                            self.stock_data_cache[key] = df_s
+                            self.stock_cache_expiry[key] = expiry
+                    except Exception:
+                        pass
+            except Exception as e:
+                print(f"  ⚠️  배치 {batch_num} 오류: {e}", flush=True)
+        print(f"  ✅ 배치 다운로드 완료 ({len(miss)}개)", flush=True)
 
     def calculate_return(self, stock_code: str, market: str = 'KOSPI') -> Tuple[float, float, float]:
         """
@@ -227,31 +218,29 @@ class RelativeStrengthFilter:
         Returns:
             RS 등급이 min_rs_rating 이상인 종목 리스트
         """
-        console.print(f"\n[cyan]📊 IBD-RS 필터링 시작 (최소 RS: {self.min_rs_rating})[/cyan]")
-        console.print(f"  입력: {len(candidates)}개 종목")
+        print(f"\n📊 IBD-RS 필터링 시작 (최소 RS: {self.min_rs_rating})", flush=True)
+        print(f"  입력: {len(candidates)}개 종목", flush=True)
 
-        # 🔧 Pass 1: 모든 종목의 RS 값 계산 (캐싱 사용, O(N))
-        console.print(f"[dim]  Pass 1: RS 값 계산 중...[/dim]")
+        # 🔧 Pass 1: 배치 다운로드 → RS 계산
+        print(f"  Pass 1: Yahoo 배치 다운로드 시작...", flush=True)
+        self._prefetch_batch(candidates, market)
+
         rs_data = []
-        for candidate in candidates:
-            stock_code = candidate['stock_code']
-            stock_market = candidate.get('market', market)
-
-            # RS 값 계산 (캐싱됨)
-            stock_return, market_return, rs_strength = self.calculate_return(stock_code, stock_market)
-
-            rs_data.append({
-                'candidate': candidate,
-                'stock_return': stock_return,
-                'market_return': market_return,
-                'rs_strength': rs_strength
-            })
+        total = len(candidates)
+        print(f"  Pass 1: RS 계산 시작 ({total}개)...", flush=True)
+        for i, candidate in enumerate(candidates, 1):
+            code = candidate['stock_code']
+            mkt  = candidate.get('market', market)
+            sr, mr, rs = self.calculate_return(code, mkt)
+            rs_data.append({'candidate': candidate, 'stock_return': sr, 'market_return': mr, 'rs_strength': rs})
+            if i % 50 == 0 or i == total:
+                print(f"  ⏳ RS 계산 {i}/{total}...", flush=True)
 
         # 전체 RS 값 리스트 추출
         all_rs_values = [d['rs_strength'] for d in rs_data]
 
         # 🔧 Pass 2: 백분위 계산 및 필터링 (O(N))
-        console.print(f"[dim]  Pass 2: 백분위 계산 중...[/dim]")
+        print(f"  Pass 2: 백분위 계산 중...", flush=True)
         results = []
         for data in rs_data:
             candidate = data['candidate']
@@ -270,11 +259,6 @@ class RelativeStrengthFilter:
                 'rs_strength': data['rs_strength']
             }
             results.append(result)
-
-            console.print(
-                f"  [dim]{stock_name:15} RS:{rs_rating:>5.1f} "
-                f"({data['stock_return']:+6.2f}% vs {data['market_return']:+6.2f}%)[/dim]"
-            )
 
         # RS 등급 기준 필터링
         filtered = [r for r in results if r['rs_rating'] >= self.min_rs_rating]

@@ -399,6 +399,7 @@ class OptimizedExitLogic:
 
         return False, "", None
 
+
     def check_exit_signal(
         self,
         position: Dict,
@@ -406,58 +407,36 @@ class OptimizedExitLogic:
         df: pd.DataFrame
     ) -> Tuple[bool, str, Optional[Dict]]:
         """
-        청산 신호 체크
+        청산 신호 체크 — Intraday Trend Capture 구조 (2026-04-17 리팩토링)
 
-        Args:
-            position: 포지션 정보 dict
-            current_price: 현재가
-            df: 기술적 지표가 포함된 DataFrame
-
-        Returns:
-            (should_exit, exit_reason, additional_info)
+        우선순위:
+          1. 5분 최소 락 (노이즈 방지)
+          2. 구조 손절 / Hard Stop (즉시, 락 무시)
+          3. TP1 후 BE 스탑 (손실 방지)
+          4. R-TP1 부분 익절 (1.5R → 50%)
+          5. R-TP2 부분 익절 (3R → 잔여 50%) + 트레일링 ON
+          6. A급 보호: STRUCTURE_EXIT / PROFIT_LOCK / NO_PROGRESS / A_FORCE_EXIT
+          7. ATR 트레일링 (단순화: +2% ON, profit별 배수)
+          8. EOD 15:00 시간 청산
         """
 
-        # ========================================
-        # 0. 데이터 검증 및 초기화
-        # ========================================
-
-        # entry_price 안전 추출 (바이너리 데이터 버그 방지)
+        # ====================================================
+        # 0. 데이터 검증 및 기본값 초기화
+        # ====================================================
         entry_price = self._safe_get_price(position, 'entry_price')
         if entry_price <= 0:
             console.print(f"[red]⚠️ 비정상 진입가: {position.get('entry_price')}[/red]")
             return False, "ERROR_INVALID_ENTRY_PRICE", None
 
-        # 수익률 계산
         profit_pct = ((current_price - entry_price) / entry_price) * 100
 
-        # 보유 시간 계산
         entry_time = position.get('entry_time') or position.get('entry_date')
+        if entry_time and isinstance(entry_time, str):
+            entry_time = datetime.fromisoformat(entry_time)
+
+        elapsed_minutes = 0
         if entry_time:
-            if isinstance(entry_time, str):
-                entry_time = datetime.fromisoformat(entry_time)
-
-        # 🔧 2026-01-27: 오버나잇 포지션 여부 판단
-        is_overnight_position = False
-        if entry_time:
-            entry_date = entry_time.date() if hasattr(entry_time, 'date') else entry_time
-            today = datetime.now().date()
-            is_overnight_position = entry_date < today
-
-        # 🔧 2026-01-27: 09:00~09:30 보호 구간 체크
-        current_time = datetime.now().time()
-        in_morning_protection = (
-            self.overnight_exit_enabled and
-            is_overnight_position and
-            self.overnight_morning_protection_start <= current_time <= self.overnight_morning_protection_end
-        )
-
-        if in_morning_protection:
-            # 오버나잇 포지션 + 09:00~09:30 = ATR 트레일링 비활성화
-            console.print(
-                f"[cyan]🛡️ 오버나잇 보호: {entry_time.strftime('%m/%d')} 진입 → "
-                f"09:00~09:30 ATR 트레일링 비활성화[/cyan]"
-            )
-            # 보호 구간에서는 Hard Stop만 적용 (아래에서 처리)
+            elapsed_minutes = (datetime.now() - entry_time).total_seconds() / 60
 
         # 최고가 업데이트
         highest_price = position.get('highest_price', entry_price)
@@ -465,619 +444,301 @@ class OptimizedExitLogic:
             highest_price = current_price
             position['highest_price'] = highest_price
 
-        # 🔧 FIX: 문서 명세에 따른 청산 우선순위 재정렬
-
-        # ========================================
-        # -1순위: 동적 min_hold_time 락 (변동성 기반)
-        # ========================================
-        entry_time = position.get('entry_time')
-        elapsed_minutes = 0
-        if entry_time:
-            elapsed_minutes = (datetime.now() - entry_time).total_seconds() / 60
-
-        # 스퀴즈 색상 먼저 확인 (동적 계산 및 예외 판단용)
-        sqz_color = None
-        try:
-            from utils.squeeze_momentum_realtime import check_squeeze_momentum_filter
-            _, _, sqz_details = check_squeeze_momentum_filter(df, for_entry=False)
-            sqz_color = sqz_details.get('color', 'gray')
-        except Exception:
-            sqz_color = 'gray'
-
-        # 🔒 동적 min_hold_time 계산 (변동성 + 스퀴즈 상태 + 조건부 연장)
-        absolute_lock_minutes = self.calculate_dynamic_min_hold_time(
-            df=df,
-            current_price=current_price,
-            squeeze_color=sqz_color,
-            position=position
-        )
-        in_absolute_lock = elapsed_minutes < absolute_lock_minutes
-
-        if in_absolute_lock:
-            # 예외 조건: 복합 붕괴 시그널 (AND 조건)
-            squeeze_collapse = sqz_color in ['dark_red', 'bright_red']
-            vwap_broken = False
-
-            # VWAP 하향 이탈 체크
-            try:
-                if 'vwap' in df.columns:
-                    vwap = df['vwap'].iloc[-1]
-                    if current_price < vwap * 0.995:  # 0.5% 이상 이탈
-                        vwap_broken = True
-            except Exception:
-                pass
-
-            # 복합 붕괴: Squeeze DR/BR + VWAP 이탈
-            if squeeze_collapse and vwap_broken:
-                console.print(
-                    f"[red]🔓 락 예외: 복합 붕괴 시그널 "
-                    f"(스퀴즈 {sqz_color} + VWAP 이탈, {elapsed_minutes:.1f}분)[/red]"
-                )
-            # 🔧 2026-02-07: Early Failure Structure 예외 (동적 락 내 5~15분)
-            else:
-                ef_exit, ef_reason, ef_info = self.check_early_failure_structure(
-                    position=position,
-                    current_price=current_price,
-                    df=df,
-                    elapsed_minutes=elapsed_minutes
-                )
-                if ef_exit and ef_info:
-                    action = ef_info.get('action', 'exit_market')
-                    console.print(
-                        f"[red]🔓 락 예외: Early Failure 구조 "
-                        f"(score={ef_info.get('score')}, {elapsed_minutes:.1f}분)[/red]"
-                    )
-                    if action == 'exit_market':
-                        return True, ef_reason, ef_info
-                    elif action == 'reduce_half':
-                        ef_info['partial_exit'] = True
-                        ef_info['exit_ratio'] = 0.5
-                        ef_info['stage'] = 98
-                        return False, ef_reason, ef_info
-                    elif action == 'trail_stop':
-                        position['trailing_active'] = True
-                        position['trailing_stop_price'] = current_price * 0.995
-                        console.print(
-                            f"[yellow]🔄 Early Failure 구조: 타이트 트레일링 전환 "
-                            f"(스탑: {current_price * 0.995:,.0f}원)[/yellow]"
-                        )
-                # 단순 DR/BR만 있으면 경고만
-                elif squeeze_collapse:
-                    console.print(
-                        f"[yellow]⚠️ 스퀴즈 {sqz_color} 전환 감지, VWAP 정상 - 홀딩 유지[/yellow]"
-                    )
-                    return False, f"동적 락 ({elapsed_minutes:.1f}분, 단순 DR 경고)", None
-                else:
-                    console.print(
-                        f"[cyan]🔒 동적 락 ({elapsed_minutes:.1f}/{absolute_lock_minutes}분) "
-                        f"- 청산 불가 (스퀴즈: {sqz_color})[/cyan]"
-                    )
-                    return False, f"동적 락 ({elapsed_minutes:.1f}/{absolute_lock_minutes}분)", None
-
-        # 🔧 Phase 3: 최소 보유 시간 이전에는 손절 금지 (하드 스톱 제외)
-        below_min_hold = False
-        if self.min_hold_enabled and elapsed_minutes < self.min_hold_minutes:
-            below_min_hold = True
-
-        # ========================================
-        # 0순위: Early Failure Cut (V2: 45분 + 다중조건)
-        # ========================================
-        if self.early_failure_enabled and entry_time:
-
-            # 🔥 V2 로직: 45분 + HTF CHoCH 무효화 + VWAP -2.5% + LL 확정
-            if USE_EXIT_V2:
-                # V2 조건 1: 최소 45분 경과 필수
-                if elapsed_minutes < V2_EARLY_FAILURE_MIN_MINUTES:
-                    console.print(
-                        f"[cyan]🔒 Early Failure v2: 보호 구간 "
-                        f"({elapsed_minutes:.1f}/{V2_EARLY_FAILURE_MIN_MINUTES}분)[/cyan]"
-                    )
-                    # 45분 미경과 시 Early Failure 절대 금지
-                else:
-                    # V2 조건 체크 (모두 충족해야 손절)
-                    v2_conditions = {
-                        'min_time_passed': elapsed_minutes >= V2_EARLY_FAILURE_MIN_MINUTES,
-                        'htf_choch_invalidated': False,
-                        'vwap_broken': False,
-                        'll_confirmed': False
-                    }
-
-                    # 조건 2: HTF CHoCH 무효화 체크
-                    entry_direction = position.get('direction', 'long')
-                    try:
-                        from analyzers.smc.smc_structure import SMCStructureAnalyzer
-                        analyzer = SMCStructureAnalyzer()
-                        df_cols = df.copy()
-                        df_cols.columns = [c.lower() for c in df_cols.columns]
-                        structure = analyzer.analyze_structure(df_cols)
-                        choch = analyzer.detect_choch(df_cols, structure)
-
-                        if choch:
-                            if entry_direction == 'long' and choch.direction == 'bearish':
-                                v2_conditions['htf_choch_invalidated'] = True
-                            elif entry_direction == 'short' and choch.direction == 'bullish':
-                                v2_conditions['htf_choch_invalidated'] = True
-                    except Exception:
-                        pass
-
-                    # 조건 3: VWAP -2.5% 이탈
-                    try:
-                        if 'vwap' in df.columns:
-                            vwap = df['vwap'].iloc[-1]
-                            vwap_deviation = ((current_price / vwap) - 1) * 100
-                            if vwap_deviation <= V2_EARLY_FAILURE_LOSS_PCT:
-                                v2_conditions['vwap_broken'] = True
-                    except Exception:
-                        pass
-
-                    # 조건 4: LL(Lower Low) 확정
-                    try:
-                        if len(df) >= 20:
-                            recent_lows = df['low'].tail(20)
-                            current_low = df['low'].iloc[-1]
-                            prior_low = recent_lows.iloc[:-1].min()
-                            if current_low < prior_low:
-                                v2_conditions['ll_confirmed'] = True
-                    except Exception:
-                        pass
-
-                    # 모든 조건 충족 시에만 손절
-                    all_v2_conditions_met = all(v2_conditions.values())
-
-                    if all_v2_conditions_met and profit_pct <= V2_EARLY_FAILURE_LOSS_PCT:
-                        return True, f"🚨 Early Failure v2 ({profit_pct:.2f}%, 모든 조건 충족)", {
-                            'profit_pct': profit_pct,
-                            'use_market_order': True,
-                            'emergency': True,
-                            'reason': 'EARLY_FAILURE_CUT_V2',
-                            'v2_conditions': v2_conditions
-                        }
-                    else:
-                        # 조건 미충족 시 상태 로깅
-                        unmet = [k for k, v in v2_conditions.items() if not v]
-                        console.print(
-                            f"[yellow]⚠️ Early Failure v2: 관찰 중 "
-                            f"(미충족: {', '.join(unmet)})[/yellow]"
-                        )
-
-            # 🔄 V1 로직 (USE_EXIT_V2 = False 시)
-            else:
-                # 구조 기반 손절 조건 체크
-                structure_broken = False
-                structure_reason = ""
-
-                # 조건 1: CHoCH 반전 (SMC 구조 붕괴)
-                entry_direction = position.get('direction', 'long')
-
-                try:
-                    from analyzers.smc import SMCStrategy
-                    from analyzers.smc.smc_structure import SMCStructureAnalyzer
-
-                    analyzer = SMCStructureAnalyzer()
-                    df_cols = df.copy()
-                    df_cols.columns = [c.lower() for c in df_cols.columns]
-                    structure = analyzer.analyze_structure(df_cols)
-                    choch = analyzer.detect_choch(df_cols, structure)
-
-                    if choch:
-                        if entry_direction == 'long' and choch.direction == 'bearish':
-                            structure_broken = True
-                            structure_reason = "CHoCH 하락 전환"
-                        elif entry_direction == 'short' and choch.direction == 'bullish':
-                            structure_broken = True
-                            structure_reason = "CHoCH 상승 전환"
-                except Exception:
-                    pass
-
-                # 조건 2: VWAP 완전 이탈 (-0.8% 이상)
-                vwap_broken = False
-                try:
-                    if 'vwap' in df.columns:
-                        vwap = df['vwap'].iloc[-1]
-                        if current_price < vwap * 0.992:
-                            vwap_broken = True
-                            if not structure_broken:
-                                structure_reason = f"VWAP 완전 이탈 ({((current_price/vwap)-1)*100:.2f}%)"
-                except Exception:
-                    pass
-
-                # 구조 붕괴 시에만 Early Failure 적용
-                if (structure_broken or vwap_broken) and profit_pct <= self.early_failure_loss:
-                    combined_reason = structure_reason or "구조 붕괴"
-                    return True, f"🚨 Early Failure Cut ({combined_reason}, {profit_pct:.2f}%)", {
-                        'profit_pct': profit_pct,
-                        'use_market_order': True,
-                        'emergency': True,
-                        'reason': 'EARLY_FAILURE_CUT_STRUCTURE',
-                        'structure_broken': structure_broken,
-                        'vwap_broken': vwap_broken
-                    }
-
-        # ========================================
-        # 1순위: Hard Stop → 전량 시장가 손절 (문서 명세)
-        # ========================================
-        # ⚠️ 30분 절대 락으로 비활성화됨
-        # 🔴 GPT 개선: 부분 청산 후 손절가 상향 (BE 보호)
         partial_stage = position.get('partial_exit_stage', 0)
-        adjusted_hard_stop = self.hard_stop_pct
 
-        # 🔧 2026-02-06: 구조 기반 손절 (SMC 전략)
+        # ====================================================
+        # 1. 최소 락 5분 (동적 락 완전 제거 → 고정 5분)
+        # ====================================================
+        _min_hold = self.config.get('risk_control.min_hold_minutes', 5)
+        if elapsed_minutes < _min_hold:
+            return False, f"최소락 ({elapsed_minutes:.1f}/{_min_hold}분)", None
+
+        # ====================================================
+        # 1-b. 긴급 Hard Stop (fail-safe, 구조 손절보다 선행)
+        #      갭다운/급락/테마주 수직 낙하 시 구조 손절이 못 잡는 케이스 방어
+        # ====================================================
+        _emg_pct = self.config.get('risk_control.emergency_stop_pct', 6.0)
+        if profit_pct <= -_emg_pct:
+            # 🔧 1봉 유예: 마지막 봉 종가가 직전 봉 저가를 하향 이탈해야 진짜 붕괴
+            # 단순 스파이크(저가 찍고 회복) vs 실제 붕괴를 구분
+            _candle_confirms_breakdown = True  # 기본: 즉시 발동
+            _candle_confirm_enabled = self.config.get('risk_control.emergency_stop_candle_confirm', True)
+            if _candle_confirm_enabled:
+                try:
+                    if len(df) >= 2 and 'close' in df.columns and 'low' in df.columns:
+                        _last_close = float(df['close'].iloc[-1])
+                        _prev_low   = float(df['low'].iloc[-2])
+                        if _last_close >= _prev_low:
+                            # 종가가 직전 봉 저가 이상 = 아직 스파이크 가능성
+                            _candle_confirms_breakdown = False
+                            console.print(
+                                f"[yellow]⚠️ 긴급손절 유예: 종가({_last_close:,.0f}) ≥ 직전저가({_prev_low:,.0f}) "
+                                f"→ 스파이크 의심, 1봉 관찰[/yellow]"
+                            )
+                except Exception:
+                    pass  # 데이터 없으면 즉시 발동
+
+            if _candle_confirms_breakdown:
+                _emg_reason = f"[HARD_STOP_EMERGENCY] {profit_pct:.2f}% ≤ -{_emg_pct}% (candle confirmed)"
+                logger.info(_emg_reason)
+                console.print(f"[bold red]🚨 긴급 손절: {profit_pct:.2f}% ≤ -{_emg_pct}% (하향 이탈 확인)[/bold red]")
+                return True, _emg_reason, {
+                    'profit_pct': profit_pct, 'use_market_order': True, 'emergency': True,
+                }
+
+        # ====================================================
+        # 2. 구조 손절 / Hard Stop (가장 높은 우선순위)
+        # ====================================================
         structure_stop_price = position.get('structure_stop_price')
-        use_structure_stop = False
-        struct_stop_config = self.risk_control.get('structure_based_stop', {})
+        struct_stop_config   = self.risk_control.get('structure_based_stop', {})
+        max_stop_pct         = struct_stop_config.get('max_stop_pct', 5.0)  # -5% cap
 
         if structure_stop_price and struct_stop_config.get('enabled', True):
-            use_structure_stop = True
-            max_stop_pct = struct_stop_config.get('max_stop_pct', 3.0)
-
-            # 안전장치: 구조 손절이 max_stop_pct 초과하면 cap
-            structure_loss_pct = ((entry_price - structure_stop_price) / entry_price) * 100
+            # cap 적용
+            structure_loss_pct = (entry_price - structure_stop_price) / entry_price * 100
             if structure_loss_pct > max_stop_pct:
                 structure_stop_price = entry_price * (1 - max_stop_pct / 100)
                 console.print(
-                    f"[yellow]⚠️ 구조 손절 cap 적용: {structure_loss_pct:.1f}% → -{max_stop_pct}% "
+                    f"[yellow]⚠️ 구조 손절 cap: {structure_loss_pct:.1f}% → -{max_stop_pct}% "
                     f"({structure_stop_price:,.0f}원)[/yellow]"
                 )
 
-        # 🔧 2026-01-20: 당일 매수 종목 강화 손절 적용
-        is_same_day_entry = False
-        same_day_label = ""
-        if self.same_day_enabled and entry_time:
-            entry_date = entry_time.date() if hasattr(entry_time, 'date') else entry_time
-            today = datetime.now().date()
-            if entry_date == today:
-                is_same_day_entry = True
-                if not use_structure_stop:
-                    adjusted_hard_stop = self.same_day_stop_loss_pct  # 당일 매수: 타이트한 손절 (기본 1.5%)
-                    same_day_label = " [당일매수강화]"
-                    console.print(f"[yellow]⚡ 당일 매수 강화 손절 적용: -{self.same_day_stop_loss_pct}%[/yellow]")
-
-        if partial_stage >= 1:  # 1차 부분 청산 후
-            adjusted_hard_stop = 0.3  # -0.3% (사실상 BE)
-            use_structure_stop = False  # 부분 청산 후에는 BE 보호 우선
-        if partial_stage >= 2:  # 2차 부분 청산 후
-            adjusted_hard_stop = -0.2  # +0.2% 보장 (손절 → 익절로 전환)
-            use_structure_stop = False
-
-        # 🔧 2026-02-06: 구조 기반 손절 체크
-        if use_structure_stop and structure_stop_price:
-            if current_price <= structure_stop_price:
-                structure_loss_pct = ((current_price - entry_price) / entry_price) * 100
-                console.print(
-                    f"[red]📍 구조 손절 발동: 현재가 {current_price:,.0f} <= "
-                    f"구조 손절가 {structure_stop_price:,.0f} ({structure_loss_pct:+.2f}%)[/red]"
-                )
-                return True, f"구조 손절 ({structure_stop_price:,.0f}원, {profit_pct:.2f}%){same_day_label}", {
-                    'profit_pct': profit_pct,
-                    'use_market_order': True,
-                    'emergency': True,
-                    'is_same_day_entry': is_same_day_entry,
-                    'structure_stop_price': structure_stop_price
-                }
-
-        # 기존 퍼센트 기반 Hard Stop (구조 손절이 없거나 부분 청산 후)
-        if profit_pct <= -adjusted_hard_stop:
-            return True, f"Hard Stop (-{adjusted_hard_stop}%, {profit_pct:.2f}%){same_day_label} [부분청산 {partial_stage}차]", {
-                'profit_pct': profit_pct,
-                'use_market_order': True,  # 시장가 플래그
-                'emergency': True,
-                'is_same_day_entry': is_same_day_entry
-            }
-
-        # ========================================
-        # 2-3순위: 부분 청산 (문서 명세: +4%/40%, +6%/40%)
-        # ========================================
-        # 🔧 FIX: 최소 보유 시간 체크 추가 (초단타 방지)
-        if self.partial_exit_enabled and not below_min_hold:
-            partial_stage = position.get('partial_exit_stage', 0)
-
-            # 역순으로 체크 (높은 수익부터)
-            for idx, tier in enumerate(reversed(self.partial_tiers), start=1):
-                tier_num = len(self.partial_tiers) - idx + 1
-
-                if partial_stage < tier_num and profit_pct >= tier['profit_pct']:
-                    return False, f"부분청산 {tier_num}차 준비 (+{tier['profit_pct']}%, {tier['exit_ratio']*100:.0f}%)", {
-                        'partial_exit': True,
-                        'stage': tier_num,
-                        'exit_ratio': tier['exit_ratio'],
-                        'profit_pct': profit_pct
-                    }
-
-        # ========================================
-        # 3.5순위: Squeeze Momentum 청산 필터 (설정 활성화 시)
-        # ========================================
-        # 실전 분석 기반 색상별 액션:
-        # - Bright Green: 절대 보유 (아이티센글로벌 교훈)
-        # - Dark Green: 부분 익절 권장 (휴림로봇 성공)
-        # - Red: 전량 청산 권장
-
-        # position에서 설정 가져오기 (self.config가 없으면 건너뛰기)
-        if hasattr(self, 'config'):
-            squeeze_config = self.config.get('squeeze_momentum', {})
-        else:
-            squeeze_config = {}
-
-        if squeeze_config.get('enabled', False) and squeeze_config.get('exit_filter', {}).get('enabled', False):
-            from utils.squeeze_momentum_realtime import check_squeeze_momentum_filter
-
-            try:
-                sqz_passed, sqz_reason, sqz_details = check_squeeze_momentum_filter(df, for_entry=False)
-                sqz_color = sqz_details.get('color', 'gray')
-
-                # Bright Green: 강제 보유 (설정 활성화 시)
-                if sqz_color == 'bright_green' and squeeze_config.get('exit_filter', {}).get('bright_green', {}).get('force_hold', False):
-                    # 트레일링 스탑은 유지할지 확인
-                    ignore_trailing = squeeze_config.get('exit_filter', {}).get('bright_green', {}).get('ignore_trailing_stop', False)
-
-                    if not ignore_trailing:
-                        # 트레일링 스탑만 허용, 다른 청산은 차단
-                        console.print("[cyan]🟢 Squeeze: Bright Green - 보유 강제 (트레일링만 허용)[/cyan]")
-                        # 트레일링 스탑 체크는 다음 단계에서 진행
-                    else:
-                        # 모든 청산 차단
-                        console.print("[cyan]🟢 Squeeze: Bright Green - 보유 강제 (청산 금지)[/cyan]")
-                        return False, "Squeeze: Bright Green 보유 필수", None
-
-                # Dark Green: 부분 익절 권장 (수익 중일 때만)
-                elif sqz_color == 'dark_green':
-                    dark_green_config = squeeze_config.get('exit_filter', {}).get('dark_green', {})
-                    if dark_green_config.get('enabled', False):
-                        min_profit = dark_green_config.get('min_profit_pct', 1.0)
-
-                        if profit_pct >= min_profit:
-                            exit_ratio = dark_green_config.get('partial_exit_ratio', 0.3)
-                            console.print(f"[yellow]🟡 Squeeze: Dark Green - 부분 익절 권장 ({exit_ratio*100:.0f}%)[/yellow]")
-                            return False, f"Squeeze: Dark Green 부분익절 ({profit_pct:+.2f}%)", {
-                                'partial_exit': True,
-                                'stage': 99,  # 특수 스퀴즈 청산 단계
-                                'exit_ratio': exit_ratio,
-                                'profit_pct': profit_pct,
-                                'reason': 'SQUEEZE_DARK_GREEN'
-                            }
-
-                # Red (dark_red/bright_red): 전량 청산 권장
-                elif sqz_color in ['dark_red', 'bright_red']:
-                    red_config = squeeze_config.get('exit_filter', {}).get('red', {})
-                    if red_config.get('enabled', False) and red_config.get('full_exit', False):
-                        min_profit = red_config.get('min_profit_pct', 0.5)
-
-                        if profit_pct >= min_profit:
-                            console.print(f"[red]🔴 Squeeze: {sqz_color} - 전량 청산 권장[/red]")
-                            return True, f"Squeeze: {sqz_color} 모멘텀 반전 ({profit_pct:+.2f}%)", {
-                                'profit_pct': profit_pct,
-                                'reason': 'SQUEEZE_RED_REVERSAL'
-                            }
-
-            except Exception as e:
-                console.print(f"[dim]⚠️ Squeeze Momentum 청산 필터 오류: {e}[/dim]")
-                # 에러 시 무시하고 계속 진행
-
-        # ========================================
-        # 4순위: ATR 트레일링 스탑 (V2: 단계화)
-        # ========================================
-        # 🔥 V2: +0~2% OFF / +2~4% ATR×3.0 / +4%+ ATR×2.0
-
-        # 🔧 2026-01-27: 오버나잇 보호 구간에서는 ATR 트레일링 비활성화
-        if in_morning_protection:
-            console.print(
-                f"[cyan]🛡️ 오버나잇 보호 중: ATR 트레일링 스킵 "
-                f"(09:00~09:30, 수익률: {profit_pct:+.2f}%)[/cyan]"
+            # 🔧 A/A+ 등급 + TP1 전 + entry_confidence ≥ 0.7: 손절 0.5% 완화
+            # "진짜 A급" (고확신 신호)만 보호 → 애매한 A-성격은 즉시 컷
+            _grade          = position.get('choch_grade') or position.get('choch_grade_log', '')
+            _confidence     = position.get('entry_confidence', 0.0)
+            _a_noise_buffer = self.config.get('risk_control.a_grade_stop_buffer_pct', 0.5)
+            _min_conf       = self.config.get('risk_control.a_grade_stop_buffer_min_confidence', 0.7)
+            _qualifies      = (
+                partial_stage < 1 and
+                _grade in ('A', 'A+') and
+                _a_noise_buffer > 0 and
+                _confidence >= _min_conf
             )
-        else:
-            # 🔥 V2 ATR 트레일링 단계화
-            if USE_EXIT_V2:
-                # V2: 수익률별 ATR 배수 결정
-                if profit_pct < V2_ATR_STAGE1_PROFIT:
-                    # +2% 미만: 트레일링 OFF (구조 기준만)
-                    atr_multiplier = None  # 비활성화
-                    console.print(
-                        f"[cyan]📊 ATR v2: OFF (수익 {profit_pct:+.2f}% < +{V2_ATR_STAGE1_PROFIT}%)[/cyan]"
-                    )
-                elif profit_pct < V2_ATR_STAGE2_PROFIT:
-                    # +2% ~ +4%: ATR × 3.0 (느슨)
-                    atr_multiplier = V2_ATR_STAGE1_MULT
-                    console.print(
-                        f"[yellow]📊 ATR v2: ×{atr_multiplier} 느슨 "
-                        f"(수익 {profit_pct:+.2f}% in +{V2_ATR_STAGE1_PROFIT}~{V2_ATR_STAGE2_PROFIT}%)[/yellow]"
-                    )
-                else:
-                    # +4% 이상: ATR × 2.0 (타이트)
-                    atr_multiplier = V2_ATR_STAGE2_MULT
-                    console.print(
-                        f"[green]📊 ATR v2: ×{atr_multiplier} 타이트 "
-                        f"(수익 {profit_pct:+.2f}% >= +{V2_ATR_STAGE2_PROFIT}%)[/green]"
-                    )
-
-                # ATR 트레일링 적용 (atr_multiplier가 설정된 경우만)
-                if atr_multiplier is not None:
-                    position['trailing_active'] = True
-
-                    # ATR 값 가져오기
-                    atr_value = 0
-                    try:
-                        if 'atr' in df.columns and len(df) > 0:
-                            atr_value = df['atr'].iloc[-1]
-                    except Exception:
-                        atr_value = entry_price * 0.02  # 기본값 2%
-
-                    # V2 트레일링 스탑 계산: 고가 - ATR × 배수
-                    trailing_stop_price = highest_price - (atr_value * atr_multiplier)
-
-                    # 최소 잠금 수익 보장
-                    min_lock_price = entry_price * (1 + self.trailing_min_lock / 100)
-                    trailing_stop_price = max(trailing_stop_price, min_lock_price)
-
-                    position['trailing_stop_price'] = trailing_stop_price
-                    position['atr_multiplier'] = atr_multiplier
-
-                    # 트레일링 스탑 발동 체크
-                    if current_price <= trailing_stop_price:
-                        return True, f"ATR 트레일링 v2 (×{atr_multiplier}, {profit_pct:+.2f}%)", {
-                            'profit_pct': profit_pct,
-                            'highest_price': highest_price,
-                            'trailing_stop_price': trailing_stop_price,
-                            'atr_multiplier': atr_multiplier
-                        }
-
-            # 🔄 V1 로직 (USE_EXIT_V2 = False 시)
-            else:
-                if position.get('trailing_active') or (profit_pct >= self.trailing_activation and not below_min_hold):
-                    position['trailing_active'] = True
-
-                    # 🔧 2026-01-20: 당일 매수 종목은 타이트한 트레일링 적용
-                    trailing_dist = self.trailing_distance
-                    if is_same_day_entry and self.same_day_enabled:
-                        trailing_dist = self.same_day_trailing_ratio
-                        console.print(f"[yellow]⚡ 당일 매수 타이트 트레일링: {trailing_dist}%[/yellow]")
-
-                    # 🔧 2026-01-27: 오버나잇 포지션 + 09:30 이후 = Open Range 기반 스탑
-                    if is_overnight_position and self.overnight_use_open_range:
-                        open_range_high = position.get('open_range_high')
-                        open_range_low = position.get('open_range_low')
-
-                        if open_range_high and open_range_low:
-                            open_range = open_range_high - open_range_low
-                            overnight_stop = open_range_low - (open_range * self.overnight_open_range_multiplier)
-
-                            if current_price <= overnight_stop:
-                                console.print(
-                                    f"[yellow]📉 오버나잇 Open Range 스탑 발동: "
-                                    f"OR Low {open_range_low:,.0f} - {open_range * self.overnight_open_range_multiplier:,.0f} "
-                                    f"= {overnight_stop:,.0f}[/yellow]"
-                                )
-                                return True, f"오버나잇 Open Range 스탑 ({profit_pct:+.2f}%)", {
-                                    'profit_pct': profit_pct,
-                                    'open_range_high': open_range_high,
-                                    'open_range_low': open_range_low,
-                                    'overnight_stop': overnight_stop
-                                }
-
-                    # 트레일링 스탑 라인 계산
-                    trailing_stop_price = highest_price * (1 - trailing_dist / 100)
-
-                    # 최소 잠금 수익 보장
-                    min_lock_price = entry_price * (1 + self.trailing_min_lock / 100)
-                    trailing_stop_price = max(trailing_stop_price, min_lock_price)
-
-                    position['trailing_stop_price'] = trailing_stop_price
-
-                    # 트레일링 스탑 발동 체크
-                    if current_price <= trailing_stop_price:
-                        return True, f"ATR 트레일링 스탑 ({profit_pct:+.2f}%)", {
-                            'profit_pct': profit_pct,
-                            'highest_price': highest_price,
-                            'trailing_stop_price': trailing_stop_price
-                        }
-
-        # ========================================
-        # 5순위: VWAP 청산 (V2: 60분 보호)
-        # ========================================
-        # 🔥 V2: 60분 내 VWAP 기반 손절 금지
-
-        if profit_pct < self.vwap_profit_threshold:
-            # V2: 60분 보호 규칙
-            if USE_EXIT_V2:
-                if elapsed_minutes < V2_VWAP_MIN_MINUTES:
-                    console.print(
-                        f"[cyan]🔒 VWAP v2 보호: {elapsed_minutes:.1f}/{V2_VWAP_MIN_MINUTES}분 "
-                        f"(VWAP 손절 금지)[/cyan]"
-                    )
-                    # 60분 미경과 시 VWAP 손절 금지
-                else:
-                    vwap_exit_check = self._check_vwap_exit(df, current_price, profit_pct)
-                    if vwap_exit_check[0]:
-                        return vwap_exit_check
-            else:
-                # V1: 기존 로직
-                vwap_exit_check = self._check_vwap_exit(df, current_price, profit_pct)
-                if vwap_exit_check[0]:
-                    return vwap_exit_check
-
-        # ========================================
-        # 5.5순위: 포지션 생명주기 (V2: D+1/D+3/D+5)
-        # ========================================
-        # 🔥 V2: 장기 보유 규칙 (스윙 트레이딩 최적화)
-
-        if USE_EXIT_V2 and entry_time:
-            entry_date = entry_time.date() if hasattr(entry_time, 'date') else entry_time
-            today = datetime.now().date()
-            holding_days = (today - entry_date).days
-
-            # D+5: 무조건 전량 청산
-            if V2_LIFECYCLE_D5_FORCE and holding_days >= 5:
-                console.print(
-                    f"[red]📅 생명주기 D+5: 강제 전량 청산 "
-                    f"(보유 {holding_days}일, 수익 {profit_pct:+.2f}%)[/red]"
+            if _qualifies:
+                _buffered_stop = structure_stop_price * (1 - _a_noise_buffer / 100)
+                logger.debug(
+                    f"[A_STOP_BUFFER] {_grade}급 conf={_confidence:.2f}≥{_min_conf} TP1 전 손절 완화: "
+                    f"{structure_stop_price:,.0f} → {_buffered_stop:,.0f} (-{_a_noise_buffer}%)"
                 )
-                return True, f"생명주기 D+5 강제청산 ({profit_pct:+.2f}%)", {
-                    'profit_pct': profit_pct,
-                    'holding_days': holding_days,
-                    'reason': 'LIFECYCLE_D5_FORCE'
+                structure_stop_price = _buffered_stop
+            elif partial_stage < 1 and _grade in ('A', 'A+') and _confidence < _min_conf:
+                logger.debug(
+                    f"[A_STOP_BUFFER_SKIP] {_grade}급이지만 conf={_confidence:.2f}<{_min_conf} → 완화 미적용"
+                )
+
+            if current_price <= structure_stop_price:
+                _sl_pct = (current_price - entry_price) / entry_price * 100
+                logger.info(f"[STRUCTURE_STOP] {current_price:,.0f} ≤ {structure_stop_price:,.0f} ({_sl_pct:.2f}%)")
+                console.print(f"[red]📍 구조 손절 발동: {current_price:,.0f} ≤ {structure_stop_price:,.0f} ({_sl_pct:+.2f}%)[/red]")
+                return True, f"[STRUCTURE_STOP] {structure_stop_price:,.0f}원 ({_sl_pct:.2f}%)", {
+                    'profit_pct': profit_pct, 'use_market_order': True,
+                    'emergency': True, 'structure_stop_price': structure_stop_price,
+                }
+        else:
+            # 구조 손절 없으면 % 기반 Hard Stop (-max_stop_pct)
+            if profit_pct <= -max_stop_pct:
+                logger.info(f"[HARD_STOP] {profit_pct:.2f}% ≤ -{max_stop_pct}%")
+                return True, f"[HARD_STOP] -{max_stop_pct}% ({profit_pct:.2f}%)", {
+                    'profit_pct': profit_pct, 'use_market_order': True, 'emergency': True,
                 }
 
-            # D+3: 수익률 기반 판단
-            if holding_days >= 3:
-                if profit_pct < V2_LIFECYCLE_D3_PROFIT_THRESHOLD:
-                    # +0% ~ +3%: 전량 청산
-                    console.print(
-                        f"[yellow]📅 생명주기 D+3: 전량 청산 "
-                        f"(보유 {holding_days}일, 수익 {profit_pct:+.2f}% < +{V2_LIFECYCLE_D3_PROFIT_THRESHOLD}%)[/yellow]"
-                    )
-                    return True, f"생명주기 D+3 청산 ({profit_pct:+.2f}%)", {
-                        'profit_pct': profit_pct,
-                        'holding_days': holding_days,
-                        'reason': 'LIFECYCLE_D3_LOW_PROFIT'
-                    }
-                else:
-                    # +3% 이상: 트레일링 강제 ON (위에서 ATR 처리됨)
-                    console.print(
-                        f"[green]📅 생명주기 D+3: 트레일링 강제 ON "
-                        f"(보유 {holding_days}일, 수익 {profit_pct:+.2f}% >= +{V2_LIFECYCLE_D3_PROFIT_THRESHOLD}%)[/green]"
-                    )
-                    position['trailing_active'] = True
+        # ====================================================
+        # 3. TP1 이후 → BE 스탑 (손실 방지)
+        # ====================================================
+        if partial_stage >= 1:
+            # +0.2% 버퍼: 한국장 호가/슬리피지로 인한 휩쏘 방어
+            _be_buffer = self.config.get('risk_control.be_stop_buffer_pct', 0.2)
+            _be_stop   = entry_price * (1 + _be_buffer / 100)
+            if current_price <= _be_stop:
+                _be_pct = (current_price - entry_price) / entry_price * 100
+                logger.info(f"[BE_STOP] TP1 후 BE+{_be_buffer}% 손절 ({_be_pct:.2f}%)")
+                console.print(f"[yellow]🔒 BE 스탑(+{_be_buffer}%): {current_price:,.0f} ({_be_pct:+.2f}%)[/yellow]")
+                return True, f"[BE_STOP] TP1 후 BE+{_be_buffer}% 손절 ({_be_pct:.2f}%)", {
+                    'profit_pct': profit_pct, 'use_market_order': False, 'emergency': False,
+                }
 
-            # D+1: 익일 종가 기준 VWAP 체크 (50% 부분청산)
-            if holding_days >= 1:
+        # ====================================================
+        # 4. R-기반 부분 익절 (TP1=1.5R/50%, TP2=3R/잔여50%)
+        # ====================================================
+        r_tp1_price = position.get('r_tp1_price')
+        r_tp2_price = position.get('r_tp2_price')
+        r_pct       = position.get('r_pct', 0)
+
+        if r_tp1_price and r_tp2_price:
+            tp1_pct = (r_tp1_price - entry_price) / entry_price * 100
+            tp2_pct = (r_tp2_price - entry_price) / entry_price * 100
+
+            if partial_stage < 1 and current_price >= r_tp1_price:
+                _r1_reason = f"[R_TP1] +{profit_pct:.1f}% ≥ 1.5R({tp1_pct:.1f}%) → 50% 부분익절"
+                logger.info(_r1_reason)
+                return False, _r1_reason, {
+                    'partial_exit': True, 'stage': 1, 'exit_ratio': 0.5, 'profit_pct': profit_pct,
+                }
+            elif partial_stage == 1 and current_price >= r_tp2_price:
+                position['trailing_active'] = True
+                _r2_reason = f"[R_TP2] +{profit_pct:.1f}% ≥ 3R({tp2_pct:.1f}%) → 잔여 50% + 트레일링 ON"
+                logger.info(_r2_reason)
+                return False, _r2_reason, {
+                    'partial_exit': True, 'stage': 2, 'exit_ratio': 0.5, 'profit_pct': profit_pct,
+                }
+
+        # ====================================================
+        # 5. A급 연장 보호 장치 (eq=A AND choch=A/A+)
+        #    TIME_EXIT 면제 대신: STRUCTURE_EXIT + PROFIT_LOCK + NO_PROGRESS + A_FORCE_EXIT
+        # ====================================================
+        _a_ext_cfg = self.config.get('smc.a_grade_hold_extension', {})
+        _is_a_grade = (
+            _a_ext_cfg.get('enabled', False) and
+            r_pct > 0 and
+            position.get('eq_grade') == 'A' and
+            position.get('choch_grade_log') in ('A', 'A+')
+        )
+
+        if _is_a_grade:
+            _r_amount        = entry_price * r_pct / 100
+            _mfe_pct         = (highest_price - entry_price) / entry_price * 100 if highest_price > entry_price else 0.0
+            _mfe_r           = _mfe_pct / r_pct if r_pct > 0 else 0.0
+            _bars_since      = int(elapsed_minutes / 5)
+            _te_bars         = self.config.get('risk_control.time_exit', {}).get('bars', 10)
+
+            # ① STRUCTURE_EXIT: bearish CHoCH 확정 → 전량 청산
+            if _a_ext_cfg.get('structure_exit', True):
                 try:
-                    if 'vwap' in df.columns:
-                        vwap = df['vwap'].iloc[-1]
-                        if current_price < vwap:
-                            # VWAP 하회 시 50% 부분청산 신호
-                            console.print(
-                                f"[yellow]📅 생명주기 D+1: VWAP 하회 → 50% 부분청산 권장 "
-                                f"(보유 {holding_days}일)[/yellow]"
-                            )
-                            # 부분청산 신호 반환 (전량 청산 아님)
-                            if not position.get('d1_partial_done'):
-                                return False, f"생명주기 D+1 부분청산 ({profit_pct:+.2f}%)", {
-                                    'partial_exit': True,
-                                    'stage': 100,  # D+1 특수 단계
-                                    'exit_ratio': V2_LIFECYCLE_D1_PARTIAL,
-                                    'profit_pct': profit_pct,
-                                    'reason': 'LIFECYCLE_D1_VWAP_BELOW'
-                                }
+                    from analyzers.smc.smc_structure import SMCStructureAnalyzer
+                    _sa     = SMCStructureAnalyzer()
+                    _df_tmp = df.copy()
+                    _df_tmp.columns = [c.lower() for c in _df_tmp.columns]
+                    _struct = _sa.analyze_structure(_df_tmp)
+                    _choch  = _sa.detect_choch(_df_tmp, _struct)
+                    if _choch and _choch.direction == 'bearish':
+                        _se_reason = f"[STRUCTURE_EXIT] A급 bearish CHoCH (pnl={profit_pct:+.2f}%)"
+                        logger.info(_se_reason)
+                        return True, _se_reason, {'structure_exit': True, 'profit_pct': profit_pct}
                 except Exception:
                     pass
 
-        # ========================================
-        # 6순위: 시간 기반 청산 (문서 명세: 15:00 이후 전량 청산)
-        # 🔧 FIX: eod_policy.enabled가 True일 때만 작동
-        # ========================================
-        if self.time_based_exit_enabled:
-            current_time = datetime.now().time()
+            # ② PROFIT_LOCK 티어형: MFE R 달성할수록 보호선 상승
+            _default_tiers = [
+                {'mfe_r': 1.5, 'floor_r': 0.5},
+                {'mfe_r': 2.5, 'floor_r': 1.0},
+                {'mfe_r': 4.0, 'floor_r': 2.0},
+            ]
+            _tiers           = _a_ext_cfg.get('profit_lock_tiers', _default_tiers)
+            _lock_floor_price = None
+            _active_tier     = None
+            for _tier in reversed(_tiers):
+                if _mfe_r >= _tier['mfe_r']:
+                    _lock_floor_price = entry_price + _tier['floor_r'] * _r_amount
+                    _active_tier      = _tier
+                    break
 
-            # 🔥 CRITICAL FIX: EOD Manager 익일 보유 결정 존중
+            if _lock_floor_price is not None and current_price < _lock_floor_price:
+                _floor_pct = (_lock_floor_price - entry_price) / entry_price * 100
+                _pl_reason = (
+                    f"[PROFIT_LOCK] MFE={_mfe_r:.1f}R → 보호선=+{_floor_pct:.2f}%, "
+                    f"현재={profit_pct:+.2f}%"
+                )
+                logger.info(_pl_reason)
+                return True, _pl_reason, {
+                    'profit_lock': True, 'profit_pct': profit_pct, 'lock_tier': _active_tier,
+                }
+
+            # ③ NO_PROGRESS_EXIT: 1.5R 미달 + N봉 경과 → 힘 없는 거래 컷
+            _np_mfe_r = _a_ext_cfg.get('no_progress_mfe_r', 1.5)
+            _np_max   = _a_ext_cfg.get('no_progress_bars', 15)
+            if _mfe_r < _np_mfe_r and _bars_since >= _np_max:
+                _np_reason = (
+                    f"[NO_PROGRESS_EXIT] MFE={_mfe_r:.2f}R < {_np_mfe_r}R, "
+                    f"{_bars_since}봉 ≥ {_np_max}봉, pnl={profit_pct:+.2f}%"
+                )
+                logger.info(_np_reason)
+                return True, _np_reason, {'no_progress_exit': True, 'profit_pct': profit_pct}
+
+            # ④ A_FORCE_EXIT: 최대 보유 봉수 초과 (time_exit.bars × max_bars_mult)
+            _mult  = _a_ext_cfg.get('max_bars_mult', 2)
+            _a_max = _te_bars * _mult
+            if _bars_since >= _a_max:
+                _af_reason = f"[A_FORCE_EXIT] {_bars_since}봉 ≥ {_a_max}봉, pnl={profit_pct:+.2f}%"
+                logger.info(_af_reason)
+                return True, _af_reason, {'a_force_exit': True, 'profit_pct': profit_pct}
+
+        # ====================================================
+        # 6. ATR 트레일링 — 3단 tightening (수익 커질수록 타이트)
+        #    +2~5%  : ATR×3.0 (느슨 — 추세 유지)
+        #    +5~8%  : ATR×2.5 (중간 — 수익 잠금 시작)
+        #    +8%+   : ATR×2.0 (타이트 — 최대 수익 보호)
+        # ====================================================
+        _trailing_on_pct = self.config.get('risk_control.trailing_activation_pct', 2.0)
+        if position.get('trailing_active') or profit_pct >= _trailing_on_pct:
+            position['trailing_active'] = True
+
+            atr_value = 0.0
+            try:
+                if 'atr' in df.columns and len(df) > 0:
+                    atr_value = float(df['atr'].iloc[-1])
+            except Exception:
+                pass
+            if atr_value <= 0:
+                atr_value = entry_price * 0.02  # 2% 기본값
+
+            # 3단 tightening
+            _tr_cfg = self.config.get('risk_control.trailing_tiers', {})
+            _t1_pct  = _tr_cfg.get('tier1_profit', 5.0)
+            _t2_pct  = _tr_cfg.get('tier2_profit', 8.0)
+            _t1_mult = _tr_cfg.get('tier1_mult', 2.5)
+            _t2_mult = _tr_cfg.get('tier2_mult', 2.0)
+            _base_mult = _tr_cfg.get('base_mult', 3.0)
+
+            if profit_pct >= _t2_pct:
+                atr_multiplier = _t2_mult   # +8%+: 타이트
+            elif profit_pct >= _t1_pct:
+                atr_multiplier = _t1_mult   # +5~8%: 중간
+            else:
+                atr_multiplier = _base_mult  # +2~5%: 느슨
+
+            trailing_stop_price = highest_price - atr_value * atr_multiplier
+
+            # TP1 이후: BE+buffer 이상 보장
+            if partial_stage >= 1:
+                _be_buffer = self.config.get('risk_control.be_stop_buffer_pct', 0.2)
+                _min_floor = entry_price * (1 + _be_buffer / 100)
+                trailing_stop_price = max(trailing_stop_price, _min_floor)
+
+            position['trailing_stop_price'] = trailing_stop_price
+
+            if current_price <= trailing_stop_price:
+                _tr_reason = (
+                    f"[TRAILING_STOP] ATR×{atr_multiplier} "
+                    f"(고가={highest_price:,.0f} → 스탑={trailing_stop_price:,.0f}, "
+                    f"pnl={profit_pct:+.2f}%)"
+                )
+                logger.info(_tr_reason)
+                return True, _tr_reason, {
+                    'profit_pct': profit_pct,
+                    'highest_price': highest_price,
+                    'trailing_stop_price': trailing_stop_price,
+                    'atr_multiplier': atr_multiplier,
+                }
+
+        # ====================================================
+        # 7. EOD 시간 기반 청산 (15:00, 오버나이트 승인 제외)
+        # ====================================================
+        if self.time_based_exit_enabled:
+            # 오버나이트 승인된 포지션은 시간 청산 제외
             if position.get('allow_overnight_final_confirm', False):
-                # 익일 보유 승인된 종목은 시간 기반 청산 제외
-                console.print(f"[cyan]✓ 익일 보유 승인 종목 - 시간 청산 제외 (Score: {position.get('eod_score', 0):.2f})[/cyan]")
+                console.print(
+                    f"[cyan]✓ 오버나이트 승인 포지션 - 시간 청산 제외[/cyan]"
+                )
                 return False, None, None
 
-            # 15:00 - 전량 강제 청산 (익일 보유 제외)
+            current_time = datetime.now().time()
             if current_time >= self.loss_exit_time:
                 return True, f"시간 기반 청산 (15:00, {profit_pct:+.2f}%)", {'profit_pct': profit_pct}
 
         # 청산 신호 없음
         return False, None, None
+
 
     def _safe_get_price(self, position: Dict, key: str) -> float:
         """

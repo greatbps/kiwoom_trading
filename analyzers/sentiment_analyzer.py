@@ -29,6 +29,7 @@ class SentimentAnalyzer:
             provider = os.getenv("PRIMARY_ANALYZER", "gemini").lower()
 
         self.provider = provider
+        self._quota_exhausted = False  # 429 발생 시 당일 Gemini 비활성화
 
         # 재료 분류기 초기화
         self.material_classifier = NewsMaterialClassifier()
@@ -50,7 +51,8 @@ class SentimentAnalyzer:
             raise ValueError("Gemini API 키가 설정되지 않았습니다.")
 
         genai.configure(api_key=self.api_key)
-        self.model = genai.GenerativeModel("gemini-2.0-flash-exp")
+        _model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+        self.model = genai.GenerativeModel(_model_name)
 
     def _init_deepseek(self):
         """DeepSeek 초기화"""
@@ -152,39 +154,38 @@ class SentimentAnalyzer:
         """
         try:
             if self.provider == "gemini":
+                if self._quota_exhausted:
+                    return None  # 이미 429 → 즉시 키워드 폴백
                 return self._call_gemini(news_text, stock_name)
             elif self.provider == "deepseek":
                 return self._call_deepseek(news_text, stock_name)
             elif self.provider == "gpt":
                 return self._call_gpt(news_text, stock_name)
         except Exception as e:
-            print(f"✗ {self.provider.upper()} AI 분석 실패: {e}")
+            err_str = str(e)
+            if "429" in err_str or "quota" in err_str.lower():
+                self._quota_exhausted = True
+                print(f"✗ GEMINI AI 분석 실패: 429 쿼터 소진 — 당일 키워드 분석으로 전환")
+            else:
+                print(f"✗ {self.provider.upper()} AI 분석 실패: {e}")
             return None
 
     def _call_gemini(self, news_text: str, stock_name: str) -> Optional[Dict]:
-        """Gemini API 호출 (타임아웃 3초)"""
-        import signal
+        """Gemini API 호출 (타임아웃 10초, asyncio 호환)"""
+        import concurrent.futures
 
-        def timeout_handler(signum, frame):
-            raise TimeoutError("Gemini API 타임아웃 (3초)")
-
-        try:
-            # 타임아웃 설정 (3초)
-            signal.signal(signal.SIGALRM, timeout_handler)
-            signal.alarm(3)
-
+        def _do_call():
             prompt = self._create_prompt(news_text, stock_name)
             response = self.model.generate_content(prompt)
-            result_text = response.text.strip()
+            return self._parse_json_response(response.text.strip())
 
-            # 타임아웃 해제
-            signal.alarm(0)
-
-            return self._parse_json_response(result_text)
-        except TimeoutError:
-            print("⚠️  Gemini API 타임아웃 (3초 초과)")
-            signal.alarm(0)  # 타임아웃 해제
-            return None
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_do_call)
+            try:
+                return future.result(timeout=10)
+            except concurrent.futures.TimeoutError:
+                print("⚠️  Gemini API 타임아웃 (10초 초과)")
+                return None
 
     def _call_deepseek(self, news_text: str, stock_name: str) -> Optional[Dict]:
         """DeepSeek API 호출 (타임아웃 3초, 재시도 없음)"""

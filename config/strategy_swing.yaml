@@ -1,0 +1,58 @@
+swing:
+  max_positions: 5
+  max_add_per_position: 2
+  min_score_to_enter: 5.0
+  top_n_candidates: 3
+  max_total_exposure: 0.80    # 전체 포지션 합산 최대 노출 비중 (Fix 5)
+
+  sector:
+    max_same_sector: 1         # 동일 섹터 최대 포지션 수 (Fix 1)
+
+  size:
+    initial: 0.50      # TRIGGER 시 50%
+    add_1: 0.30        # 1차 추가매수 30%
+    add_2: 0.20        # 2차 추가매수 20%
+    score_tiers:
+      - {min_score: 8.0, size: 1.0}
+      - {min_score: 6.0, size: 0.7}
+      - {min_score: 5.0, size: 0.5}
+
+  patterns:
+    cup_handle:
+      weight: 1.2
+      cup_depth_min_pct: 15
+      cup_depth_max_pct: 50
+      cup_symmetry_tolerance: 0.05
+      handle_max_retrace_pct: 15
+      handle_min_bars: 5
+      handle_max_bars: 30
+      volume_dry_ratio: 0.70
+
+    pullback:
+      weight: 1.0
+      ma5_tolerance_pct: 2.0
+      uptrend_ma_check: [5, 20, 60]
+      volume_dry_ratio: 0.70
+
+    box_breakout:
+      weight: 0.9
+      range_max_pct: 8.0
+      lookback_bars: 30
+      resistance_touch_min: 3
+      resistance_tolerance_pct: 1.0
+      breakout_confirm_pct: 1.0
+
+  hold:
+    ma5_exit: true
+    ma5_consecutive_days: 2      # MA5 연속 이탈 기준일 (Fix 3)
+    ma20_hard_exit: true         # MA20 이탈 → 즉시 강제 청산 (Fix 3)
+    trail_start_days: 7
+    trail_start_profit_pct: 7.0
+    max_hold_days: 30
+    drawdown_exit_pct: 5.0       # 고점 대비 5% 이상 하락 시 청산
+
+  data:
+    lookback_days: 120
+    universe_file: "data/swing_universe.json"
+    state_file: "data/swing_positions.json"
+    order_dir: "logs/"

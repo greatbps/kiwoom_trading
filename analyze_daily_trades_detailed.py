@@ -3,15 +3,46 @@
 상세 거래 분석기 - 깊이 있는 인사이트 제공
 """
 
-import json
-from datetime import datetime, timedelta
+import sqlite3
+from datetime import datetime
 from pathlib import Path
 from rich.console import Console
-from rich.table import Table
 from rich.panel import Panel
-from rich.markup import escape  # 🔧 FIX: markup 에러 방지용
+from rich.markup import escape
 
 console = Console()
+
+DB_PATH = Path("data/trades.db")
+
+
+def _load_trades_from_db(date_str: str) -> list[dict]:
+    """trades.db에서 특정 날짜의 거래를 로드."""
+    if not DB_PATH.exists():
+        return []
+    conn = sqlite3.connect(DB_PATH)
+    rows = conn.execute(
+        """SELECT timestamp, stock_code, stock_name, trade_type,
+                  quantity, price, quantity * price, realized_pnl, reason
+           FROM trades
+           WHERE trade_date = ?
+           ORDER BY id ASC""",
+        (date_str,),
+    ).fetchall()
+    conn.close()
+    result = []
+    for r in rows:
+        result.append({
+            'timestamp':    r[0],
+            'stock_code':   r[1],
+            'stock_name':   r[2] or r[1],
+            'type':         r[3],
+            'quantity':     int(r[4] or 0),
+            'price':        float(r[5] or 0),
+            'amount':       float(r[6] or 0),
+            'realized_pnl': float(r[7] or 0),
+            'reason':       r[8] or '',
+        })
+    return result
 
 
 def analyze_today_detailed(date_str: str = None):
@@ -20,21 +51,8 @@ def analyze_today_detailed(date_str: str = None):
     if date_str is None:
         date_str = datetime.now().strftime('%Y-%m-%d')
 
-    # 데이터 로드
-    risk_log_path = Path("data/risk_log.json")
-    if not risk_log_path.exists():
-        console.print("[red]❌ data/risk_log.json 파일을 찾을 수 없습니다.[/red]")
-        return
-
-    with open(risk_log_path, 'r', encoding='utf-8') as f:
-        data = json.load(f)
-
-    log_date = data.get('today', '')
-    if log_date != date_str:
-        date_str = log_date
-
-    trades = data.get('daily_trades', [])
-    daily_pnl = data.get('daily_realized_pnl', 0.0)
+    trades = _load_trades_from_db(date_str)
+    daily_pnl = sum(t['realized_pnl'] for t in trades if t['type'] == 'SELL')
 
     if not trades:
         console.print(f"[yellow]📭 {date_str}에 거래 내역이 없습니다.[/yellow]")

@@ -1,0 +1,46 @@
+{
+  "initial_balance": 357628.0,
+  "today": "2026-04-02",
+  "daily_trades": [
+    {
+      "timestamp": "2026-04-02T10:42:06.536725",
+      "stock_code": "120110",
+      "stock_name": "코오롱인더",
+      "type": "SELL",
+      "quantity": 1,
+      "price": 80200.0,
+      "amount": 80200.0,
+      "realized_pnl": -1700.0,
+      "reason": "10:42 Hard Stop (-2.0%, -2.08%) [부분청산 0차]"
+    }
+  ],
+  "daily_realized_pnl": -1700.0,
+  "week_start": "2026-03-30",
+  "weekly_trades": [
+    {
+      "timestamp": "2026-04-01T12:12:21.328001",
+      "stock_code": "120110",
+      "stock_name": "코오롱인더",
+      "type": "BUY",
+      "quantity": 1,
+      "price": 81900.0,
+      "amount": 81900.0,
+      "realized_pnl": 0.0,
+      "reason": "12:12 TREND BREAKOUT[NORMAL]: 고점돌파(81700→81900) Vol×1.9 몸통83% 점수5/5 이격1.2%"
+    },
+    {
+      "timestamp": "2026-04-02T10:42:06.536725",
+      "stock_code": "120110",
+      "stock_name": "코오롱인더",
+      "type": "SELL",
+      "quantity": 1,
+      "price": 80200.0,
+      "amount": 80200.0,
+      "realized_pnl": -1700.0,
+      "reason": "10:42 Hard Stop (-2.0%, -2.08%) [부분청산 0차]"
+    }
+  ],
+  "weekly_realized_pnl": -1700.0,
+  "consecutive_losses": 6,
+  "cooldown_until": "2026-04-02T15:30:00"
+}

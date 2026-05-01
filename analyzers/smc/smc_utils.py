@@ -9,6 +9,10 @@ from dataclasses import dataclass
 from typing import List, Optional
 import pandas as pd
 import numpy as np
+import logging
+
+_sweep_logger = logging.getLogger('sweep_attempt')
+from .smc_decision_logger import get_smc_logger
 
 
 @dataclass
@@ -31,9 +35,10 @@ class LiquiditySweep:
     sweep_high: float    # 스윕 고점
     sweep_low: float     # 스윕 저점
     direction: str       # 'bullish' | 'bearish' (스윕 후 예상 방향)
+    sweep_type: str = 'penetration'  # 🔧 2026-03-09: 'penetration' | 'equal_level'
 
     def __repr__(self):
-        return f"LiquiditySweep({self.direction}@{self.swept_level:.0f})"
+        return f"LiquiditySweep({self.direction}@{self.swept_level:.0f}, type={self.sweep_type})"
 
 
 def find_swing_points(
@@ -140,24 +145,47 @@ def detect_liquidity_sweep(
     df: pd.DataFrame,
     swing_points: List[SwingPoint],
     lookback: int = 20,
-    sweep_threshold_pct: float = 0.1
+    sweep_threshold_pct: float = 0.1,
+    end_idx: int = None,  # 🔧 2026-03-07: 탐색 종료 인덱스 (CHoCH index-1 전달 시 순서 강제)
+    # 🔧 2026-03-09: Equal Level Sweep (Tier 2) — 한국 시장 1~2틱 터치 후 반전 패턴
+    equal_level_tolerance_pct: float = 0.0,   # 0.0=비활성, 0.03=허용 ±0.03% 이내 터치
+    equal_level_reaction_body: float = 0.5,   # 반응 캔들 최소 body 비율
+    equal_level_volume_mult: float = 1.5,     # 볼륨 스파이크 배율
+    symbol: str = '',                          # 🔧 2026-03-10: Sweep Attempt Log용 종목코드
+    equal_level_distance_min_pct: float = 0.0,  # 🔧 2026-03-18: 거리 하한 (0.0=비활성)
+    equal_level_distance_max_pct: float = 999.0,  # 🔧 2026-03-18: 거리 상한 (999=비활성)
 ) -> Optional[LiquiditySweep]:
     """
-    유동성 스윕 탐지 (스탑헌팅)
+    유동성 스윕 탐지 (스탑헌팅) — 2-tier 구조
 
-    유동성 스윕이란:
+    Tier 1 (Penetration Sweep):
     - 이전 스윙 고점/저점을 잠깐 돌파(wick)
     - 봉 종가는 레벨 안으로 복귀
-    - 스탑로스를 털어내고 반전하는 패턴
+    - 최소 돌파율: sweep_threshold_pct (0.1%)
+
+    Tier 2 (Equal Level Sweep):
+    - 스윙 레벨을 아주 살짝 터치 (±equal_level_tolerance_pct 이내)
+    - 강한 불리시 반응 캔들 (body ≥ equal_level_reaction_body)
+    - 볼륨 스파이크 (≥ 20봉 평균 × equal_level_volume_mult)
+    - equal_level_tolerance_pct=0.0 → Tier 2 비활성
 
     Args:
         df: OHLCV DataFrame
         swing_points: 기존 스윙 포인트들
         lookback: 최근 N봉 내 스윕 탐지
-        sweep_threshold_pct: 스윕 인정 최소 돌파율 (%)
+        sweep_threshold_pct: Tier1 스윕 인정 최소 돌파율 (%)
+        end_idx: 탐색 종료 인덱스 (None=마지막 확정봉만 체크)
+                 CHoCH index-1 전달 시 Sweep → CHoCH 순서 강제됨
+        equal_level_tolerance_pct: Tier2 허용 터치 범위 (%) — 0.0=비활성
+        equal_level_reaction_body: Tier2 반응 캔들 최소 body 비율
+        equal_level_volume_mult: Tier2 볼륨 스파이크 배율
 
     Returns:
-        최근 발생한 LiquiditySweep 또는 None
+        최근 발생한 LiquiditySweep 또는 None (Tier1 우선, 없으면 Tier2)
+
+    Note:
+        end_idx=None: 기존 동작 (last_candle 1개만 체크)
+        end_idx=N: N봉부터 과거 방향으로 lookback 범위 내 탐색 (가장 최근 스윕 반환)
     """
     if df is None or len(df) < 2 or len(swing_points) < 2:
         return None
@@ -166,63 +194,210 @@ def detect_liquidity_sweep(
     df = df.copy()
     df.columns = [c.lower() for c in df.columns]
 
-    # 마지막 확정 봉 (현재 봉은 미확정)
-    last_idx = len(df) - 2  # 마지막에서 두 번째 봉 (확정된 봉)
-    if last_idx < 0:
-        return None
+    # 🔧 2026-03-07: end_idx 지정 시 해당 봉부터 과거 방향 탐색 (순서 강제)
+    # None이면 기존 동작 유지 (마지막 확정봉만 체크)
+    if end_idx is None:
+        search_indices = [len(df) - 2]
+    else:
+        if end_idx < 0:
+            return None
+        # end_idx부터 과거 방향으로 lookback 범위 탐색 (가장 최근 스윕 우선)
+        search_start = max(0, end_idx - lookback)
+        search_indices = range(end_idx, search_start - 1, -1)
 
-    last_candle = df.iloc[last_idx]
+    for check_idx in search_indices:
+        if check_idx < 0 or check_idx >= len(df):
+            continue
 
-    # 최근 스윙 포인트들 (lookback 범위 내)
-    recent_swings = [
-        sp for sp in swing_points
-        if sp.index < last_idx and last_idx - sp.index <= lookback
-    ]
+        check_candle = df.iloc[check_idx]
 
-    if not recent_swings:
-        return None
+        # 해당 봉 이전 스윙 포인트들 (lookback 범위 내)
+        recent_swings = [
+            sp for sp in swing_points
+            if sp.index < check_idx and check_idx - sp.index <= lookback
+        ]
 
-    # 저점 스윕 체크 (Bullish Liquidity Sweep)
-    # 이전 저점을 잠깐 하회하고 종가는 복귀
-    recent_lows = [sp for sp in recent_swings if sp.type == 'low']
-    if recent_lows:
-        # 가장 최근 저점
-        last_swing_low = max(recent_lows, key=lambda x: x.index)
-        swing_low_price = last_swing_low.price
+        if not recent_swings:
+            continue
 
-        # 스윕 조건: 저가가 스윙 저점 아래, 종가는 위
-        if last_candle['low'] < swing_low_price and last_candle['close'] > swing_low_price:
-            sweep_depth_pct = (swing_low_price - last_candle['low']) / swing_low_price * 100
+        # 저점 스윕 체크 (Bullish Liquidity Sweep)
+        recent_lows = [sp for sp in recent_swings if sp.type == 'low']
+        if recent_lows:
+            last_swing_low = max(recent_lows, key=lambda x: x.index)
+            swing_low_price = last_swing_low.price
+            swing_age = check_idx - last_swing_low.index
 
-            if sweep_depth_pct >= sweep_threshold_pct:
-                return LiquiditySweep(
-                    index=last_idx,
-                    swept_level=swing_low_price,
-                    sweep_high=last_candle['high'],
-                    sweep_low=last_candle['low'],
-                    direction='bullish'  # 저점 스윕 후 상승 예상
+            if check_candle['low'] < swing_low_price and check_candle['close'] > swing_low_price:
+                sweep_depth_pct = (swing_low_price - check_candle['low']) / swing_low_price * 100
+
+                if sweep_depth_pct >= sweep_threshold_pct:
+                    # 🔧 2026-03-10: Sweep Attempt Log
+                    _sweep_logger.debug(
+                        f'[SWEEP_DETECTED] sym={symbol} type=equal_low level={swing_low_price:.0f} '
+                        f'distance={sweep_depth_pct:.3f}% swing_age={swing_age} tier=penetration'
+                    )
+                    _sweep_logger.info(
+                        f'[SWEEP_RESULT] sym={symbol} type=penetration dist={sweep_depth_pct:.2f}%'
+                    )
+                    get_smc_logger().log_sweep(symbol, 'penetration', sweep_depth_pct)
+                    return LiquiditySweep(
+                        index=check_idx,
+                        swept_level=swing_low_price,
+                        sweep_high=check_candle['high'],
+                        sweep_low=check_candle['low'],
+                        direction='bullish',  # 저점 스윕 후 상승 예상
+                        sweep_type='penetration'
+                    )
+                else:
+                    # 🔧 2026-03-10: Sweep Attempt Log — distance 미달
+                    _sweep_logger.debug(
+                        f'[SWEEP_MISS] sym={symbol} type=equal_low level={swing_low_price:.0f} '
+                        f'distance={sweep_depth_pct:.3f}% < threshold={sweep_threshold_pct}% '
+                        f'swing_age={swing_age} reason=distance_too_small'
+                    )
+            elif check_candle['low'] >= swing_low_price:
+                # 저점 미돌파 — 가장 가까운 거리 계산
+                near_pct = abs(check_candle['low'] - swing_low_price) / swing_low_price * 100
+                _sweep_logger.debug(
+                    f'[SWEEP_MISS] sym={symbol} type=equal_low level={swing_low_price:.0f} '
+                    f'distance={near_pct:.3f}% swing_age={swing_age} reason=no_penetration'
                 )
 
-    # 고점 스윕 체크 (Bearish Liquidity Sweep)
-    # 이전 고점을 잠깐 상회하고 종가는 복귀
-    recent_highs = [sp for sp in recent_swings if sp.type == 'high']
-    if recent_highs:
-        # 가장 최근 고점
-        last_swing_high = max(recent_highs, key=lambda x: x.index)
-        swing_high_price = last_swing_high.price
+        # 고점 스윕 체크 (Bearish Liquidity Sweep)
+        recent_highs = [sp for sp in recent_swings if sp.type == 'high']
+        if recent_highs:
+            last_swing_high = max(recent_highs, key=lambda x: x.index)
+            swing_high_price = last_swing_high.price
+            swing_age = check_idx - last_swing_high.index
 
-        # 스윕 조건: 고가가 스윙 고점 위, 종가는 아래
-        if last_candle['high'] > swing_high_price and last_candle['close'] < swing_high_price:
-            sweep_depth_pct = (last_candle['high'] - swing_high_price) / swing_high_price * 100
+            if check_candle['high'] > swing_high_price and check_candle['close'] < swing_high_price:
+                sweep_depth_pct = (check_candle['high'] - swing_high_price) / swing_high_price * 100
 
-            if sweep_depth_pct >= sweep_threshold_pct:
-                return LiquiditySweep(
-                    index=last_idx,
-                    swept_level=swing_high_price,
-                    sweep_high=last_candle['high'],
-                    sweep_low=last_candle['low'],
-                    direction='bearish'  # 고점 스윕 후 하락 예상
+                if sweep_depth_pct >= sweep_threshold_pct:
+                    # 🔧 2026-03-10: Sweep Attempt Log
+                    _sweep_logger.debug(
+                        f'[SWEEP_DETECTED] sym={symbol} type=equal_high level={swing_high_price:.0f} '
+                        f'distance={sweep_depth_pct:.3f}% swing_age={swing_age} tier=penetration'
+                    )
+                    _sweep_logger.info(
+                        f'[SWEEP_RESULT] sym={symbol} type=penetration dist={sweep_depth_pct:.2f}%'
+                    )
+                    get_smc_logger().log_sweep(symbol, 'penetration', sweep_depth_pct)
+                    return LiquiditySweep(
+                        index=check_idx,
+                        swept_level=swing_high_price,
+                        sweep_high=check_candle['high'],
+                        sweep_low=check_candle['low'],
+                        direction='bearish',  # 고점 스윕 후 하락 예상
+                        sweep_type='penetration'
+                    )
+                else:
+                    # 🔧 2026-03-10: Sweep Attempt Log — distance 미달
+                    _sweep_logger.debug(
+                        f'[SWEEP_MISS] sym={symbol} type=equal_high level={swing_high_price:.0f} '
+                        f'distance={sweep_depth_pct:.3f}% < threshold={sweep_threshold_pct}% '
+                        f'swing_age={swing_age} reason=distance_too_small'
+                    )
+            elif check_candle['high'] <= swing_high_price:
+                near_pct = abs(check_candle['high'] - swing_high_price) / swing_high_price * 100
+                _sweep_logger.debug(
+                    f'[SWEEP_MISS] sym={symbol} type=equal_high level={swing_high_price:.0f} '
+                    f'distance={near_pct:.3f}% swing_age={swing_age} reason=no_penetration'
                 )
+
+        # 🔧 2026-03-09: Tier 2 — Equal Level Sweep (한국 시장 1~2틱 터치 후 반전)
+        # Tier 1(penetration) 미충족 시에만 체크, equal_level_tolerance_pct > 0 이면 활성
+        if equal_level_tolerance_pct > 0:
+            # 🔧 2026-03-18: 거리 범위 파라미터 (distance 하한/상한)
+            el_distance_min = equal_level_distance_min_pct
+            el_distance_max = equal_level_distance_max_pct
+
+            # 볼륨 평균 (20봉 이전, check_idx 기준)
+            vol_start = max(0, check_idx - 20)
+            has_volume = 'volume' in df.columns
+            avg_vol = df['volume'].iloc[vol_start:check_idx].mean() if has_volume and check_idx > vol_start else None
+
+            # 반응 캔들 body 계산
+            c_body = check_candle['close'] - check_candle['open']
+            c_range = check_candle['high'] - check_candle['low']
+            body_ratio = abs(c_body) / c_range if c_range > 0 else 0
+
+            # --- Bullish Equal Level Sweep ---
+            if recent_lows:
+                last_swing_low = max(recent_lows, key=lambda x: x.index)
+                swing_low_price = last_swing_low.price
+                # 🔧 2026-03-18: 거리 계산은 스윙 기준 (swing-based distance)
+                distance_pct = (check_candle['low'] - swing_low_price) / swing_low_price * 100
+                touch_pct = abs(distance_pct)
+                _sweep_logger.debug(
+                    f'[EQUAL_LEVEL_HIT] sym={symbol} swing_low={swing_low_price:.0f} '
+                    f'candle_low={check_candle["low"]:.0f} distance={distance_pct:.3f}% '
+                    f'tolerance={equal_level_tolerance_pct}% range=[{el_distance_min},{el_distance_max}]%'
+                )
+                # 🔧 2026-03-18: 거리 상한/하한 추가 — 5.6% 쓰레기 신호 차단
+                if not (el_distance_min <= touch_pct <= el_distance_max):
+                    _sweep_logger.debug(
+                        f'[FILTERED_OUT] sym={symbol} reason=distance_out_of_range '
+                        f'distance={touch_pct:.3f}% range=[{el_distance_min},{el_distance_max}]%'
+                    )
+                    _sweep_logger.info(
+                        f'[SWEEP_RESULT] sym={symbol} type=filtered dist={touch_pct:.2f}%'
+                    )
+                    get_smc_logger().log_sweep(symbol, 'filtered', touch_pct, 'distance_out_of_range')
+                elif (touch_pct <= equal_level_tolerance_pct          # 레벨 근접 터치
+                        and check_candle['close'] > swing_low_price  # 종가 레벨 위 복귀
+                        and c_body > 0                                # 불리시 캔들
+                        and body_ratio >= equal_level_reaction_body   # 강한 반응 body
+                        and (avg_vol is None or                       # 볼륨 스파이크
+                             check_candle['volume'] >= avg_vol * equal_level_volume_mult)):
+                    _sweep_logger.info(
+                        f'[SWEEP_RESULT] sym={symbol} type=equal_level dist={touch_pct:.2f}%'
+                    )
+                    get_smc_logger().log_sweep(symbol, 'equal_level', touch_pct)
+                    return LiquiditySweep(
+                        index=check_idx,
+                        swept_level=swing_low_price,
+                        sweep_high=check_candle['high'],
+                        sweep_low=check_candle['low'],
+                        direction='bullish',
+                        sweep_type='equal_level'
+                    )
+
+            # --- Bearish Equal Level Sweep (참고용, long_only 모드에서는 무시됨) ---
+            if recent_highs:
+                last_swing_high = max(recent_highs, key=lambda x: x.index)
+                swing_high_price = last_swing_high.price
+                # 🔧 2026-03-18: 거리 계산은 스윙 기준
+                distance_pct = (swing_high_price - check_candle['high']) / swing_high_price * 100
+                touch_pct = abs(distance_pct)
+                # 🔧 2026-03-18: 거리 상한/하한 추가
+                if not (el_distance_min <= touch_pct <= el_distance_max):
+                    _sweep_logger.debug(
+                        f'[FILTERED_OUT] sym={symbol} reason=distance_out_of_range(bearish) '
+                        f'distance={touch_pct:.3f}% range=[{el_distance_min},{el_distance_max}]%'
+                    )
+                    _sweep_logger.info(
+                        f'[SWEEP_RESULT] sym={symbol} type=filtered dist={touch_pct:.2f}%'
+                    )
+                    get_smc_logger().log_sweep(symbol, 'filtered', touch_pct, 'distance_out_of_range')
+                elif (touch_pct <= equal_level_tolerance_pct
+                        and check_candle['close'] < swing_high_price
+                        and c_body < 0                                # 베어리시 캔들
+                        and body_ratio >= equal_level_reaction_body
+                        and (avg_vol is None or
+                             check_candle['volume'] >= avg_vol * equal_level_volume_mult)):
+                    _sweep_logger.info(
+                        f'[SWEEP_RESULT] sym={symbol} type=equal_level dist={touch_pct:.2f}%'
+                    )
+                    get_smc_logger().log_sweep(symbol, 'equal_level', touch_pct)
+                    return LiquiditySweep(
+                        index=check_idx,
+                        swept_level=swing_high_price,
+                        sweep_high=check_candle['high'],
+                        sweep_low=check_candle['low'],
+                        direction='bearish',
+                        sweep_type='equal_level'
+                    )
 
     return None
 

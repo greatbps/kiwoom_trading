@@ -9,7 +9,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass, asdict
-from datetime import datetime
+from datetime import datetime, date
 from typing import List, Dict, Tuple, Optional
 from collections import Counter
 
@@ -321,6 +321,9 @@ class ReentryMetrics:
         self._loss_streak_activated_at: str = ''
         self._loss_streak_consecutive: int = 0
         self._ms_risk_off_no_follow_override: Optional[int] = None
+        # 🔧 2026-03-19: 날짜 기반 자동 해제 + 탈출 부스트
+        self._loss_streak_activated_date: Optional[date] = None
+        self._lsg_just_released: bool = False    # 해제 직후 1회 부스트 플래그
 
     def record_entry_signal(self):
         """진입 시도 카운트 (쿨다운 체크 직전)"""
@@ -472,15 +475,25 @@ class ReentryMetrics:
         self._conservative_hard_stop_count += 1
 
         # 🔧 2026-02-19: Hard Stop N회 → 당일 거래 종료
+        # 🔥 2026-03-27: halt_mode=soft → full halt 대신 conservative mode만 유지 (기회 살림)
         halt_threshold = config.get('trading_halt_threshold', 2)
+        halt_mode = config.get('halt_mode', 'hard')  # 'hard' or 'soft'
         if self._conservative_hard_stop_count >= halt_threshold and not self._trading_halted:
-            self._trading_halted = True
-            self._trading_halted_at = datetime.now().strftime('%H:%M')
-            halt_msg = (
-                f"[TRADING_HALT] Hard Stop {self._conservative_hard_stop_count}회 >= "
-                f"{halt_threshold} → 당일 거래 종료 ({self._trading_halted_at})"
-            )
-            logger.critical(halt_msg)
+            if halt_mode == 'soft':
+                halt_msg = (
+                    f"[SOFT_HALT] Hard Stop {self._conservative_hard_stop_count}회 >= "
+                    f"{halt_threshold} → SOFT HALT (거래 계속, size×0.3, 고신뢰 신호만)"
+                )
+                logger.warning(halt_msg)
+                # soft halt: _trading_halted = False 유지 → conservative mode만 작동
+            else:
+                self._trading_halted = True
+                self._trading_halted_at = datetime.now().strftime('%H:%M')
+                halt_msg = (
+                    f"[TRADING_HALT] Hard Stop {self._conservative_hard_stop_count}회 >= "
+                    f"{halt_threshold} → 당일 거래 종료 ({self._trading_halted_at})"
+                )
+                logger.critical(halt_msg)
 
         trigger_info = f"symbol={symbol}, pnl={pnl_pct:+.2f}%" if symbol else ""
 
@@ -541,42 +554,94 @@ class ReentryMetrics:
 
     # ─── 🔧 2026-02-19: Loss Streak Guard ───
 
-    def activate_loss_streak_guard(self, consecutive_losses: int, config: Dict) -> Dict:
-        """연패 수에 따라 Loss Streak Guard 활성화/비활성화."""
+    def activate_loss_streak_guard(
+        self, consecutive_losses: int, config: Dict,
+        persisted_activated_date: Optional[str] = None
+    ) -> Dict:
+        """연패 수에 따라 Loss Streak Guard 활성화/비활성화.
+
+        🔧 2026-03-19: 탈출구 추가
+          (A) N 거래일 경과 → 자동 해제 (auto_reset_days)
+          (B) 수익 거래 → 기존 해제 유지
+        🔧 2026-04-02: persisted_activated_date — 재시작 후 디스크에서 복원
+        """
         if not config.get('enabled', False):
             return {'changed': False, 'active': False, 'message': ''}
 
         threshold = config.get('consecutive_loss_threshold', 5)
         self._loss_streak_consecutive = consecutive_losses
+        _lsg_logger = logging.getLogger('loss_streak_guard')
+
+        # 🔧 2026-04-02: 재시작 후 activated_date 복원 (메모리가 None이고 디스크 값이 있을 때)
+        if self._loss_streak_activated_date is None and persisted_activated_date:
+            try:
+                self._loss_streak_activated_date = date.fromisoformat(persisted_activated_date)
+                _lsg_logger.info(
+                    f"[LSG_DATE_RESTORE] activated_date 복원: {persisted_activated_date}"
+                )
+            except Exception:
+                pass
+
+        # 🔧 2026-03-19 (A): 날짜 기반 자동 해제
+        if self._loss_streak_guard and self._loss_streak_activated_date is not None:
+            auto_reset_days = config.get('auto_reset_days', 3)
+            elapsed_days = (date.today() - self._loss_streak_activated_date).days
+            if elapsed_days >= auto_reset_days:
+                self._loss_streak_guard = False
+                self._ms_risk_off_no_follow_override = None
+                self._loss_streak_activated_at = ''
+                self._loss_streak_activated_date = None
+                self._lsg_just_released = True
+                msg = (f"[LSG_AUTO_RESET] {elapsed_days}일 경과 → 자동 해제 "
+                       f"(auto_reset_days={auto_reset_days}, "
+                       f"consecutive={self._loss_streak_consecutive})")
+                _lsg_logger.info(msg)
+                return {'changed': True, 'active': False, 'message': msg}
 
         if consecutive_losses >= threshold and not self._loss_streak_guard:
             self._loss_streak_guard = True
             self._loss_streak_activated_at = datetime.now().strftime('%H:%M')
+            self._loss_streak_activated_date = date.today()
             self._ms_risk_off_no_follow_override = config.get('ms_risk_off_no_follow_limit', 1)
             msg = (f"[LOSS_STREAK_GUARD] 연패 {consecutive_losses}회 >= {threshold} → "
                    f"보호 모드 활성화 ({self._loss_streak_activated_at}): "
                    f"size={config.get('position_size_mult',0.5)*100:.0f}%, "
                    f"EF={config.get('ef_score_threshold',2)}, "
-                   f"MS_nf={config.get('ms_risk_off_no_follow_limit',1)}")
-            logging.getLogger('loss_streak_guard').warning(msg)
+                   f"MS_nf={config.get('ms_risk_off_no_follow_limit',1)}, "
+                   f"auto_reset={config.get('auto_reset_days',3)}일")
+            _lsg_logger.warning(msg)
             return {'changed': True, 'active': True, 'message': msg}
 
         elif consecutive_losses < threshold and self._loss_streak_guard:
             self._loss_streak_guard = False
             self._ms_risk_off_no_follow_override = None
             self._loss_streak_activated_at = ''
+            self._loss_streak_activated_date = None
+            self._lsg_just_released = True
             msg = f"[LOSS_STREAK_GUARD] 연패 해제 ({consecutive_losses}회 < {threshold}) → 보호 모드 해제"
-            logging.getLogger('loss_streak_guard').info(msg)
+            _lsg_logger.info(msg)
             return {'changed': True, 'active': False, 'message': msg}
 
         return {'changed': False, 'active': self._loss_streak_guard, 'message': ''}
 
     def get_loss_streak_adjustments(self, config: Dict) -> Dict:
-        """Loss Streak Guard 적용 값 반환."""
+        """Loss Streak Guard 적용 값 반환.
+
+        🔧 2026-03-19: high_conf_passthrough 필드 추가
+          active=True 이더라도 confidence >= min_confidence_override 이면
+          caller에서 진입 허용 (포지션 사이즈 축소는 유지)
+        """
         if not self._loss_streak_guard or not config.get('enabled', False):
+            # 🔧 2026-03-19: 탈출 부스트 — 해제 직후 1회 70% 사이즈 (완전 100% 대신)
+            _just_released = self._lsg_just_released
+            if _just_released:
+                self._lsg_just_released = False  # 1회 소비
             return {'active': False, 'position_size_mult': 1.0,
                     'ef_score_threshold': None, 'ms_risk_off_no_follow_limit': None,
-                    'consecutive': 0, 'activated_at': ''}
+                    'consecutive': 0, 'activated_at': '',
+                    'high_conf_passthrough': False, 'min_confidence_override': 1.0,
+                    'lsg_just_released': _just_released,
+                    'release_boost_mult': config.get('release_boost_mult', 0.7)}
         return {
             'active': True,
             'activated_at': self._loss_streak_activated_at,
@@ -584,6 +649,11 @@ class ReentryMetrics:
             'position_size_mult': config.get('position_size_mult', 0.5),
             'ef_score_threshold': config.get('ef_score_threshold', 2),
             'ms_risk_off_no_follow_limit': config.get('ms_risk_off_no_follow_limit', 1),
+            # 🔧 2026-03-19: 고확신 진입 허용 (공격형)
+            'high_conf_passthrough': config.get('high_conf_passthrough', True),
+            'min_confidence_override': config.get('min_confidence_override', 0.58),
+            'lsg_just_released': False,
+            'release_boost_mult': config.get('release_boost_mult', 0.7),
         }
 
     def get_market_sensor_status(self) -> Dict:

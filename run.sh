@@ -23,8 +23,20 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
+PYTHON_PID_FILE="/tmp/kiwoom_trading.pid"
+
 is_running() {
-    [ -f "$PID_FILE" ] && ps -p "$(cat $PID_FILE)" > /dev/null 2>&1
+    # Check shell PID file
+    if [ -f "$PID_FILE" ] && ps -p "$(cat $PID_FILE)" > /dev/null 2>&1; then
+        return 0
+    fi
+    # Check Python's own PID lock (bot may have been started outside run.sh)
+    if [ -f "$PYTHON_PID_FILE" ] && ps -p "$(cat $PYTHON_PID_FILE)" > /dev/null 2>&1; then
+        # Sync shell PID file to the actual running PID
+        cp "$PYTHON_PID_FILE" "$PID_FILE" 2>/dev/null
+        return 0
+    fi
+    return 1
 }
 
 # 1단계: 대시보드 (포트폴리오 현황)
@@ -39,9 +51,17 @@ run_dashboard() {
 
 # 2단계: 파이프라인 + 모니터링 (포그라운드)
 run_pipeline_foreground() {
+    # 백그라운드 프로세스 실행 중이면 중지 후 포그라운드 전환
+    if is_running; then
+        echo -e "${YELLOW}[알림]${NC} 백그라운드 프로세스 실행 중 (PID: $(cat $PID_FILE))"
+        echo -e "${YELLOW}[알림]${NC} 포그라운드 전환을 위해 기존 프로세스를 종료합니다..."
+        stop_pipeline
+        sleep 2
+    fi
+
     echo ""
     echo -e "${CYAN}═══════════════════════════════════════════════════════════${NC}"
-    echo -e "${GREEN}  [2/2] 파이프라인 + 모니터링 시작${NC}"
+    echo -e "${GREEN}  [2/2] 파이프라인 + 모니터링 시작 (포그라운드)${NC}"
     echo -e "${CYAN}═══════════════════════════════════════════════════════════${NC}"
     echo ""
     echo "  • 조건검색식 1차 필터링"
@@ -60,6 +80,16 @@ run_pipeline_daemon() {
     if is_running; then
         echo -e "${GREEN}[파이프라인]${NC} 이미 실행 중 (PID: $(cat $PID_FILE))"
         return 0
+    fi
+
+    # Extra guard: Python PID lock still alive (zombie PID_FILE case)
+    if [ -f "$PYTHON_PID_FILE" ]; then
+        _py_pid=$(cat "$PYTHON_PID_FILE" 2>/dev/null)
+        if [ -n "$_py_pid" ] && ps -p "$_py_pid" > /dev/null 2>&1; then
+            echo -e "${GREEN}[파이프라인]${NC} 이미 실행 중 (PID: $_py_pid)"
+            echo "$_py_pid" > "$PID_FILE"
+            return 0
+        fi
     fi
 
     echo ""
