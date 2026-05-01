@@ -54,6 +54,7 @@ FEATURES = [
     'entry_confidence', 'r_pct', 'htf_trend', 'sweep',
     'atr_pct', 'volume_ratio', 'rsi', 'squeeze_on', 'time_slot',
     'choch_grade_enc', 'eq_grade_enc', 'regime_enc', 'guard_enc',
+    'vwap_dist', 'ema_slope', 'vol_zscore',
 ]
 
 
@@ -72,6 +73,9 @@ def _encode(row: dict) -> list:
         _EQ_ENC.get(row.get('eq_grade') or '', 1),
         _REGIME_ENC.get(row.get('regime') or '', 1),
         _GUARD_ENC.get(row.get('guard_state') or '', 0),
+        row.get('vwap_dist') if row.get('vwap_dist') is not None else float('nan'),
+        row.get('ema_slope')  if row.get('ema_slope')  is not None else float('nan'),
+        row.get('vol_zscore') if row.get('vol_zscore') is not None else float('nan'),
     ]
 
 

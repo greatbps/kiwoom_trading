@@ -856,6 +856,23 @@ class IntegratedTradingSystem:
 
                 _sqz = df['squeeze'].iloc[-1] if 'squeeze' in df.columns else None
                 features['squeeze_on'] = int(_sqz == 1 or str(_sqz).lower() in ('true', '1')) if _sqz is not None else 0
+
+                # ── 추가 피처 (v2) ───────────────────────────────────
+                if 'vwap' in df.columns:
+                    _vwap = float(df['vwap'].iloc[-1])
+                    features['vwap_dist'] = round((price - _vwap) / _vwap * 100, 3) if _vwap > 0 else 0.0
+
+                _ema_col = next((c for c in ['ema_20', 'ema20', 'EMA20', 'ma20'] if c in df.columns), None)
+                if _ema_col and len(df) >= 4:
+                    _ema_now  = float(df[_ema_col].iloc[-1])
+                    _ema_prev = float(df[_ema_col].iloc[-4])
+                    features['ema_slope'] = round((_ema_now - _ema_prev) / _ema_prev * 100, 3) if _ema_prev > 0 else 0.0
+
+                if 'volume_zscore' in df.columns:
+                    features['vol_zscore'] = round(float(df['volume_zscore'].iloc[-1]), 2)
+                elif 'volume_std20' in df.columns and _vol_ma > 0:
+                    _vstd = float(df['volume_std20'].iloc[-1])
+                    features['vol_zscore'] = round((_vol - _vol_ma) / _vstd, 2) if _vstd > 0 else 0.0
         except Exception:
             pass
 

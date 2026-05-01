@@ -57,6 +57,9 @@ class FeatureLogger:
                     rsi             REAL,
                     squeeze_on      INTEGER,   -- 1/0
                     time_slot       INTEGER,   -- 진입 시각 (분, 09:00=0)
+                    vwap_dist       REAL,      -- (price - vwap) / vwap * 100
+                    ema_slope       REAL,      -- ema20 3봉 변화율 %
+                    vol_zscore      REAL,      -- 거래량 z-score
 
                     -- 시스템 상태
                     guard_state     TEXT,      -- normal / lsg / conservative
@@ -78,6 +81,16 @@ class FeatureLogger:
                 CREATE INDEX IF NOT EXISTS idx_ef_ts
                 ON entry_features (timestamp)
             """)
+            # 기존 테이블에 신규 컬럼 추가 (없으면 추가, 있으면 무시)
+            for col_def in [
+                "vwap_dist  REAL",
+                "ema_slope  REAL",
+                "vol_zscore REAL",
+            ]:
+                try:
+                    conn.execute(f"ALTER TABLE entry_features ADD COLUMN {col_def}")
+                except Exception:
+                    pass  # 이미 존재
 
     # ── 진입 시 호출 ──────────────────────────────────────────────
 
@@ -95,7 +108,8 @@ class FeatureLogger:
             choch_grade, eq_grade, entry_confidence, r_pct,
             htf_trend, sweep, regime,
             atr_pct, volume_ratio, rsi, squeeze_on,
-            time_slot, guard_state
+            time_slot, guard_state,
+            vwap_dist, ema_slope, vol_zscore
         Returns: 삽입된 row id
         """
         ts = datetime.now().isoformat()
@@ -107,8 +121,9 @@ class FeatureLogger:
                          choch_grade, eq_grade, entry_confidence, r_pct,
                          htf_trend, sweep, regime,
                          atr_pct, volume_ratio, rsi, squeeze_on,
-                         time_slot, guard_state)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                         time_slot, guard_state,
+                         vwap_dist, ema_slope, vol_zscore)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """, (
                     ts, stock_code, stock_name, entry_price,
                     features.get('choch_grade'),
@@ -124,6 +139,9 @@ class FeatureLogger:
                     int(bool(features.get('squeeze_on'))),
                     features.get('time_slot'),
                     features.get('guard_state', 'normal'),
+                    features.get('vwap_dist'),
+                    features.get('ema_slope'),
+                    features.get('vol_zscore'),
                 ))
                 row_id = cur.lastrowid
             logger.debug(f"[FEAT_LOG] {stock_code} entry logged id={row_id}")

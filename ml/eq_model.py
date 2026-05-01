@@ -30,6 +30,9 @@ FEATURES = [
     'eq_grade_enc',      # A=2, B=1, C=0
     'regime_enc',        # BULL=2, SIDEWAYS=1, BEAR=0, UNKNOWN=1
     'guard_enc',         # normal=0, lsg=1, conservative=2
+    'vwap_dist',         # (price - vwap) / vwap * 100
+    'ema_slope',         # ema20 3봉 변화율 %
+    'vol_zscore',        # 거래량 z-score
 ]
 
 _CHOCH_ENC  = {'A': 2, 'A+': 2, 'B': 1, 'C': 0}
@@ -54,6 +57,9 @@ def _encode(row: dict) -> list:
         _EQ_ENC.get(row.get('eq_grade') or '', 1),
         _REGIME_ENC.get(row.get('regime') or '', 1),
         _GUARD_ENC.get(row.get('guard_state') or '', 0),
+        row.get('vwap_dist') if row.get('vwap_dist') is not None else float('nan'),
+        row.get('ema_slope')  if row.get('ema_slope')  is not None else float('nan'),
+        row.get('vol_zscore') if row.get('vol_zscore') is not None else float('nan'),
     ]
 
 
