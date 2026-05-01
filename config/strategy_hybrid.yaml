@@ -1175,8 +1175,8 @@ smc:
     # Gate 5: 현재가 ≥ choch.price → 구조 유지 (하드코드, 설정 불필요)
 
   r_tp:
-    tp1_r_mult: 1.5   # TP1 = entry + 1.5 × (entry - stop) → 50% 부분익절
-    tp2_r_mult: 3.0   # TP2 = entry + 3.0 × (entry - stop) → 잔여 50% 청산
+    tp1_r_mult: 2.0   # TP1 = entry + 2.0 × (entry - stop) → 25% 부분익절
+    tp2_r_mult: 4.0   # TP2 = entry + 4.0 × (entry - stop) → 25% 부분익절, 잔여 50% trailing
 
   # 🔧 2026-04-16: A급 포지션 TIME_EXIT 면제 + 구조기반 연장 보유
   # 조건: eq_grade=A AND choch_grade=A (둘 다 충족해야 발동)
@@ -1187,17 +1187,17 @@ smc:
   a_grade_hold_extension:
     enabled: true
     exempt_time_exit: true         # TIME_EXIT 면제
-    max_bars_mult: 2               # 소프트 상한: time_exit.bars × 2 (10봉→20봉)
+    max_bars_mult: 4               # 소프트 상한: time_exit.bars × 4 (10봉→40봉, 200분)
     structure_exit: true           # bearish CHoCH 확정 → 전량 청산
     structure_weak_vwap: true      # VWAP 이탈 → 50% 선제 축소 (Stage 1)
     structure_weak_vwap_pct: 0.2   # VWAP 이탈 기준 (0.2% 이하)
     profit_lock_tiers:             # MFE_R 달성에 따른 보호선 (entry 기준 R 단위)
-      - {mfe_r: 1.5, floor_r: 0.5}   # 1.5R 달성 → entry+0.5R 보호
-      - {mfe_r: 2.5, floor_r: 1.0}   # 2.5R 달성 → entry+1.0R 보호
-      - {mfe_r: 4.0, floor_r: 2.0}   # 4.0R 달성 → entry+2.0R 보호
-    no_progress_mfe_r: 1.5        # 이 R 미만이면 "진행 없음" 판단 (Profit Lock 미도달 기준)
-    no_progress_bars: 15          # 15봉(75분) 경과 시 NO_PROGRESS_EXIT — 종목 성격에 따라 조정
-                                  # 고변동(SOXL 계열): 10~12 / 일반: 15~20
+      - {mfe_r: 2.0, floor_r: 0.5}   # 2.0R(TP1) 달성 → entry+0.5R 보호
+      - {mfe_r: 3.5, floor_r: 1.5}   # 3.5R 달성 → entry+1.5R 보호
+      - {mfe_r: 5.0, floor_r: 3.0}   # 5.0R 달성 → entry+3.0R 보호 (대박 구간)
+    no_progress_mfe_r: 2.0        # 이 R 미만이면 "진행 없음" 판단 (TP1=2R 대응)
+    no_progress_bars: 30          # 30봉(150분) 경과 시 NO_PROGRESS_EXIT
+                                  # 고변동 계열: 20~25 / 일반: 30
 
 
 # =============================================================================

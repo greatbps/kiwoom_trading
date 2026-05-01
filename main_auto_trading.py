@@ -6761,7 +6761,7 @@ class IntegratedTradingSystem:
                     if 'atr' in df_5min.columns and len(df_5min) > 0:
                         self.positions[stock_code]['atr_at_entry'] = float(df_5min['atr'].iloc[-1])
 
-                    # 🔧 2026-04-16: R-기반 TP 계산 (SL=1R, TP1=1.5R, TP2=3R)
+                    # 🔧 2026-05-01: R-기반 TP 계산 (SL=1R, TP1=2R/25%, TP2=4R/25%, 잔여50%=trailing)
                     if structure_stop_price is not None and current_price > structure_stop_price:
                         _r_tp_cfg = self.config.get('smc.r_tp', {})
                         _tp1_mult = _r_tp_cfg.get('tp1_r_mult', 1.5)

@@ -544,22 +544,24 @@ class OptimizedExitLogic:
                 }
 
         # ====================================================
-        # 3. TP1 이후 → BE 스탑 (손실 방지)
+        # 3. TP2 이후 → BE 스탑 (손실 방지)
+        #    TP1(2R/25%) 후엔 trailing floor가 원금 보호
+        #    TP2(4R/25%) 후에야 BE+buffer 발동 — 휩쏘 방어
         # ====================================================
-        if partial_stage >= 1:
+        if partial_stage >= 2:
             # +0.2% 버퍼: 한국장 호가/슬리피지로 인한 휩쏘 방어
             _be_buffer = self.config.get('risk_control.be_stop_buffer_pct', 0.2)
             _be_stop   = entry_price * (1 + _be_buffer / 100)
             if current_price <= _be_stop:
                 _be_pct = (current_price - entry_price) / entry_price * 100
-                logger.info(f"[BE_STOP] TP1 후 BE+{_be_buffer}% 손절 ({_be_pct:.2f}%)")
+                logger.info(f"[BE_STOP] TP2 후 BE+{_be_buffer}% 손절 ({_be_pct:.2f}%)")
                 console.print(f"[yellow]🔒 BE 스탑(+{_be_buffer}%): {current_price:,.0f} ({_be_pct:+.2f}%)[/yellow]")
-                return True, f"[BE_STOP] TP1 후 BE+{_be_buffer}% 손절 ({_be_pct:.2f}%)", {
+                return True, f"[BE_STOP] TP2 후 BE+{_be_buffer}% 손절 ({_be_pct:.2f}%)", {
                     'profit_pct': profit_pct, 'use_market_order': False, 'emergency': False,
                 }
 
         # ====================================================
-        # 4. R-기반 부분 익절 (TP1=1.5R/50%, TP2=3R/잔여50%)
+        # 4. R-기반 부분 익절 (TP1=2R/25%, TP2=4R/25%, 잔여50%=trailing)
         # ====================================================
         r_tp1_price = position.get('r_tp1_price')
         r_tp2_price = position.get('r_tp2_price')
@@ -570,17 +572,17 @@ class OptimizedExitLogic:
             tp2_pct = (r_tp2_price - entry_price) / entry_price * 100
 
             if partial_stage < 1 and current_price >= r_tp1_price:
-                _r1_reason = f"[R_TP1] +{profit_pct:.1f}% ≥ 1.5R({tp1_pct:.1f}%) → 50% 부분익절"
+                _r1_reason = f"[R_TP1] +{profit_pct:.1f}% ≥ 2R({tp1_pct:.1f}%) → 25% 부분익절"
                 logger.info(_r1_reason)
                 return False, _r1_reason, {
-                    'partial_exit': True, 'stage': 1, 'exit_ratio': 0.5, 'profit_pct': profit_pct,
+                    'partial_exit': True, 'stage': 1, 'exit_ratio': 0.25, 'profit_pct': profit_pct,
                 }
             elif partial_stage == 1 and current_price >= r_tp2_price:
                 position['trailing_active'] = True
-                _r2_reason = f"[R_TP2] +{profit_pct:.1f}% ≥ 3R({tp2_pct:.1f}%) → 잔여 50% + 트레일링 ON"
+                _r2_reason = f"[R_TP2] +{profit_pct:.1f}% ≥ 4R({tp2_pct:.1f}%) → 25% 부분익절 + 트레일링 ON (잔여50%)"
                 logger.info(_r2_reason)
                 return False, _r2_reason, {
-                    'partial_exit': True, 'stage': 2, 'exit_ratio': 0.5, 'profit_pct': profit_pct,
+                    'partial_exit': True, 'stage': 2, 'exit_ratio': 0.25, 'profit_pct': profit_pct,
                 }
 
         # ====================================================
@@ -699,11 +701,14 @@ class OptimizedExitLogic:
 
             trailing_stop_price = highest_price - atr_value * atr_multiplier
 
-            # TP1 이후: BE+buffer 이상 보장
-            if partial_stage >= 1:
+            # TP1 이후: 원금 손실 방지 (entry 이하 차단)
+            # TP2 이후: BE+buffer 보장 (호가/슬리피지 방어)
+            if partial_stage >= 2:
                 _be_buffer = self.config.get('risk_control.be_stop_buffer_pct', 0.2)
                 _min_floor = entry_price * (1 + _be_buffer / 100)
                 trailing_stop_price = max(trailing_stop_price, _min_floor)
+            elif partial_stage >= 1:
+                trailing_stop_price = max(trailing_stop_price, entry_price)
 
             position['trailing_stop_price'] = trailing_stop_price
 
