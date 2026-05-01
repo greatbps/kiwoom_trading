@@ -1303,3 +1303,17 @@ ml_filter:
 monitoring:
   rescan_interval_seconds: 600   # 10분마다 리밸런싱 (기존 5분 → 루프 블로킹 감소)
   analysis_timeout_seconds: 10   # 종목당 AI 분석 최대 10초 (초과 시 스킵)
+
+
+# =============================================================================
+# EQ ML Filter (Entry Quality — 2026-05-01)
+# Phase 1: shadow_mode=true → P(win) 로그만 (차단 안 함)
+# Phase 2: shadow_mode=false → p_win < threshold → 진입 차단
+# 전환 조건: labeled 50건+ + shadow AUC 0.60+
+# =============================================================================
+eq_ml_filter:
+  enabled: true
+  shadow_mode: true           # Phase 1: 로그만 (false로 바꾸면 실전 차단)
+  threshold: 0.40             # P(win) < 0.40 → 차단 (shadow=false일 때)
+  min_train_samples: 50       # 학습 최소 건수
+  retrain_interval_trades: 20 # N거래마다 자동 재학습

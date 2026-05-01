@@ -695,6 +695,12 @@ class IntegratedTradingSystem:
         _re_status = "ON" if self.config.get("regime_engine", {}).get("enabled", True) else "OFF"
         console.print(f"[dim]✓ RegiemeEngine 초기화 완료 — {_re_status}[/dim]")
 
+        # 🔧 2026-05-01: EQ ML Filter (Entry Quality)
+        from ml.feature_logger import FeatureLogger
+        from ml.eq_model import EQModel
+        self.eq_feature_logger = FeatureLogger()
+        self.eq_model = EQModel(config=self.config.config if hasattr(self.config, 'config') else {})
+
         # 🔧 2026-03-31: DriftDetector + PositionSizer + TradeStats 초기화
         from analysis.drift_detector import DriftDetector
         from core.position_sizer import PositionSizer, TradeStats
@@ -804,6 +810,60 @@ class IntegratedTradingSystem:
 
         except Exception as e:
             console.print(f"[yellow]⚠️  한투 브로커 초기화 실패: {e}[/yellow]")
+
+    def _build_eq_features(
+        self,
+        stock_code: str,
+        price: float,
+        df,
+        entry_confidence: float,
+        entry_reason: str,
+    ) -> dict:
+        """EQ ML Filter용 진입 피처 딕셔너리 구성"""
+        features = {}
+
+        # _pending_signal_meta (check_entry_signal에서 설정)
+        _sm = getattr(self, '_pending_signal_meta', {}) or {}
+        features['choch_grade']      = _sm.get('choch_grade')
+        features['htf_trend']        = int(bool(_sm.get('htf_bias')))
+        features['sweep']            = int(bool(_sm.get('sweep')))
+        features['guard_state']      = _sm.get('guard_state', 'normal')
+        features['entry_confidence'] = round(float(entry_confidence or 0.5), 3)
+
+        # r_pct — 포지션에 저장된 값 우선
+        pos = self.positions.get(stock_code, {})
+        features['r_pct']    = pos.get('r_pct', 0.0)
+        features['eq_grade'] = pos.get('eq_grade')
+
+        # 시장 상태
+        try:
+            _rg = self.regime_engine.get_regime() if hasattr(self, 'regime_engine') else {}
+            features['regime'] = _rg.get('regime', 'UNKNOWN') if isinstance(_rg, dict) else str(_rg)
+        except Exception:
+            features['regime'] = 'UNKNOWN'
+
+        # df 기반 기술 지표
+        try:
+            if df is not None and len(df) > 5:
+                _atr = float(df['atr'].iloc[-1]) if 'atr' in df.columns else price * 0.02
+                features['atr_pct'] = round(_atr / price * 100, 3)
+
+                _vol = df['volume'].iloc[-1] if 'volume' in df.columns else 0
+                _vol_ma = df['volume'].rolling(20).mean().iloc[-1] if 'volume' in df.columns else 1
+                features['volume_ratio'] = round(float(_vol / _vol_ma) if _vol_ma > 0 else 1.0, 2)
+
+                features['rsi'] = round(float(df['rsi'].iloc[-1]), 1) if 'rsi' in df.columns else 50.0
+
+                _sqz = df['squeeze'].iloc[-1] if 'squeeze' in df.columns else None
+                features['squeeze_on'] = int(_sqz == 1 or str(_sqz).lower() in ('true', '1')) if _sqz is not None else 0
+        except Exception:
+            pass
+
+        # 진입 시각 (분, 09:00=0 기준)
+        _now = datetime.now()
+        features['time_slot'] = (_now.hour - 9) * 60 + _now.minute
+
+        return features
 
     def _infer_signal_regime(self, entry_reason: str) -> str:
         """entry_reason 텍스트 기반 전략 라벨 추정"""
@@ -8749,6 +8809,24 @@ class IntegratedTradingSystem:
         except Exception as _ml_e:
             logger.debug(f"[ML_GATE] {stock_code} 오류 (무시): {_ml_e}")
 
+        # ── EQ ML Filter (Entry Quality, 2026-05-01) ─────────────────────
+        try:
+            if getattr(self, 'eq_model', None) and self.eq_model.enabled:
+                _eq_feat = self._build_eq_features(stock_code, price, df, entry_confidence, entry_reason)
+                _eq_block, _eq_pwin = self.eq_model.should_block(_eq_feat)
+                _eq_tag = '[EQ_SHADOW]' if self.eq_model.shadow_mode else '[EQ_FILTER]'
+                logger.info(
+                    f"{_eq_tag} {stock_code} {stock_name}: "
+                    f"P(win)={_eq_pwin:.2f} thr={self.eq_model.threshold:.2f} "
+                    f"choch={_eq_feat.get('choch_grade','?')} "
+                    f"regime={_eq_feat.get('regime','?')}"
+                )
+                if _eq_block:
+                    logger.info(f"[EQ_BLOCK] {stock_code}: P(win)={_eq_pwin:.2f} → 진입 차단")
+                    return
+        except Exception as _eq_e:
+            logger.debug(f"[EQ_GATE] {stock_code} 오류 (무시): {_eq_e}")
+
         # Dry-run 모드 체크
         if self.dry_run_mode:
             console.print()
@@ -9018,6 +9096,20 @@ class IntegratedTradingSystem:
             f"reason={entry_reason or ''} | trade_id={trade_id}"
         )
         self._refresh_dashboard_cache()
+
+        # ── EQ Feature Logger 진입 기록 ──────────────────────────────────
+        try:
+            if getattr(self, 'eq_feature_logger', None):
+                _eq_feat = self._build_eq_features(stock_code, price, df, entry_confidence, entry_reason)
+                # SMC 메타는 포지션에 아직 없을 수 있음 — _pending_signal_meta 사용
+                _sm = getattr(self, '_pending_signal_meta', {}) or {}
+                _eq_feat.setdefault('choch_grade', _sm.get('choch_grade'))
+                _eq_feat.setdefault('htf_trend', _sm.get('htf_bias'))
+                _eq_feat.setdefault('sweep', _sm.get('sweep'))
+                self.eq_feature_logger.log_entry(stock_code, stock_name, price, _eq_feat)
+        except Exception as _eqle:
+            logger.debug(f"[EQ_LOG] 진입 기록 실패: {_eqle}")
+        # ─────────────────────────────────────────────────────────────────
 
         # ── TradeLogger 진입 기록 ─────────────────────────────────────────
         try:
@@ -10310,6 +10402,16 @@ class IntegratedTradingSystem:
             )
         except Exception as _sell_db_e:
             logger.error(f"[SELL_DB_ERROR] {stock_code} DB 저장 실패: {_sell_db_e}")
+
+        # ── EQ Feature Logger 결과 기록 ──────────────────────────────────
+        try:
+            if getattr(self, 'eq_feature_logger', None):
+                self.eq_feature_logger.log_outcome(stock_code, profit_pct, reason)
+            if getattr(self, 'eq_model', None):
+                self.eq_model.maybe_retrain(self.eq_feature_logger)
+        except Exception as _eqoe:
+            logger.debug(f"[EQ_LOG] 결과 기록 실패: {_eqoe}")
+        # ─────────────────────────────────────────────────────────────────
 
         # 의사결정 추적 — 청산 신호 기록 + ml_dataset 자동 생성
         try:
