@@ -3582,31 +3582,75 @@ class IntegratedTradingSystem:
                                             logger.critical(f"[KILL_SWITCH_ON] {self._kill_switch_reason} — 신규 진입 전면 차단")
                         failsafe_close_executed = True
 
-                    # 🔧 2026-04-15: EOD 토큰 선제 갱신 (14:45 — 강제청산 5분 전)
-                    # "토큰 만료 후 대응"이 아니라 "만료 전 선제 제거" 전략
+                    # 🔧 2026-05-02: EOD 토큰 무조건 선제 갱신 (14:30 — 강제청산 20분 전)
+                    # 기존 14:45 TTL조건부 → 14:30 무조건 갱신으로 변경
+                    # 이유: Kiwoom이 서버측 토큰을 클라이언트 TTL과 무관하게 만료시키는 사례 발생
                     if (not getattr(self, '_eod_token_refreshed', False) and
-                            current_time.hour == 14 and current_time.minute >= 45):
-                        import time as _time_mod
-                        _tok_exp = getattr(self.api, 'token_expires_at', None)
-                        _tok_ttl = (_tok_exp - _time_mod.time()) if _tok_exp else 0
-                        if _tok_exp is None or _tok_ttl < 600:  # 10분 미만 또는 만료 불명
-                            logger.info(f"[EOD_TOKEN_PRECHECK] 토큰 TTL={_tok_ttl:.0f}s — 선제 갱신 시도")
-                            console.print(f"[yellow]🔄 [EOD_TOKEN_PRECHECK] 토큰 만료 임박({_tok_ttl:.0f}s) — 선제 갱신[/yellow]")
-                            if not self.refresh_access_token():
-                                # 🔧 2026-04-15: 토큰 갱신 실패 → Kill Switch 발동 (거래 불능 상태)
-                                logger.critical("[EOD_TOKEN_FAIL] 토큰 갱신 실패 — Kill Switch 발동")
-                                console.print("[bold red]🛑 [EOD_TOKEN_FAIL] 토큰 갱신 실패 → 신규 진입 차단[/bold red]")
-                                self._kill_switch_active = True
-                                self._kill_switch_triggered_at = datetime.now()
-                                self._kill_switch_reason = "EOD 토큰 갱신 실패 (거래 불능)"
-                        else:
-                            logger.debug(f"[EOD_TOKEN_PRECHECK] 토큰 TTL={_tok_ttl:.0f}s — 갱신 불필요")
+                            current_time.hour == 14 and current_time.minute >= 30):
+                        logger.info("[EOD_TOKEN_PRECHECK] 14:30 도달 — 토큰 무조건 선제 갱신")
+                        console.print("[yellow]🔄 [EOD_TOKEN_PRECHECK] 14:30 토큰 선제 갱신[/yellow]")
+                        if not self.refresh_access_token():
+                            logger.critical("[EOD_TOKEN_FAIL] 토큰 갱신 실패 — Kill Switch 발동")
+                            console.print("[bold red]🛑 [EOD_TOKEN_FAIL] 토큰 갱신 실패 → 신규 진입 차단[/bold red]")
+                            self._kill_switch_active = True
+                            self._kill_switch_triggered_at = datetime.now()
+                            self._kill_switch_reason = "EOD 토큰 갱신 실패 (거래 불능)"
                         self._eod_token_refreshed = True
 
                     # 🔧 2026-02-15: 오버나이트 강제 청산 (14:50, CHoCH A급 제외)
                     if not overnight_close_executed and current_time.hour == 14 and current_time.minute >= 50:
                         await self.force_close_overnight()
                         overnight_close_executed = True
+
+                    # 🔧 2026-05-02: 14:55 overnight 재시도 (14:50 토큰 오류 실패 대비)
+                    if (overnight_close_executed
+                            and not getattr(self, '_overnight_retry_1455', False)
+                            and current_time.hour == 14 and current_time.minute >= 55):
+                        _needs_retry = [
+                            sc for sc, pos in self.positions.items()
+                            if not pos.get('allow_overnight_final_confirm', False)
+                        ]
+                        if _needs_retry:
+                            logger.warning(
+                                f"[OVERNIGHT_RETRY_1455] 미청산 포지션 {_needs_retry} "
+                                f"— 토큰 갱신 후 재시도"
+                            )
+                            console.print(
+                                f"[yellow]🔄 [OVERNIGHT_RETRY_1455] 14:55 재시도: {_needs_retry}[/yellow]"
+                            )
+                            self.refresh_access_token()
+                            await self.force_close_overnight()
+                        self._overnight_retry_1455 = True
+
+                    # 🔧 2026-05-02: 15:00 시장가 강제청산 (14:55도 실패한 최후 수단)
+                    if (overnight_close_executed
+                            and not getattr(self, '_overnight_force_1500', False)
+                            and current_time.hour == 15 and current_time.minute >= 0):
+                        _final_codes = [
+                            sc for sc, pos in self.positions.items()
+                            if not pos.get('allow_overnight_final_confirm', False)
+                        ]
+                        if _final_codes:
+                            logger.critical(
+                                f"[OVERNIGHT_FORCE_1500] 14:55도 실패 → 15:00 시장가 강제: {_final_codes}"
+                            )
+                            console.print(
+                                f"[bold red]🛑 [OVERNIGHT_FORCE_1500] 시장가 강제청산: {_final_codes}[/bold red]"
+                            )
+                            self.refresh_access_token()
+                            for _fc_sc in list(_final_codes):
+                                if _fc_sc not in self.positions:
+                                    continue
+                                _fc_pos = self.positions[_fc_sc]
+                                _fc_cp  = _fc_pos.get('current_price', _fc_pos['entry_price'])
+                                _fc_ep  = _fc_pos['entry_price']
+                                _fc_pnl = (_fc_cp - _fc_ep) / _fc_ep * 100
+                                self.execute_sell(
+                                    _fc_sc, _fc_cp, _fc_pnl,
+                                    "15:00 시장가 강제청산 (overnight)",
+                                    use_market_order=True
+                                )
+                        self._overnight_force_1500 = True
 
                     # ✅ EOD 프로세스 체크 (14:55-14:59 사이에 1회 실행)
                     if not eod_executed and current_time.hour == 14 and 55 <= current_time.minute <= 59:
@@ -5636,11 +5680,17 @@ class IntegratedTradingSystem:
                         pass  # 관측 실패 시 무시 (진입에 영향 없음)
 
                     # SMC 전략 체크 (🔧 2026-01-29: MTF Bias 필터 추가)
+                    # 🔧 2026-05-03: market_regime 전달 (레짐별 RVOL 임계값 + B급 HTF 가드)
+                    try:
+                        _smc_regime, _ = self.market_context.get_regime()
+                    except Exception:
+                        _smc_regime = None
                     signal, reason, details = self.smc_strategy.check_entry_signal(
                         df=df_5min,
                         debug=True,
-                        df_htf=df_30min,  # 30분봉 데이터 (MTF Bias 필터용)
-                        symbol=stock_code  # 🔧 2026-03-10: Sweep Attempt Log
+                        df_htf=df_30min,      # 30분봉 데이터 (MTF Bias 필터용)
+                        symbol=stock_code,    # 🔧 2026-03-10: Sweep Attempt Log
+                        market_regime=_smc_regime,
                     )
 
                     # 🔧 2026-03-18: SMC 디스플레이 캐시 업데이트
@@ -6190,6 +6240,34 @@ class IntegratedTradingSystem:
                                                                 _last_cl / df_5min['close'].iloc[-4] - 1
                                                             ) > _expl_cfg.get('max_3bar_rise', 0.04):
                                                                 logger.debug(f"[EXPLORATION_CHASE] {stock_code}: 3봉 급등 >{_expl_cfg.get('max_3bar_rise',0.04)*100:.0f}% 추격 차단")
+                                                            # F3: GAP_BLOCK — 시가 대비 or N봉 고점 대비 과확장 차단
+                                                            # ① gap_from_open > 10%  : 대우건설형 급등일 추격 방지
+                                                            # ② extension_from_high > 3%: _prev_hi(N봉 기준) 대비 돌파 폭 끝물 방지
+                                                            #    _prev_hi 재사용 → high 갱신 타이밍 버그 없음 (2026-05-03)
+                                                            elif (len(df_5min) > 0 and 'open' in df_5min.columns and (
+                                                                # ① 시가 대비
+                                                                (
+                                                                    _expl_cfg.get('max_gap_from_open', 0) > 0
+                                                                    and float(df_5min['open'].iloc[0]) > 0
+                                                                    and (_last_cl / float(df_5min['open'].iloc[0]) - 1)
+                                                                        > _expl_cfg.get('max_gap_from_open', 0)
+                                                                )
+                                                                or
+                                                                # ② N봉 고점(_prev_hi) 대비 — 타이밍 버그 없이 항상 최신
+                                                                (
+                                                                    _expl_cfg.get('max_extension_from_high', 0) > 0
+                                                                    and _prev_hi > 0
+                                                                    and (_last_cl / _prev_hi - 1)
+                                                                        > _expl_cfg.get('max_extension_from_high', 0)
+                                                                )
+                                                            )):
+                                                                _today_open_g = float(df_5min['open'].iloc[0])
+                                                                _gap_g = (_last_cl / _today_open_g - 1) * 100 if _today_open_g > 0 else 0
+                                                                _ext_g = (_last_cl / _prev_hi - 1) * 100 if _prev_hi > 0 else 0
+                                                                logger.info(
+                                                                    f"[EXPLORATION_GAP_BLOCK] {stock_code} {stock_name}: "
+                                                                    f"시가대비+{_gap_g:.1f}% / {_bo_win}봉고점대비+{_ext_g:.1f}% → 추격 차단"
+                                                                )
                                                             else:
                                                                 _bo_pct = (_last_cl - _prev_hi) / _prev_hi * 100
                                                                 _expl_ok = True
@@ -6472,6 +6550,9 @@ class IntegratedTradingSystem:
                                 _3bar_rise_ag = (_c_now / _c_3b) - 1.0
                     except Exception:
                         pass
+                    # 🔧 2026-05-03: SMC 진입 RVOL 저장 → execute_buy → DB
+                    if _rvol_ag > 0:
+                        self._last_smc_rvol = _rvol_ag
 
                     if choch_grade == 'A' and _aplus_cfg.get('enabled', True):
                         _ap_conf_thr  = _aplus_cfg.get('conf_threshold', 0.75)
@@ -6659,14 +6740,7 @@ class IntegratedTradingSystem:
                             logger.debug(f"[B_CUTOFF] {stock_code} {grade_b_cutoff_str} 이후 차단")
                             return
 
-                    # 🔧 2026-02-26: HTF❌ + B급 CHoCH → 진입 금지 (관찰 전환)
-                    if choch_grade == 'B' and self.config.get('smc.choch_grade.htf_b_block', True):
-                        htf_alive = details.get('htf_trend_alive', True)
-                        if not htf_alive:
-                            logger.debug(f"[HTF_B_BLOCK] {stock_code}")
-                            logger.info(f"[HTF_B_BLOCK] {stock_code} {stock_name}: B급 CHoCH + HTF 미정렬 → 진입 차단")
-                            self._record_blocked_entry(stock_code, stock_name, "HTF_B_BLOCK", "B급 CHoCH + HTF 미정렬", "SMC")
-                            return
+                    # HTF_B_BLOCK: 2026-05-03에 smc_signals.check_entry_signal로 이동 (로그 단일화)
 
                     # 🔧 2026-02-06: 구조 기반 손절가 저장
                     structure_stop_price = details.get('structure_stop_price')
@@ -7242,6 +7316,57 @@ class IntegratedTradingSystem:
                 )
                 return
             # ─────────────────────────────────────────────────────────────────
+
+            # 🔧 2026-05-02: min_mfe_check — Pattern B (EF통과 후 서서히 하락) 방지
+            # 진입 N분 후에도 MFE가 임계값 미달이면 방향 안 잡힌 진입으로 판단 → 청산
+            try:
+                _mfe_cfg = (self.config.get('exit_strategy') or {}).get('min_mfe_check', {})
+                if _mfe_cfg.get('enabled', False):
+                    _mfe_window  = _mfe_cfg.get('window_min', 30)
+                    _min_mfe_pct = _mfe_cfg.get('min_mfe_pct', 0.20)
+                    _entry_time  = position.get('entry_time')
+                    _is_trailing = position.get('trailing_active', False)
+                    _ep          = position['entry_price']
+                    _highest     = position.get('highest_price', _ep)
+                    _mfe_pct     = (_highest - _ep) / _ep * 100 if _ep > 0 else 99.0
+
+                    # overnight 포지션 제외 (entry_date != today)
+                    _skip_overnight = _mfe_cfg.get('skip_overnight', True)
+                    _is_overnight   = False
+                    if _skip_overnight and _entry_time:
+                        _is_overnight = _entry_time.date() < datetime.now().date()
+
+                    if (_entry_time
+                            and not _is_trailing
+                            and not _is_overnight
+                            and (datetime.now() - _entry_time).total_seconds() / 60 >= _mfe_window
+                            and _mfe_pct < _min_mfe_pct):
+
+                        _elapsed_min = (datetime.now() - _entry_time).total_seconds() / 60
+                        _cur_pnl     = (current_price - _ep) / _ep * 100
+                        _mfe_reason  = (
+                            f"MFE부족 ({_elapsed_min:.0f}분 후 MFE={_mfe_pct:.2f}%<{_min_mfe_pct}%)"
+                        )
+                        logger.info(
+                            f"[MFE_EXIT] {stock_code} {position.get('name', '')} "
+                            f"elapsed={_elapsed_min:.0f}m mfe={_mfe_pct:.3f}% pnl={_cur_pnl:+.2f}% → 청산"
+                        )
+                        _exit_with_time = f"{datetime.now().strftime('%H:%M')} {_mfe_reason}"
+                        self.execute_sell(
+                            stock_code, current_price, _cur_pnl,
+                            _exit_with_time, use_market_order=False
+                        )
+                        return
+            except Exception as _mfe_e:
+                logger.debug(f"[MFE_CHECK_ERR] {stock_code}: {_mfe_e}")
+
+            # 🔧 2026-05-02: Hard stop 완화용 regime 업데이트 (10 사이클마다)
+            if self._cycle_count % 10 == 0:
+                try:
+                    _hs_regime, _ = self.market_context.get_regime()
+                    self.exit_logic.market_regime = _hs_regime
+                except Exception:
+                    pass
 
             # 최적화된 청산 로직 호출
             should_exit, exit_reason, exit_info = self.exit_logic.check_exit_signal(
@@ -8975,6 +9100,11 @@ class IntegratedTradingSystem:
             'peak_price': price,   # 최고가 (MFE 계산용)
             'trough_price': price, # 최저가 (MAE 계산용)
 
+            # 🔧 2026-05-03: ML 피처 — DB 저장용
+            # SMC 진입이면 _last_smc_rvol, EXPLORATION이면 _last_expl_rvol
+            'rvol_at_entry': (getattr(self, '_last_smc_rvol', None)
+                              or getattr(self, '_last_expl_rvol', None) or None),
+
             # 🔧 수급 필터 + 피라미딩 (overnight_v2, pyramiding)
             'score_supply_demand': float(scores.get('supply_demand', 50)),
             'pyramid_added': False,    # 피라미딩 추가 여부 (1회 한도)
@@ -9128,7 +9258,8 @@ class IntegratedTradingSystem:
             except Exception:
                 pass
 
-        # 리스크 관리자에 거래 기록
+        # 리스크 관리자에 거래 기록 (ML 피처 포함)
+        _pos = self.positions.get(stock_code, {})
         self.risk_manager.record_trade(
             stock_code=stock_code,
             stock_name=stock_name,
@@ -9136,7 +9267,12 @@ class IntegratedTradingSystem:
             quantity=quantity,
             price=price,
             realized_pnl=0,
-            reason=entry_reason  # 매수 이유 전달
+            reason=entry_reason,
+            choch_grade   = _pos.get('choch_grade') or None,
+            market_regime = getattr(self.exit_logic, 'market_regime', None)
+                            or getattr(self, '_last_regime', None),
+            rvol_at_entry = _pos.get('rvol_at_entry')
+                            or getattr(self, '_last_expl_rvol', None) or None,
         )
 
         console.print(f"✅ 매수 완료 (DB ID: {trade_id})")
@@ -9729,6 +9865,67 @@ class IntegratedTradingSystem:
             traceback.print_exc()
             return False, 0.0
 
+    def _check_carry_conditions(self, stock_code: str, current_price: float, cfg: dict) -> tuple:
+        """🔧 2026-05-02: Overnight carry override 3조건 확인
+        1. 현재가 >= 당일 고가 × 97% (고가 근처 마감)
+        2. 오늘 거래량 >= 5일 평균 × 1.2
+        3. 현재가 >= MA5
+
+        Returns: (bool, reason_str)
+        """
+        def _val(row: dict, keys: list, default: float = 0.0) -> float:
+            for k in keys:
+                v = row.get(k)
+                if v is not None:
+                    try:
+                        return float(str(v).replace(',', ''))
+                    except (ValueError, TypeError):
+                        pass
+            return default
+
+        try:
+            result = self.api.get_ohlcv_data(stock_code, period='D', count=7)
+            if not result or result.get('return_code') != 0:
+                return False, "OHLCV 조회 실패"
+            data = result.get('data', [])
+            if len(data) < 5:
+                return False, f"데이터 부족({len(data)})"
+
+            today  = data[0]
+            prev5  = data[1:6]
+
+            # 1. 고가 근처 마감
+            _high_keys = ['stck_hgpr', 'high_pric', 'high', 'high_price']
+            day_high = _val(today, _high_keys, current_price)
+            near_pct = cfg.get('near_high_pct', 0.97)
+            cond1 = day_high > 0 and current_price >= day_high * near_pct
+
+            # 2. 거래량 증가
+            _vol_keys  = ['acml_vol', 'cntg_vol', 'vol', 'volume']
+            today_vol  = _val(today, _vol_keys)
+            prev_vols  = [_val(d, _vol_keys) for d in prev5 if _val(d, _vol_keys) > 0]
+            avg_vol    = sum(prev_vols) / len(prev_vols) if prev_vols else 0
+            min_vr     = cfg.get('min_volume_ratio', 1.2)
+            cond2      = avg_vol > 0 and today_vol >= avg_vol * min_vr
+
+            # 3. 5일선 위
+            _cls_keys = ['stck_clpr', 'close_pric', 'close', 'close_price']
+            closes    = [_val(d, _cls_keys) for d in prev5 if _val(d, _cls_keys) > 0]
+            ma5       = sum(closes) / len(closes) if closes else 0
+            req_ma5   = cfg.get('require_above_ma5', True)
+            cond3     = (current_price >= ma5) if (req_ma5 and ma5 > 0) else True
+
+            vol_ratio_str = f"{today_vol/avg_vol:.1f}x" if avg_vol > 0 else "N/A"
+            status = (
+                f"고가근처{'✓' if cond1 else '✗'}({current_price:,.0f}/{day_high*near_pct:,.0f})"
+                f" 거래량{'✓' if cond2 else '✗'}({vol_ratio_str})"
+                f" MA5{'✓' if cond3 else '✗'}({current_price:,.0f}/{ma5:,.0f})"
+            )
+            return cond1 and cond2 and cond3, status
+
+        except Exception as e:
+            return False, f"오류: {e}"
+
     async def force_close_overnight(self):
         """🔧 2026-02-15: 오버나이트 강제 청산 (CHoCH A급 제외)"""
         config = self.config.get_section('overnight_close')
@@ -9773,10 +9970,12 @@ class IntegratedTradingSystem:
             grade = pos.get('choch_grade', 'B')  # 미저장 시 B로 간주
 
             if not has_grade:
-                # choch_grade 없음 = 재시작으로 메타데이터 소실 → 안전하게 스킵
-                logger.info(f"[OVERNIGHT_CLOSE] SKIP NO_GRADE (재시작 후 메타소실): {stock_name} ({stock_code})")
-                allowed_count += 1
-                continue
+                # choch_grade 없음 = EXPLORATION 진입 또는 재시작 메타 소실
+                # → B급 간주하여 강제청산 대상으로 처리 (과거 SKIP이 -6% 갭하락 원인)
+                logger.warning(
+                    f"[OVERNIGHT_CLOSE] NO_GRADE: {stock_name} ({stock_code}) "
+                    f"→ B급 간주, 강제청산 대상 (grade='{grade}')"
+                )
 
             # 현재가 조회 (조건 판단에 필요)
             current_price = pos.get('current_price', pos['entry_price'])
@@ -9802,6 +10001,27 @@ class IntegratedTradingSystem:
                 )
                 allowed_count += 1
                 continue
+
+            # 🔧 2026-05-02: Carry override — 기본 조건 미달이라도 3조건 충족 시 허용
+            # 이유: post_exit 분석 → overnight_close 60% 조기청산, 강한 종목 너무 빨리 내려버림
+            _carry_cfg = config.get('carry_override', {})
+            if _carry_cfg.get('enabled', False):
+                _carry_ok, _carry_reason = self._check_carry_conditions(
+                    stock_code, current_price, _carry_cfg
+                )
+                if _carry_ok:
+                    pos['allow_overnight_final_confirm'] = True
+                    console.print(
+                        f"[cyan]  ↑ {stock_name}: CARRY_OVERRIDE ({_carry_reason}) → 오버나이트 허용[/cyan]"
+                    )
+                    logger.info(
+                        f"[CARRY_OVERRIDE] symbol={stock_name} grade={grade} "
+                        f"pnl={profit_pct:+.2f}% {_carry_reason}"
+                    )
+                    allowed_count += 1
+                    continue
+                else:
+                    logger.debug(f"[CARRY_OVERRIDE_SKIP] {stock_name}: {_carry_reason}")
 
             # 허용 조건 미달 → 강제 청산 (사유 로그)
             _deny_reason = []
@@ -10513,7 +10733,9 @@ class IntegratedTradingSystem:
             self._pending_exit_value + _pending_val,
         )
 
-        for _sell_attempt in range(2):
+        # 🔧 2026-05-02: 3회 재시도 (기존 2회) + 토큰 갱신 실패해도 포기 안 함
+        import time as _sell_retry_time
+        for _sell_attempt in range(3):
             try:
                 if use_market_order:
                     # Emergency Hard Stop: 시장가 주문
@@ -10543,15 +10765,52 @@ class IntegratedTradingSystem:
                 break  # 주문 성공 — 루프 탈출
 
             except Exception as e:
-                if _sell_attempt == 0 and ('8005' in str(e) or 'Token이 유효하지 않습니다' in str(e)):
-                    # 🔧 2026-04-15: 토큰 만료 감지 → 재발급 후 재시도
-                    logger.warning(f"[SELL_TOKEN_EXPIRED] {stock_code} 토큰 만료(8005) — 재발급 후 재시도")
-                    console.print(f"[yellow]🔄 토큰 만료 감지 — 재발급 후 매도 재시도[/yellow]")
-                    if not self.refresh_access_token():
-                        logger.critical(f"[SELL_TOKEN_REFRESH_FAIL] {stock_code} 토큰 재발급 실패 — 수동 처리 필요")
-                        console.print(f"[red]❌ 토큰 재발급 실패 — 수동 처리 필요[/red]")
-                        return
-                    # _sell_attempt=1 로 재시도
+                if '8005' in str(e) or 'Token이 유효하지 않습니다' in str(e):
+                    logger.warning(
+                        f"[SELL_TOKEN_EXPIRED] {stock_code} attempt {_sell_attempt+1}/3 "
+                        f"— 토큰 재발급 후 재시도"
+                    )
+                    console.print(
+                        f"[yellow]🔄 토큰 만료(8005) attempt {_sell_attempt+1}/3 — 재시도[/yellow]"
+                    )
+                    if _sell_attempt < 2:
+                        self.refresh_access_token()  # 실패해도 루프 계속 (포기 안 함)
+                        _sell_retry_time.sleep(1)
+                        continue
+                    # 3회 모두 토큰 오류 → Kill Switch + 텔레그램 긴급 알림
+                    logger.critical(
+                        f"[SELL_TOKEN_FAIL_3X] {stock_code} 3회 연속 토큰 오류 — 수동 처리 필요"
+                    )
+                    console.print(f"[bold red]🛑 [SELL_TOKEN_FAIL_3X] 3회 연속 실패 — Kill Switch 발동[/bold red]")
+                    # 신규 진입 전면 차단
+                    self._kill_switch_active = True
+                    self._kill_switch_triggered_at = datetime.now()
+                    self._kill_switch_reason = f"매도 3회 실패 토큰오류 ({stock_code})"
+                    logger.critical(f"[KILL_SWITCH_ON] {self._kill_switch_reason}")
+                    # 텔레그램 긴급 알림 (동기 HTTP — 장애 상황이므로 블로킹 허용)
+                    try:
+                        import requests as _req
+                        _bot  = os.getenv("TELEGRAM_BOT_TOKEN", "")
+                        _cids = os.getenv("TELEGRAM_CHAT_IDS", "")
+                        if _bot and _cids:
+                            _msg = (
+                                f"🚨 *CRITICAL: SELL FAIL 3X*\n"
+                                f"종목: `{stock_code}` {position.get('stock_name','')}\n"
+                                f"오류: 토큰 만료(8005) 3회 연속\n"
+                                f"조치: 신규 진입 차단, *수동 매도 필요*\n"
+                                f"시각: {datetime.now().strftime('%H:%M:%S')}"
+                            )
+                            for _cid in _cids.split(','):
+                                _cid = _cid.strip()
+                                if _cid:
+                                    _req.post(
+                                        f"https://api.telegram.org/bot{_bot}/sendMessage",
+                                        json={"chat_id": _cid, "text": _msg, "parse_mode": "Markdown"},
+                                        timeout=5,
+                                    )
+                    except Exception as _tg_e:
+                        logger.warning(f"[SELL_ALERT_FAIL] 텔레그램 알림 실패: {_tg_e}")
+                    return
                 else:
                     logger.error(f"[SELL_ERROR] {stock_code}: {e}")
                     console.print(f"[red]❌ 매도 API 호출 실패: {e}[/red]")
@@ -10575,7 +10834,7 @@ class IntegratedTradingSystem:
         console.print(f"[green]✓ 매도 주문 성공 - 주문번호: {order_no}[/green]")
         self._pending_exit_value = max(0.0, self._pending_exit_value - _pending_val)
 
-        # 리스크 관리자에 거래 기록
+        # 리스크 관리자에 거래 기록 (ML 피처 포함)
         self.risk_manager.record_trade(
             stock_code=stock_code,
             stock_name=position['name'],
@@ -10583,7 +10842,9 @@ class IntegratedTradingSystem:
             quantity=position['quantity'],
             price=price,
             realized_pnl=realized_profit,
-            reason=reason  # 매도 이유 전달
+            reason=reason,
+            mfe_pct = position.get('mfe_pct') or None,
+            mae_pct = position.get('mae_pct') or None,
         )
 
         # 🔧 2026-03-07: Daily Loss Limit 누적
@@ -10613,7 +10874,8 @@ class IntegratedTradingSystem:
                 )
 
         # 🔧 FIX: 손실 스트릭 업데이트 및 쿨다운 설정
-        is_win = profit_pct > 0
+        is_win  = profit_pct > 0
+        is_loss = profit_pct < 0   # ← line 10725에서 UnboundLocalError 방지
 
         if is_win:
             # 승리 → 스트릭 리셋

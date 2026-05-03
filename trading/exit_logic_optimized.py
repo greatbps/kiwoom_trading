@@ -76,6 +76,10 @@ class OptimizedExitLogic:
         # 🔧 2026-02-19: Loss Streak Guard — EF threshold override
         self.ef_threshold_override: Optional[int] = None
 
+        # 🔧 2026-05-02: Hard stop 조건부 완화를 위한 현재 regime
+        # main_auto_trading.py에서 주기적으로 업데이트 (self.exit_logic.market_regime = regime)
+        self.market_regime: str = 'NEUTRAL'
+
         # 🔧 2026-01-20: 당일 매수 종목 강화 손절 설정
         self.same_day_entry = self.risk_control.get('same_day_entry', {})
         self.same_day_enabled = self.same_day_entry.get('enabled', False)
@@ -363,6 +367,59 @@ class OptimizedExitLogic:
         except Exception:
             pass
 
+        # Signal F: Entry RVOL Collapse — 진입 직후 N봉 내 거래량 급감 + 저점 이탈
+        # guards:
+        #   ① 최소 2봉 후 발동 (1봉 일시 눌림 오컷 방지)
+        #   ② 스윙 저점(최근 3봉 low min) 이탈 확인 — "눌림 후 지지" vs "실패 붕괴" 구분
+        #   ③ 가변 점수: rvol_ratio < 0.3 → 3점, < 0.5 → 2점 (붕괴 강도 반영)
+        rvol_follow_bars       = config.get('rvol_follow_bars', 3)
+        rvol_follow_ratio      = config.get('rvol_follow_ratio', 0.5)
+        rvol_follow_min_bars   = config.get('rvol_follow_min_bars', 2)
+        rvol_follow_price_drop = config.get('rvol_follow_price_drop', 0.003)
+        _bars_since_ef = int(elapsed_minutes / 5) if elapsed_minutes > 0 else 0
+        try:
+            _entry_rvol = position.get('rvol_at_entry')
+            if (
+                _entry_rvol and _entry_rvol > 0
+                and _bars_since_ef >= rvol_follow_min_bars
+                and _bars_since_ef <= rvol_follow_bars
+                and 'volume' in df.columns and len(df) >= 20
+                and 'low' in df.columns
+            ):
+                _cur_vol_f  = df['volume'].iloc[-1]
+                _avg_vol_f  = df['volume'].tail(20).mean()
+                _cur_rvol_f = _cur_vol_f / _avg_vol_f if _avg_vol_f > 0 else 0.0
+                _rvol_ratio = _cur_rvol_f / _entry_rvol
+
+                # 가변 점수 (붕괴 강도)
+                if _rvol_ratio < 0.3:
+                    _f_score = 3   # 완전 붕괴 → 3점
+                elif _rvol_ratio < rvol_follow_ratio:
+                    _f_score = 2   # 50% 미만 → 2점
+                else:
+                    _f_score = 0
+
+                if _f_score > 0:
+                    # 스윙 저점 이탈 확인 — 최근 3봉 low의 최솟값 기준
+                    _recent_low_f   = df['low'].tail(3).min()
+                    _support_broken = current_price < _recent_low_f * (1 - rvol_follow_price_drop)
+                    _price_chg_f    = (current_price - entry_price) / entry_price
+
+                    if _support_broken:
+                        score += _f_score
+                        signals.append(
+                            f'RVOL붕괴({_f_score})[{_entry_rvol:.1f}x→{_cur_rvol_f:.1f}x]'
+                        )
+                        logger.info(
+                            f"[SIGNAL_F] rvol_drop={_cur_rvol_f:.2f} "
+                            f"(entry={_entry_rvol:.1f}x ratio={_rvol_ratio:.2f}) "
+                            f"price_change={_price_chg_f*100:+.2f}% "
+                            f"support_broken=True recent_low={_recent_low_f:.0f} "
+                            f"score_added={_f_score} bars={_bars_since_ef}"
+                        )
+        except Exception:
+            pass
+
         # 로깅 (관찰 구간 내)
         console.print(
             f"[dim]🔍 Early Failure 구조: score={score}/{threshold} "
@@ -460,6 +517,16 @@ class OptimizedExitLogic:
         #      갭다운/급락/테마주 수직 낙하 시 구조 손절이 못 잡는 케이스 방어
         # ====================================================
         _emg_pct = self.config.get('risk_control.emergency_stop_pct', 6.0)
+        # 🔧 2026-05-02: Bull regime(TREND) 시 hard stop 조건부 완화
+        _relax_cfg = (self.config.get('risk_control') or {}).get('hard_stop_relax', {})
+        if (_relax_cfg.get('enabled', False)
+                and getattr(self, 'market_regime', 'NEUTRAL') == 'TREND'):
+            _relax_pct = _relax_cfg.get('bull_pct', 8.0)
+            if _relax_pct > _emg_pct:
+                logger.debug(
+                    f"[HARD_STOP_RELAX] TREND regime → emg_pct {_emg_pct}% → {_relax_pct}%"
+                )
+                _emg_pct = _relax_pct
         if profit_pct <= -_emg_pct:
             # 🔧 1봉 유예: 마지막 봉 종가가 직전 봉 저가를 하향 이탈해야 진짜 붕괴
             # 단순 스파이크(저가 찍고 회복) vs 실제 붕괴를 구분

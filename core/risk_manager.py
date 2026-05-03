@@ -349,7 +349,8 @@ class RiskManager:
         quantity: int,
         price: float,
         realized_pnl: float = 0.0,
-        reason: str = None  # 매수/매도 이유
+        reason: str = None,  # 매수/매도 이유
+        **extras,            # ML 피처: choch_grade, market_regime, rvol_at_entry, mfe_pct, mae_pct
     ):
         """
         거래 기록
@@ -384,7 +385,11 @@ class RiskManager:
             'price': float(price),
             'amount': float(quantity * price),
             'realized_pnl': float(realized_pnl) if realized_pnl is not None else 0.0,
-            'reason': reason  # 매수/매도 이유 (예: "12:34 30분봉 MA5/MA20 골든크로스")
+            'reason': reason,  # 매수/매도 이유
+            # ML 피처 (extras로 전달된 경우에만 포함)
+            **{k: v for k, v in extras.items()
+               if k in ('choch_grade', 'market_regime', 'rvol_at_entry', 'mfe_pct', 'mae_pct')
+               and v is not None},
         }
 
         self.daily_trades.append(trade)

@@ -19,13 +19,18 @@ DB_PATH = Path(__file__).parent.parent / "data" / "trades.db"
 
 _STRATEGY_PATTERN = re.compile(r'^(EXPLORATION|TREND|SMC|MOMENTUM|SWEEP)', re.IGNORECASE)
 _EXIT_KEYWORDS = ("Early Failure", "오버나이트", "Hard Stop", "Trailing", "Stop Loss",
-                  "Time Exit", "Take Profit", "강제청산", "손절", "익절")
+                  "Time Exit", "Take Profit", "강제청산", "손절", "익절",
+                  "트레일링", "ATR", "MFE_EXIT")   # 한글 트레일링 + ATR 추가
+_MANUAL_KEYWORDS = ("HTS_IMPORT", "API_SYNC")      # HTS/외부 수동 체결
 
 
 def _extract_strategy(reason: str) -> str:
     """reason 문자열에서 전략 태그 추출"""
     if not reason:
         return "UNKNOWN"
+    # 수동 HTS/API 체결은 MANUAL로 분류
+    if any(k in reason for k in _MANUAL_KEYWORDS):
+        return "MANUAL"
     m = _STRATEGY_PATTERN.match(reason)
     if m:
         return m.group(1).upper()
@@ -51,8 +56,17 @@ class TradeDB:
         conn.row_factory = sqlite3.Row
         return conn
 
+    # ML 피처 컬럼 목록 (기존 DB 자동 마이그레이션 대상)
+    _ML_COLUMNS = [
+        ("choch_grade",    "TEXT"),     # CHoCH 등급 (A/A+/A-/B/C) — 진입 품질
+        ("market_regime",  "TEXT"),     # 진입 시 시장 레짐 (TREND/NEUTRAL/REVERSAL)
+        ("rvol_at_entry",  "REAL"),     # 진입 시 상대거래량 (1.0 = 평균)
+        ("mfe_pct",        "REAL"),     # 보유 기간 중 최대 유리 움직임 (%)
+        ("mae_pct",        "REAL"),     # 보유 기간 중 최대 불리 움직임 (%)
+    ]
+
     def _init_db(self):
-        """테이블 없으면 생성"""
+        """테이블 없으면 생성, 기존 테이블은 ML 컬럼 마이그레이션"""
         with self._connect() as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS trades (
@@ -79,16 +93,40 @@ class TradeDB:
                 CREATE INDEX IF NOT EXISTS idx_trades_code
                 ON trades (stock_code)
             """)
+            # 기존 DB에 ML 컬럼 없으면 추가 (멱등 — 이미 있으면 무시)
+            existing = {row[1] for row in conn.execute("PRAGMA table_info(trades)")}
+            for col_name, col_type in self._ML_COLUMNS:
+                if col_name not in existing:
+                    conn.execute(f"ALTER TABLE trades ADD COLUMN {col_name} {col_type}")
 
     def insert(self, trade: dict) -> int:
         """
         trade dict 삽입. risk_log.json의 daily_trades 항목을 그대로 받는다.
         이미 동일 timestamp+stock_code가 있으면 무시 (멱등).
+
+        ML 피처 필드 (선택):
+            choch_grade    — CHoCH 등급 (A/A+/B/C)
+            market_regime  — 진입 시 레짐 (TREND/NEUTRAL/REVERSAL)
+            rvol_at_entry  — 진입 시 상대거래량
+            mfe_pct        — 보유 중 최고 수익률 (%)
+            mae_pct        — 보유 중 최대 손실폭 (%)
+
         Returns: inserted row id (0 if skipped)
         """
         ts = trade.get("timestamp", "")
         trade_date = ts[:10] if ts else datetime.now().strftime("%Y-%m-%d")
         strategy = _extract_strategy(trade.get("reason", ""))
+
+        # ML 피처 (None이면 NULL 저장)
+        def _f(key):
+            v = trade.get(key)
+            return float(v) if v is not None else None
+
+        choch_grade   = trade.get("choch_grade") or None
+        market_regime = trade.get("market_regime") or None
+        rvol          = _f("rvol_at_entry")
+        mfe           = _f("mfe_pct")
+        mae           = _f("mae_pct")
 
         with self._connect() as conn:
             # 중복 방지
@@ -102,11 +140,11 @@ class TradeDB:
             cur = conn.execute("""
                 INSERT INTO trades
                     (trade_date, timestamp, stock_code, stock_name,
-                     trade_type, quantity, price, amount, realized_pnl, reason, strategy)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                     trade_type, quantity, price, amount, realized_pnl, reason, strategy,
+                     choch_grade, market_regime, rvol_at_entry, mfe_pct, mae_pct)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
-                trade_date,
-                ts,
+                trade_date, ts,
                 trade["stock_code"],
                 trade.get("stock_name", ""),
                 trade["type"],
@@ -116,6 +154,7 @@ class TradeDB:
                 float(trade.get("realized_pnl", 0) or 0),
                 trade.get("reason", ""),
                 strategy,
+                choch_grade, market_regime, rvol, mfe, mae,
             ))
             return cur.lastrowid
 

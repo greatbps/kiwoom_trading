@@ -399,7 +399,8 @@ class SMCStrategy:
         df_htf: pd.DataFrame,
         choch: StructureBreakEvent,
         liquidity_sweep,
-        debug: bool = True
+        debug: bool = True,
+        market_regime: str = None,    # 🔧 2026-05-03: 레짐별 RVOL 임계값 분기용
     ) -> Tuple[bool, str, Dict]:
         """
         🔧 2026-02-06: SMC 진입 프리필터
@@ -466,29 +467,65 @@ class SMCStrategy:
                 details['reclaim_detected'] = True
                 conditions_met += 1
 
-        # 🔧 2026-02-10 F3: 거래량 확인 (현재 봉 volume > 20봉 평균)
-        # 거래량 없는 가짜 CHoCH 제거
+        # 🔧 2026-02-10 F3 / 2026-05-03 개편:
+        # RVOL 이중 체크 제거 — conditions 카운터(가산점)와 하드 게이트 역할 분리.
+        # volume_confirmed(≥1.0x): 카운터 참여 (필수 아님, 가산점)
+        # RVOL 하드 게이트(≥threshold): 조건 통과 후 단일 강제 차단
+        #
+        # None fallback: market_regime=None → 'NEUTRAL' 처리
+        # (API 실패·초기화 타이밍 오류 시 필터 우회 방지)
+        _regime = market_regime or 'NEUTRAL'
+
+        _cur_rvol_pf = 0.0
         try:
             if 'volume' in df.columns and len(df) >= 20:
                 current_vol = df['volume'].iloc[-1]
                 avg_vol_20 = df['volume'].tail(20).mean()
-                if avg_vol_20 > 0 and current_vol >= avg_vol_20:
-                    details['volume_confirmed'] = True
-                    conditions_met += 1
+                if avg_vol_20 > 0:
+                    _cur_rvol_pf = current_vol / avg_vol_20
+                    if _cur_rvol_pf >= 1.0:
+                        details['volume_confirmed'] = True
+                        conditions_met += 1   # 가산점 — 필수 아님
         except Exception:
             pass
 
         details['conditions_met'] = conditions_met
+        details['rvol_at_prefilter'] = round(_cur_rvol_pf, 2)
 
-        # 최소 조건 충족 확인
+        # 최소 조건 충족 확인 (HTF / Sweep / Reclaim + volume 가산점)
         if conditions_met >= self.prefilter_min_conditions:
+            # ─── 🔧 2026-05-03: RVOL 단일 하드 게이트 ────────────────────────
+            # 레짐별 임계값 (가짜 신호 빈도 순서):
+            #   REVERSAL(가장 엄격) ≥ TREND(중간) ≥ NEUTRAL(기본)
+            _pf_cfg        = (self._raw_config or {}).get('smc', {}).get('entry_prefilter', {})
+            _rvol_neutral  = _pf_cfg.get('rvol_min', 0.0)
+            _rvol_trend    = _pf_cfg.get('rvol_min_trend',    _rvol_neutral)
+            _rvol_reversal = _pf_cfg.get('rvol_min_reversal', _pf_cfg.get('rvol_min_strong', _rvol_neutral))
+
+            if   _regime == 'REVERSAL': _rvol_thr = _rvol_reversal
+            elif _regime == 'TREND':    _rvol_thr = _rvol_trend
+            else:                       _rvol_thr = _rvol_neutral
+
+            if _rvol_thr > 0 and _cur_rvol_pf < _rvol_thr:
+                self.stats['prefilter_rejected'] += 1
+                _rvol_msg = (
+                    f"RVOL={_cur_rvol_pf:.2f}x < {_rvol_thr}x "
+                    f"(regime={_regime})"
+                )
+                logger.info(f"[PREFILTER_RVOL_BLOCK] {_rvol_msg}")
+                if debug:
+                    console.print(f"[yellow]  ❌ [RVOL_BLOCK] {_rvol_msg}[/yellow]")
+                return False, f"프리필터 RVOL 차단: {_rvol_msg}", details
+            # ──────────────────────────────────────────────────────────────────
+
             self.stats['prefilter_passed'] += 1
             reason = (
-                f"[PREFILTER_PASS] 프리필터 통과 ({conditions_met}/{self.prefilter_min_conditions}): "
+                f"[PREFILTER_PASS] ({conditions_met}/{self.prefilter_min_conditions}): "
                 f"HTF={'✅' if details['htf_trend_alive'] else '❌'} "
                 f"Sweep={'✅' if details['liquidity_swept'] else '❌'} "
                 f"Reclaim={'✅' if details['reclaim_detected'] else '❌'} "
-                f"Vol={'✅' if details['volume_confirmed'] else '❌'}"
+                f"Vol={'✅' if details.get('volume_confirmed') else '❌'} "
+                f"RVOL={_cur_rvol_pf:.2f}x✅ regime={_regime}"
             )
             if debug:
                 console.print(f"[green]  ✅ {reason}[/green]")
@@ -496,13 +533,14 @@ class SMCStrategy:
         else:
             self.stats['prefilter_rejected'] += 1
             reason = (
-                f"프리필터 차단 ({conditions_met}/{self.prefilter_min_conditions}): "
+                f"[PREFILTER_BLOCK] ({conditions_met}/{self.prefilter_min_conditions}): "
                 f"HTF={'✅' if details['htf_trend_alive'] else '❌'} "
                 f"Sweep={'✅' if details['liquidity_swept'] else '❌'} "
                 f"Reclaim={'✅' if details['reclaim_detected'] else '❌'} "
-                f"Vol={'✅' if details['volume_confirmed'] else '❌'}"
+                f"Vol={'✅' if details.get('volume_confirmed') else '❌'} "
+                f"RVOL={_cur_rvol_pf:.2f}x regime={_regime}"
             )
-            logger.info(f"[PREFILTER_BLOCK] {reason}")
+            logger.info(reason)
             if debug:
                 console.print(f"[yellow]  ❌ {reason}[/yellow]")
             return False, reason, details
@@ -685,8 +723,9 @@ class SMCStrategy:
         self,
         df: pd.DataFrame,
         debug: bool = True,
-        df_htf: pd.DataFrame = None,  # 🔧 2026-01-29: MTF Bias용 30분봉
-        symbol: str = ''              # 🔧 2026-03-10: Sweep Attempt Log용
+        df_htf: pd.DataFrame = None,    # 🔧 2026-01-29: MTF Bias용 30분봉
+        symbol: str = '',               # 🔧 2026-03-10: Sweep Attempt Log용
+        market_regime: str = None,      # 🔧 2026-05-03: 레짐별 RVOL 임계값 + B급 가드용
     ) -> Tuple[bool, str, Dict]:
         """
         SMC 진입 신호 체크
@@ -795,7 +834,8 @@ class SMCStrategy:
                 df_htf=df_htf,
                 choch=choch,
                 liquidity_sweep=liquidity_sweep,
-                debug=debug
+                debug=debug,
+                market_regime=market_regime,  # 🔧 2026-05-03: 레짐별 RVOL 임계값
             )
             details['prefilter'] = pf_details
             if not pf_passed:
@@ -893,6 +933,24 @@ class SMCStrategy:
                 if debug:
                     console.print(f"[yellow]  ❌ CHoCH {choch_grade}급 차단 (최소 {self.min_choch_grade}급 필요)[/yellow]")
                 return False, f"SMC: CHoCH {choch_grade}급 (최소 {self.min_choch_grade}급 필요, 점수: {grade_score:.0f})", details
+
+        # 🔧 2026-05-03: B급 HTF 미정렬 차단 — main에서 이동 (로그 단일화)
+        # main_auto_trading.py의 htf_b_block 체크를 여기서 처리 → PASS→BLOCK 혼재 제거
+        if choch_grade == 'B' and (self._raw_config or {}).get('smc', {}) \
+                .get('choch_grade', {}).get('htf_b_block', False):
+            _htf_alive_b = details.get('prefilter', {}).get('htf_trend_alive', True)
+            if not _htf_alive_b:
+                _b_regime = market_regime or 'NEUTRAL'
+                logger.info(
+                    f"[HTF_B_BLOCK] {symbol}: "
+                    f"grade=B regime={_b_regime} htf=misaligned → 차단"
+                )
+                if debug:
+                    console.print(
+                        f"[yellow]  ❌ [HTF_B_BLOCK] "
+                        f"grade=B regime={_b_regime} htf=misaligned → 진입 차단[/yellow]"
+                    )
+                return False, f"SMC: CHoCH B급, HTF 미정렬 [HTF_B_BLOCK] regime={_b_regime}", details
 
         # 🔧 Squeeze ON 필수 옵션 체크
         if self.require_squeeze_on and not grade_details.get('squeeze_on', False):
