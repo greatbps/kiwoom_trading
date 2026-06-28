@@ -516,17 +516,24 @@ class OptimizedExitLogic:
         # 1-b. 긴급 Hard Stop (fail-safe, 구조 손절보다 선행)
         #      갭다운/급락/테마주 수직 낙하 시 구조 손절이 못 잡는 케이스 방어
         # ====================================================
-        _emg_pct = self.config.get('risk_control.emergency_stop_pct', 6.0)
-        # 🔧 2026-05-02: Bull regime(TREND) 시 hard stop 조건부 완화
-        _relax_cfg = (self.config.get('risk_control') or {}).get('hard_stop_relax', {})
-        if (_relax_cfg.get('enabled', False)
-                and getattr(self, 'market_regime', 'NEUTRAL') == 'TREND'):
-            _relax_pct = _relax_cfg.get('bull_pct', 8.0)
-            if _relax_pct > _emg_pct:
-                logger.debug(
-                    f"[HARD_STOP_RELAX] TREND regime → emg_pct {_emg_pct}% → {_relax_pct}%"
-                )
-                _emg_pct = _relax_pct
+        _is_swing = (
+            position.get('strategy_horizon', '') == 'SWING' or
+            position.get('strategy', '') == 'swing'
+        )
+        if _is_swing:
+            _emg_pct = self.config.get('risk_control.swing_emergency_stop_pct', 15.0)
+        else:
+            _emg_pct = self.config.get('risk_control.emergency_stop_pct', 6.0)
+            # 🔧 2026-05-02: Bull regime(TREND) 시 hard stop 조건부 완화
+            _relax_cfg = (self.config.get('risk_control') or {}).get('hard_stop_relax', {})
+            if (_relax_cfg.get('enabled', False)
+                    and getattr(self, 'market_regime', 'NEUTRAL') == 'TREND'):
+                _relax_pct = _relax_cfg.get('bull_pct', 8.0)
+                if _relax_pct > _emg_pct:
+                    logger.debug(
+                        f"[HARD_STOP_RELAX] TREND regime → emg_pct {_emg_pct}% → {_relax_pct}%"
+                    )
+                    _emg_pct = _relax_pct
         if profit_pct <= -_emg_pct:
             # 🔧 1봉 유예: 마지막 봉 종가가 직전 봉 저가를 하향 이탈해야 진짜 붕괴
             # 단순 스파이크(저가 찍고 회복) vs 실제 붕괴를 구분
@@ -554,6 +561,48 @@ class OptimizedExitLogic:
                 return True, _emg_reason, {
                     'profit_pct': profit_pct, 'use_market_order': True, 'emergency': True,
                 }
+
+        # ====================================================
+        # 1-c. 오버나이트 포지션 개장 초기 HARD_STOP 유예 (09:00~09:20)
+        #   배경: 시초가 동시호가·기관 프로그램 노이즈로 진짜 추세와 무관한 급락 빈번
+        #   조건: 거래량 < 평균 1.5배 → 유예 (노이즈 구간)
+        #         거래량 ≥ 평균 1.5배 → 즉시 손절 허용 (진짜 폭락)
+        #   note: emergency stop (swing_emergency_stop_pct) 은 1-b에서 이미 처리됨
+        # ====================================================
+        if _is_swing:
+            _defer_cfg = (self.config.get('risk_control') or {}).get('overnight_open_defer', {})
+            if _defer_cfg.get('enabled', True):
+                _now = datetime.now()
+                _end_min = _defer_cfg.get('end_minute', 20)
+                _is_opening_window = (_now.hour == 9 and _now.minute < _end_min)
+                _is_overnight_pos = (
+                    entry_time is not None and
+                    entry_time.date() < _now.date()
+                )
+                if _is_opening_window and _is_overnight_pos:
+                    _vol_surge_ratio = _defer_cfg.get('volume_surge_ratio', 1.5)
+                    _vol_surge = False
+                    _vol_ratio = 0.0
+                    try:
+                        if df is not None and len(df) >= 6 and 'volume' in df.columns:
+                            _curr_vol = float(df['volume'].iloc[-1])
+                            _avg_vol  = float(df['volume'].iloc[-6:-1].mean())
+                            if _avg_vol > 0:
+                                _vol_ratio = _curr_vol / _avg_vol
+                                _vol_surge = _vol_ratio >= _vol_surge_ratio
+                    except Exception:
+                        pass
+                    if not _vol_surge:
+                        logger.info(
+                            f"[OVERNIGHT_DEFER] {stock_code} 09:00~09:{_end_min:02d} HARD_STOP 유예 "
+                            f"(pnl={profit_pct:.2f}%, vol_ratio={_vol_ratio:.2f}x<{_vol_surge_ratio}x)"
+                        )
+                        return False, f"오버나이트 개장 유예 ({profit_pct:.2f}%)", None
+                    else:
+                        logger.warning(
+                            f"[OVERNIGHT_DEFER_SKIP] {stock_code} 거래량 급증 "
+                            f"({_vol_ratio:.2f}x≥{_vol_surge_ratio}x) → 유예 해제"
+                        )
 
         # ====================================================
         # 2. 구조 손절 / Hard Stop (가장 높은 우선순위)
@@ -605,12 +654,27 @@ class OptimizedExitLogic:
                     'emergency': True, 'structure_stop_price': structure_stop_price,
                 }
         else:
-            # 구조 손절 없으면 % 기반 Hard Stop (-max_stop_pct)
-            if profit_pct <= -max_stop_pct:
-                logger.info(f"[HARD_STOP] {profit_pct:.2f}% ≤ -{max_stop_pct}%")
-                return True, f"[HARD_STOP] -{max_stop_pct}% ({profit_pct:.2f}%)", {
-                    'profit_pct': profit_pct, 'use_market_order': True, 'emergency': True,
-                }
+            # 구조 손절 없으면 % 기반 Hard Stop
+            if _is_swing:
+                # SWING: 구조 손절 없는 경우 별도 경고 + 넓은 임계값 사용
+                _swing_hard_stop = self.config.get('risk_control.swing_hard_stop_pct', 12.0)
+                if profit_pct <= -_swing_hard_stop:
+                    logger.info(f"[SWING_HARD_STOP] {profit_pct:.2f}% ≤ -{_swing_hard_stop}% (구조손절 미설정)")
+                    return True, f"[SWING_HARD_STOP] -{_swing_hard_stop}% ({profit_pct:.2f}%)", {
+                        'profit_pct': profit_pct, 'use_market_order': True, 'emergency': True,
+                    }
+                elif profit_pct <= -max_stop_pct:
+                    # 구조 손절 없음 경고 (아직 -12% 미달이므로 청산 안 함, 로그만)
+                    logger.warning(
+                        f"[SWING_NO_STRUCTURE_STOP] {stock_code} 구조손절 미설정 "
+                        f"({profit_pct:.2f}%) — SWING_HARD_STOP_PCT={_swing_hard_stop}% 까지 허용"
+                    )
+            else:
+                if profit_pct <= -max_stop_pct:
+                    logger.info(f"[HARD_STOP] {profit_pct:.2f}% ≤ -{max_stop_pct}%")
+                    return True, f"[HARD_STOP] -{max_stop_pct}% ({profit_pct:.2f}%)", {
+                        'profit_pct': profit_pct, 'use_market_order': True, 'emergency': True,
+                    }
 
         # ====================================================
         # 3. TP2 이후 → BE 스탑 (손실 방지)
@@ -716,9 +780,11 @@ class OptimizedExitLogic:
                 }
 
             # ③ NO_PROGRESS_EXIT: 1.5R 미달 + N봉 경과 → 힘 없는 거래 컷
+            # SWING 포지션 제외: elapsed_minutes는 wall-clock → Day2+ 포지션은 수백봉 초과
             _np_mfe_r = _a_ext_cfg.get('no_progress_mfe_r', 1.5)
             _np_max   = _a_ext_cfg.get('no_progress_bars', 15)
-            if _mfe_r < _np_mfe_r and _bars_since >= _np_max:
+            _is_swing_pos = position.get('strategy_horizon', '') == 'SWING'
+            if not _is_swing_pos and _mfe_r < _np_mfe_r and _bars_since >= _np_max:
                 _np_reason = (
                     f"[NO_PROGRESS_EXIT] MFE={_mfe_r:.2f}R < {_np_mfe_r}R, "
                     f"{_bars_since}봉 ≥ {_np_max}봉, pnl={profit_pct:+.2f}%"
@@ -727,9 +793,10 @@ class OptimizedExitLogic:
                 return True, _np_reason, {'no_progress_exit': True, 'profit_pct': profit_pct}
 
             # ④ A_FORCE_EXIT: 최대 보유 봉수 초과 (time_exit.bars × max_bars_mult)
+            # SWING 포지션 제외: 오버나이트 포지션은 Day2+ 즉시 발동됨
             _mult  = _a_ext_cfg.get('max_bars_mult', 2)
             _a_max = _te_bars * _mult
-            if _bars_since >= _a_max:
+            if not _is_swing_pos and _bars_since >= _a_max:
                 _af_reason = f"[A_FORCE_EXIT] {_bars_since}봉 ≥ {_a_max}봉, pnl={profit_pct:+.2f}%"
                 logger.info(_af_reason)
                 return True, _af_reason, {'a_force_exit': True, 'profit_pct': profit_pct}
@@ -739,9 +806,14 @@ class OptimizedExitLogic:
         #    +2~5%  : ATR×3.0 (느슨 — 추세 유지)
         #    +5~8%  : ATR×2.5 (중간 — 수익 잠금 시작)
         #    +8%+   : ATR×2.0 (타이트 — 최대 수익 보호)
+        # swing 전략은 일중 ATR trailing 제외 — 일봉 기준 청산 별도 적용
         # ====================================================
         _trailing_on_pct = self.config.get('risk_control.trailing_activation_pct', 2.0)
-        if position.get('trailing_active') or profit_pct >= _trailing_on_pct:
+        _is_swing = (
+            position.get('strategy_horizon', '') == 'SWING' or
+            position.get('strategy', '') == 'swing'
+        )
+        if not _is_swing and (position.get('trailing_active') or profit_pct >= _trailing_on_pct):
             position['trailing_active'] = True
 
             atr_value = 0.0
@@ -779,7 +851,16 @@ class OptimizedExitLogic:
             elif partial_stage >= 1:
                 trailing_stop_price = max(trailing_stop_price, entry_price)
 
+            # monotonic 보장: trailing stop은 절대 역행(하락) 불가
+            prev_stop = position.get('trailing_stop_price') or 0
+            calc_stop = trailing_stop_price
+            trailing_stop_price = max(prev_stop, calc_stop)
             position['trailing_stop_price'] = trailing_stop_price
+            logger.debug(
+                f"[TRAIL] {position.get('name','?')} "
+                f"high={highest_price:,.0f} atr={atr_value:.0f}×{atr_multiplier} "
+                f"calc={calc_stop:,.0f} prev={prev_stop:,.0f} final={trailing_stop_price:,.0f}"
+            )
 
             if current_price <= trailing_stop_price:
                 _tr_reason = (

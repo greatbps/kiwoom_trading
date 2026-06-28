@@ -500,10 +500,13 @@ class TradingDatabase:
                     news_sentiment, news_impact, news_keywords, news_titles,
                     realized_profit, profit_rate, holding_duration,
                     entry_context, exit_context, filter_scores,
-                    entry_time, exit_time, holding_minutes
+                    entry_time, exit_time, holding_minutes,
+                    exit_category, exit_subreason, use_for_ml, exit_category_version,
+                    overnight_held
                 ) VALUES (
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s
                 ) RETURNING trade_id
             """, (
                 trade_data['stock_code'],
@@ -534,7 +537,12 @@ class TradingDatabase:
                 json.dumps(trade_data['filter_scores']) if isinstance(trade_data.get('filter_scores'), dict) else trade_data.get('filter_scores'),
                 trade_data.get('entry_time'),
                 trade_data.get('exit_time'),
-                trade_data.get('holding_minutes')
+                trade_data.get('holding_minutes'),
+                trade_data.get('exit_category'),
+                trade_data.get('exit_subreason'),
+                trade_data.get('use_for_ml', True),
+                trade_data.get('exit_category_version', 1),
+                trade_data.get('overnight_held', False),
             ))
 
             trade_id = cursor.fetchone()[0]
@@ -543,6 +551,247 @@ class TradingDatabase:
             return trade_id
         finally:
             self._put_conn(conn)
+
+    def insert_signal_rejection(self, data: Dict[str, Any]) -> None:
+        """신호 거절 이력 기록 (signal_rejections 테이블)"""
+        conn = self._get_conn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO signal_rejections (
+                    stock_code, stock_name, rejection_stage, rejection_reason,
+                    confidence, choch_grade, market_regime,
+                    rvol, atr_percent, price_at_rejection, rejected_at
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                )
+            """, (
+                data['stock_code'],
+                data.get('stock_name'),
+                data['rejection_stage'],
+                data.get('rejection_reason'),
+                data.get('confidence'),
+                data.get('choch_grade'),
+                data.get('market_regime'),
+                data.get('rvol'),
+                data.get('atr_percent'),
+                data.get('price_at_rejection'),
+                data.get('rejected_at'),
+            ))
+            conn.commit()
+            cursor.close()
+        except Exception:
+            pass  # 거절 로깅 실패는 무시 — 트레이딩에 영향 없음
+        finally:
+            self._put_conn(conn)
+
+    def insert_buy_failure(self, data: Dict[str, Any]) -> None:
+        """execute_buy 게이트 차단 기록 (buy_failures 테이블)"""
+        conn = self._get_conn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO buy_failures (
+                    stock_code, stock_name, fail_stage, fail_reason,
+                    confidence, choch_grade, market_regime,
+                    rvol, vwap_distance, atr_percent,
+                    price_at_failure, entry_reason, attempted_at
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                )
+            """, (
+                data['stock_code'],
+                data.get('stock_name'),
+                data['fail_stage'],
+                data.get('fail_reason'),
+                data.get('confidence'),
+                data.get('choch_grade'),
+                data.get('market_regime'),
+                data.get('rvol'),
+                data.get('vwap_distance'),
+                data.get('atr_percent'),
+                data.get('price_at_failure'),
+                data.get('entry_reason'),
+                data.get('attempted_at'),
+            ))
+            conn.commit()
+            cursor.close()
+        except Exception:
+            pass  # 실패 로깅은 무시 — 트레이딩에 영향 없음
+        finally:
+            self._put_conn(conn)
+
+    # ── 스윙 전용 메서드 ────────────────────────────────────────────────────
+
+    def insert_swing_buy(self, data: Dict[str, Any]) -> int:
+        """스윙 매수 기록. swing_pattern/score/regime/stop/target 저장. trade_id 반환."""
+        conn = self._get_conn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO trades (
+                    stock_code, stock_name, trade_type, trade_time,
+                    price, quantity, amount,
+                    condition_name, strategy_config, strategy_name,
+                    entry_reason, entry_time,
+                    swing_pattern, swing_score, market_regime,
+                    stop_price, target_price,
+                    entry_context
+                ) VALUES (
+                    %s, %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s,
+                    %s, %s, %s,
+                    %s, %s,
+                    %s
+                ) RETURNING trade_id
+            """, (
+                data['stock_code'],
+                data['stock_name'],
+                'BUY',
+                data['trade_time'],
+                data['price'],
+                data['quantity'],
+                data['amount'],
+                'SWING',
+                'swing',
+                'swing',
+                data.get('entry_reason'),
+                data.get('trade_time'),
+                data.get('swing_pattern'),
+                data.get('swing_score'),
+                data.get('market_regime'),
+                data.get('stop_price'),
+                data.get('target_price'),
+                json.dumps(data['entry_context']) if isinstance(data.get('entry_context'), dict) else data.get('entry_context'),
+            ))
+            trade_id = cursor.fetchone()[0]
+            conn.commit()
+            cursor.close()
+            return trade_id
+        finally:
+            self._put_conn(conn)
+
+    def insert_swing_sell(self, data: Dict[str, Any]) -> int:
+        """스윙 매도 기록. mfe_pct/mae_pct 포함. trade_id 반환."""
+        conn = self._get_conn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO trades (
+                    stock_code, stock_name, trade_type, trade_time,
+                    price, quantity, amount,
+                    condition_name, strategy_config, strategy_name,
+                    exit_reason, entry_time, exit_time, holding_minutes,
+                    realized_profit, profit_rate,
+                    mfe_pct, mae_pct, peak_price, trough_price,
+                    exit_context
+                ) VALUES (
+                    %s, %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s,
+                    %s, %s, %s, %s,
+                    %s
+                ) RETURNING trade_id
+            """, (
+                data['stock_code'],
+                data['stock_name'],
+                'SELL',
+                data['trade_time'],
+                data['price'],
+                data['quantity'],
+                data['amount'],
+                'SWING',
+                'swing',
+                'swing',
+                data.get('exit_reason'),
+                data.get('entry_time'),
+                data.get('trade_time'),
+                data.get('holding_minutes'),
+                data.get('realized_profit'),
+                data.get('profit_rate'),
+                data.get('mfe_pct'),
+                data.get('mae_pct'),
+                data.get('peak_price'),
+                data.get('trough_price'),
+                json.dumps(data['exit_context']) if isinstance(data.get('exit_context'), dict) else data.get('exit_context'),
+            ))
+            trade_id = cursor.fetchone()[0]
+            conn.commit()
+            cursor.close()
+            return trade_id
+        finally:
+            self._put_conn(conn)
+
+    def update_swing_mfe_mae(self, trade_id: int, mfe_pct: float, mae_pct: float,
+                              peak_price: float, trough_price: float) -> None:
+        """스윙 BUY 레코드의 peak/trough/MAE/MFE 일별 갱신."""
+        conn = self._get_conn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE trades
+                SET mfe_pct = %s, mae_pct = %s,
+                    peak_price = %s, trough_price = %s
+                WHERE trade_id = %s AND trade_type = 'BUY'
+            """, (mfe_pct, mae_pct, peak_price, trough_price, trade_id))
+            conn.commit()
+            cursor.close()
+        except Exception as e:
+            conn.rollback()
+        finally:
+            self._put_conn(conn)
+
+    def insert_swing_features(self, data: Dict[str, Any]) -> int:
+        """SignalEngine 스냅샷을 swing_features 테이블에 저장. id 반환."""
+        conn = self._get_conn()
+        try:
+            cursor = conn.cursor()
+            entry = float(data.get('entry_price') or 0)
+            stop  = float(data.get('stop_price')  or 0)
+            tgt   = float(data.get('target_price') or 0)
+            rr    = round((tgt - entry) / (entry - stop), 2) if entry > stop > 0 else None
+            cursor.execute("""
+                INSERT INTO swing_features (
+                    trade_id, stock_code, entry_date,
+                    pattern, raw_score, final_score, phase, trigger, confidence,
+                    entry_price, stop_price, target_price, rr_ratio, size,
+                    market_regime, meta
+                ) VALUES (
+                    %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s,
+                    %s, %s
+                ) RETURNING id
+            """, (
+                data.get('trade_id'),
+                data['stock_code'],
+                data.get('entry_date'),
+                data.get('pattern'),
+                data.get('raw_score'),
+                data.get('final_score'),
+                data.get('phase'),
+                data.get('trigger'),
+                data.get('confidence'),
+                entry or None,
+                stop  or None,
+                tgt   or None,
+                rr,
+                data.get('size'),
+                data.get('market_regime'),
+                json.dumps(data['meta']) if isinstance(data.get('meta'), dict) else None,
+            ))
+            feat_id = cursor.fetchone()[0]
+            conn.commit()
+            cursor.close()
+            return feat_id
+        finally:
+            self._put_conn(conn)
+
+    # ────────────────────────────────────────────────────────────────────────
 
     def update_trade_exit(self, trade_id: int, exit_data: Dict[str, Any]):
         """매도 시 거래 이력 업데이트"""
@@ -642,6 +891,22 @@ class TradingDatabase:
 
             cursor.close()
             return None
+        finally:
+            self._put_conn(conn)
+
+    def has_sell_for_entry(self, stock_code: str, entry_time: str) -> bool:
+        """동일 진입시각의 SELL 레코드 존재 여부 (이중청산 중복 방지용)"""
+        conn = self._get_conn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT 1 FROM trades WHERE stock_code=%s AND trade_type='SELL' "
+                "AND entry_time=%s LIMIT 1",
+                (stock_code, entry_time)
+            )
+            exists = cursor.fetchone() is not None
+            cursor.close()
+            return exists
         finally:
             self._put_conn(conn)
 

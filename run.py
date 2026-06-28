@@ -12,10 +12,11 @@ import os, sys, signal, subprocess, time, platform
 from pathlib import Path
 from datetime import datetime
 
-SCRIPT_DIR = Path(__file__).parent.resolve()
-PID_FILE   = SCRIPT_DIR / ".auto_trading.pid"
-LOG_DIR    = SCRIPT_DIR / "logs"
-IS_WIN     = platform.system() == "Windows"
+SCRIPT_DIR   = Path(__file__).parent.resolve()
+PID_FILE     = SCRIPT_DIR / ".auto_trading.pid"
+SYS_PID_FILE = Path("/tmp/kiwoom_trading.pid")   # main_auto_trading.py 내부 lock
+LOG_DIR      = SCRIPT_DIR / "logs"
+IS_WIN       = platform.system() == "Windows"
 
 # venv Python 우선, 없으면 현재 인터프리터
 _venv = SCRIPT_DIR / ("venv/Scripts/python.exe" if IS_WIN else "venv/bin/python")
@@ -31,16 +32,17 @@ C = "\033[0;36m"; NC = "\033[0m"
 # ─────────────────────────── 프로세스 관리 ───────────────────────────
 
 def is_running():
-    """(alive: bool, pid: int|None)"""
-    if not PID_FILE.exists():
-        return False, None
-    try:
-        pid = int(PID_FILE.read_text().strip())
-        os.kill(pid, 0)          # 0 = 존재 확인만, 실제로 시그널 보내지 않음
-        return True, pid
-    except (OSError, ValueError, PermissionError):
-        PID_FILE.unlink(missing_ok=True)
-        return False, None
+    """(alive: bool, pid: int|None) — run.py PID파일 + /tmp 시스템 PID파일 이중 확인"""
+    for pf in (PID_FILE, SYS_PID_FILE):
+        if not pf.exists():
+            continue
+        try:
+            pid = int(pf.read_text().strip())
+            os.kill(pid, 0)
+            return True, pid
+        except (OSError, ValueError, PermissionError):
+            pf.unlink(missing_ok=True)
+    return False, None
 
 
 def _spawn_background(log_file: Path) -> subprocess.Popen:
@@ -90,7 +92,41 @@ def run_dashboard():
     subprocess.run([PYTHON, "main_trading.py"], cwd=SCRIPT_DIR)
 
 
+def _kill_existing():
+    """기존 main_auto_trading.py 프로세스 전부 종료 (PID파일 + pgrep 이중 처리)."""
+    alive, pid = is_running()
+    if alive:
+        print(f"{Y}[강제종료]{NC} 기존 프로세스 PID: {pid}")
+        _kill(pid)
+        PID_FILE.unlink(missing_ok=True)
+
+    if not IS_WIN:
+        # pgrep으로 PID 파일에 없는 고아 프로세스도 정리
+        try:
+            result = subprocess.run(
+                ["pgrep", "-f", "main_auto_trading.py"],
+                capture_output=True, text=True,
+            )
+            pids = [int(p) for p in result.stdout.split() if p.strip()]
+            for p in pids:
+                try:
+                    os.kill(p, signal.SIGTERM)
+                except OSError:
+                    pass
+            if pids:
+                time.sleep(2)
+                for p in pids:
+                    try:
+                        os.kill(p, signal.SIGKILL)
+                    except OSError:
+                        pass
+                print(f"{Y}[정리]{NC} 고아 프로세스 {pids} 종료")
+        except Exception:
+            pass
+
+
 def run_foreground():
+    _kill_existing()
     print(f"\n{C}═══════════════════════════════════════════════════════════{NC}")
     print(f"{G}  [2/2] 파이프라인 + 모니터링 (포그라운드){NC}")
     print(f"{C}═══════════════════════════════════════════════════════════{NC}")
@@ -135,6 +171,7 @@ def stop_pipeline():
     print(f"{Y}[중지]{NC} PID: {pid}")
     _kill(pid)
     PID_FILE.unlink(missing_ok=True)
+    SYS_PID_FILE.unlink(missing_ok=True)
     print(f"{G}[완료]{NC}")
 
 

@@ -315,6 +315,11 @@ def record_exit_signal(
     holding_minutes: int = None,
     mfe_pct: float = None,
     mae_pct: float = None,
+    r_multiple: float = None,
+    confidence: float = None,
+    position_size_mult: float = None,
+    exit_market_regime: str = None,
+    risk_per_trade: float = None,
     extra_features: dict = None,
 ) -> Optional[int]:
     """
@@ -330,6 +335,13 @@ def record_exit_signal(
         realized_profit = (price - entry_price) * quantity
         pnl_pct = (price - entry_price) / entry_price * 100
 
+    # r_multiple = pnl / initial_risk (진입 시 손절 % 기준)
+    if r_multiple is None and pnl_pct is not None and risk_per_trade and risk_per_trade > 0:
+        r_multiple = round(pnl_pct / risk_per_trade, 3)
+
+    # regime_transition: 진입→청산 레짐 변화 (DB에서 진입 레짐 조회)
+    regime_transition = None
+
     try:
         conn = _get_conn()
         cur = conn.cursor()
@@ -344,19 +356,38 @@ def record_exit_signal(
         """, (stock_code, stock_name, strategy, STRATEGY_VERSION, exit_reason, price))
         signal_id = cur.fetchone()[0]
 
+        # regime_transition 계산: 진입 레짐 조회 후 "ENTRY→EXIT" 형태로 결합
+        if trade_id and exit_market_regime:
+            cur.execute(
+                "SELECT market_regime FROM trades WHERE trade_id = %s", (trade_id,)
+            )
+            _tr = cur.fetchone()
+            if _tr and _tr[0]:
+                regime_transition = f"{_tr[0]}→{exit_market_regime}"
+
         # trades 업데이트
         if trade_id:
             cur.execute("""
                 UPDATE trades
-                SET exit_signal_id = %s,
-                    exit_time      = NOW(),
-                    exit_reason    = %s,
-                    realized_profit = %s,
-                    profit_rate    = %s,
-                    holding_minutes = %s
+                SET exit_signal_id     = %s,
+                    exit_time          = NOW(),
+                    exit_reason        = %s,
+                    realized_profit    = %s,
+                    profit_rate        = %s,
+                    holding_minutes    = %s,
+                    r_multiple         = %s,
+                    confidence         = COALESCE(confidence, %s),
+                    position_size_mult = COALESCE(position_size_mult, %s),
+                    exit_market_regime = %s,
+                    risk_per_trade     = COALESCE(risk_per_trade, %s),
+                    regime_transition  = %s
                 WHERE trade_id = %s
                   AND exit_signal_id IS NULL
-            """, (signal_id, exit_reason, realized_profit, pnl_pct, holding_minutes, trade_id))
+            """, (
+                signal_id, exit_reason, realized_profit, pnl_pct, holding_minutes,
+                r_multiple, confidence, position_size_mult, exit_market_regime, risk_per_trade,
+                regime_transition, trade_id,
+            ))
 
         conn.commit()
 
@@ -365,6 +396,11 @@ def record_exit_signal(
             updated = _update_ml_exit(
                 cur, conn, trade_id, realized_profit, pnl_pct,
                 mae_pct, mfe_pct, holding_minutes, exit_reason, signal_id,
+                r_multiple=r_multiple, confidence=confidence,
+                position_size_mult=position_size_mult,
+                exit_market_regime=exit_market_regime,
+                risk_per_trade=risk_per_trade,
+                regime_transition=regime_transition,
             )
             # row가 없으면 (구 데이터) 기존 INSERT 방식 fallback
             if not updated:
@@ -375,6 +411,12 @@ def record_exit_signal(
                     extra_features=extra_features,
                     holding_minutes=holding_minutes,
                     exit_reason=exit_reason,
+                    r_multiple=r_multiple,
+                    confidence=confidence,
+                    position_size_mult=position_size_mult,
+                    exit_market_regime=exit_market_regime,
+                    risk_per_trade=risk_per_trade,
+                    regime_transition=regime_transition,
                 )
 
         # ml_decisions later_outcome 채우기 ("막았던 거래가 실제로 어땠는지")
@@ -388,7 +430,7 @@ def record_exit_signal(
         logger.debug(f"[DTRACE] exit_signal {signal_id} {stock_code} pnl={realized_profit}")
         return signal_id
     except Exception as e:
-        logger.debug(f"[DTRACE] record_exit_signal 실패 {stock_code}: {e}")
+        logger.exception(f"[DTRACE] record_exit_signal 실패 {stock_code}: {e}")
         return None
 
 
@@ -479,7 +521,13 @@ def _insert_ml_dataset(cur, conn, trade_id, signal_id, stock_code,
                        extra_features: dict = None,
                        holding_minutes: int = None,
                        exit_reason: str = None,
-                       source_type: str = 'trade'):
+                       source_type: str = 'trade',
+                       r_multiple: float = None,
+                       confidence: float = None,
+                       position_size_mult: float = None,
+                       exit_market_regime: str = None,
+                       risk_per_trade: float = None,
+                       regime_transition: str = None):
     """
     거래 완료 후 ml_dataset 자동 적재.
     filter_feature_snapshot 의존 제거 — trade_signals(entry) + extra_features 직접 사용.
@@ -544,24 +592,45 @@ def _insert_ml_dataset(cur, conn, trade_id, signal_id, stock_code,
                 (trade_id, signal_id, stock_code, entry_time, features,
                  label_pnl, label_pnl_pct, label_binary,
                  label_updown, label_quality, label_risk,
-                 mae_pct, mfe_pct, holding_minutes, exit_reason, source_type)
+                 mae_pct, mfe_pct, holding_minutes, exit_reason, source_type,
+                 r_multiple, confidence, position_size_mult,
+                 exit_market_regime, risk_per_trade, regime_transition)
             VALUES (%s, %s, %s, %s, %s::jsonb,
                     %s, %s, %s,
                     %s, %s, %s,
-                    %s, %s, %s, %s, %s)
+                    %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s)
             ON CONFLICT DO NOTHING
         """, (
             trade_id, signal_id, stock_code, entry_time,
             json.dumps(features),
             realized_profit, pnl_pct, lb,
             lb, lq, mae_pct,
-            mae_pct, mfe_pct, holding_minutes, exit_reason,
-            source_type,
+            mae_pct, mfe_pct, holding_minutes, exit_reason, source_type,
+            r_multiple, confidence, position_size_mult,
+            exit_market_regime, risk_per_trade, regime_transition,
         ))
         conn.commit()
         logger.debug(f"[DTRACE] ml_dataset 생성 trade_id={trade_id} features={list(features.keys())}")
     except Exception as e:
-        logger.debug(f"[DTRACE] ml_dataset 생성 실패 trade_id={trade_id}: {e}")
+        logger.exception(f"[DTRACE] ml_dataset 생성 실패 trade_id={trade_id}: {e}")
+
+
+def _classify_exit_for_ml(exit_reason: str) -> bool:
+    """exit_reason → use_for_ml 여부 (SYSTEM/EXPERIMENT/BROKER → False)"""
+    r = (exit_reason or '').lower()
+    if any(k in r for k in [
+        'overnight_failsafe', '15:25 무조건', '오버나이트 차단', '14:50',
+        '최종 강제 청산', '장 마감 전 강제 청산', '시간 기반 청산', '시간초과',
+        'orphan', 'reconcil', 'broker_sync',
+        'mfe부족', 'min_mfe',
+        'early failure', 'early_failure', '초기 실패 컷',
+        '데드크로스', 'dead_cross', 'ma_cross',
+        '다중 약화 신호', 'squeeze:', 'vwap 하향 돌파', 'exploration',
+        'rs_exit', 'ev_exit', '3봉',
+    ]):
+        return False
+    return True
 
 
 def _update_ml_exit(
@@ -574,6 +643,12 @@ def _update_ml_exit(
     holding_minutes: int,
     exit_reason: str,
     signal_id: int,
+    r_multiple: float = None,
+    confidence: float = None,
+    position_size_mult: float = None,
+    exit_market_regime: str = None,
+    risk_per_trade: float = None,
+    regime_transition: str = None,
 ) -> bool:
     """
     ml_dataset의 trade_id 행에 SELL 결과 라벨을 채운다.
@@ -583,30 +658,39 @@ def _update_ml_exit(
     try:
         lq = _label_quality(pnl_pct)
         lb = 1 if (pnl_pct or 0) > 0 else 0
+        _use_ml = _classify_exit_for_ml(exit_reason)
         cur.execute("""
             UPDATE ml_dataset
-            SET label_pnl       = %s,
-                label_pnl_pct   = %s,
-                label_binary    = %s,
-                label_updown    = %s,
-                label_quality   = %s,
-                label_risk      = %s,
-                mae_pct         = %s,
-                mfe_pct         = %s,
-                holding_minutes = %s,
-                exit_reason     = %s,
-                signal_id       = COALESCE(signal_id, %s)
+            SET label_pnl          = %s,
+                label_pnl_pct      = %s,
+                label_binary       = %s,
+                label_updown       = %s,
+                label_quality      = %s,
+                label_risk         = %s,
+                mae_pct            = %s,
+                mfe_pct            = %s,
+                holding_minutes    = %s,
+                exit_reason        = %s,
+                signal_id          = COALESCE(signal_id, %s),
+                r_multiple         = %s,
+                confidence         = COALESCE(confidence, %s),
+                position_size_mult = COALESCE(position_size_mult, %s),
+                exit_market_regime = %s,
+                risk_per_trade     = COALESCE(risk_per_trade, %s),
+                regime_transition  = %s,
+                use_for_ml         = %s
             WHERE trade_id = %s
               AND label_pnl IS NULL
         """, (
             realized_profit, pnl_pct, lb, lb, lq, mae_pct,
             mae_pct, mfe_pct, holding_minutes, exit_reason, signal_id,
-            trade_id,
+            r_multiple, confidence, position_size_mult, exit_market_regime, risk_per_trade,
+            regime_transition, _use_ml, trade_id,
         ))
         conn.commit()
         return cur.rowcount > 0
     except Exception as e:
-        logger.debug(f"[DTRACE] _update_ml_exit 실패 trade_id={trade_id}: {e}")
+        logger.exception(f"[DTRACE] _update_ml_exit 실패 trade_id={trade_id}: {e}")
         return False
 
 
@@ -622,6 +706,10 @@ def insert_ml_entry(
     entry_type: str = None,
     pending_duration: int = None,
     entry_reason: str = None,
+    entry_features: dict = None,
+    confidence: float = None,
+    position_size_mult: float = None,
+    risk_per_trade: float = None,
 ) -> None:
     """
     BUY 완료 직후 호출 — ml_dataset에 피처만 INSERT (라벨 컬럼은 NULL).
@@ -641,30 +729,67 @@ def insert_ml_entry(
             conn.close()
             return
 
+        entry_features_json = json.dumps(entry_features) if entry_features else None
         cur.execute("""
             INSERT INTO ml_dataset
                 (trade_id, stock_code, entry_time,
                  rvol, price_vs_breakout, vwap_distance,
                  ema_slope, atr_ratio, volume_trend,
                  entry_type, pending_duration,
-                 features, source_type)
+                 features, source_type,
+                 entry_features, confidence, position_size_mult, risk_per_trade)
             VALUES (%s, %s, %s,
                     %s, %s, %s,
                     %s, %s, %s,
                     %s, %s,
-                    %s::jsonb, 'trade')
+                    %s::jsonb, 'trade',
+                    %s::jsonb, %s, %s, %s)
         """, (
             trade_id, stock_code, entry_time,
             feats.get('rvol'), feats.get('price_vs_breakout'), feats.get('vwap_distance'),
             feats.get('ema_slope'), feats.get('atr_ratio'), feats.get('volume_trend'),
             entry_type, pending_duration,
             feats_json,
+            entry_features_json, confidence, position_size_mult, risk_per_trade,
         ))
         conn.commit()
         conn.close()
         logger.debug(f"[DTRACE] ml_entry INSERT trade_id={trade_id} entry_type={entry_type} feats={list(feats.keys())}")
     except Exception as e:
         logger.debug(f"[DTRACE] insert_ml_entry 실패 trade_id={trade_id}: {e}")
+
+
+def update_entry_features(
+    trade_id: int,
+    entry_features: dict = None,
+    confidence: float = None,
+    position_size_mult: float = None,
+    risk_per_trade: float = None,
+) -> None:
+    """
+    BUY 완료 직후 호출 — trades 테이블에 entry_features JSONB + 진입 메타 컬럼 채우기.
+    COALESCE 사용: 이미 값이 있으면 덮어쓰지 않음.
+    """
+    try:
+        conn = _get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE trades
+            SET entry_features     = COALESCE(entry_features, %s::jsonb),
+                confidence         = COALESCE(confidence, %s),
+                position_size_mult = COALESCE(position_size_mult, %s),
+                risk_per_trade     = COALESCE(risk_per_trade, %s)
+            WHERE trade_id = %s
+        """, (
+            json.dumps(entry_features) if entry_features else None,
+            confidence, position_size_mult, risk_per_trade,
+            trade_id,
+        ))
+        conn.commit()
+        conn.close()
+        logger.debug(f"[DTRACE] update_entry_features trade_id={trade_id}")
+    except Exception as e:
+        logger.debug(f"[DTRACE] update_entry_features 실패 trade_id={trade_id}: {e}")
 
 
 def insert_blocked_trade(

@@ -4,6 +4,10 @@
 # 🔧 2026-03-18: DRY_RUN 모드 (true = 주문 없이 신호만 로깅)
 dry_run: false
 
+# 🔍 2026-05-26: 진단 모드 — ACCEPT 종목 watchlist 강제포함 + SMC_DIAG 로그
+# 실거래 진입 조건 변경 없음. 관측 전용. Phase 1 완료 후 false로 전환.
+diagnostic_mode: true
+
 # 🔥 2026-03-26: EXPERIMENT 완전 비활성화 — 리스크 관리 우회로 확인, 영구 차단
 # Hard Stop 3연타 원인: MKT_CTX NO_TRADE_DAY 무시하고 강제 진입
 experiment:
@@ -181,6 +185,48 @@ risk_management:
   max_position_size_pct: 40    # 포지션당 최대 40% (30→40, 적극적)
   hard_max_position: 500000    # 하드 포지션 제한 50만원 (30만→50만, 적극적)
 
+# 🔧 2026-05-07: EDT 실시간 사이징 엔진
+edt_sizer:
+  enabled: true
+  # Kelly 권장 size_mult (offline tracker로 자동 갱신 — logs/edt_symbol_weights.json)
+  # DrawdownEngine 레벨별 부스트 상한:
+  #   NORMAL→1.5 / CAUTION→1.2 / DANGER→1.0(부스트없음) / HALT→0.0
+  # 통합 명령:
+  #   python -m analysis.edt_performance_tracker --days 30
+  #   → logs/edt_symbol_weights.json 자동 갱신
+  # main_auto_trading.py 연동:
+  #   edt_sizer.load_kelly()  # 장 시작 시
+  #   guard_adj, guard_reasons = edt_sizer.check_session_guards(positions, datetime.now(), kospi_pct)
+  #   final_mult = edt_sizer.get_final_mult(base_mult * guard_adj, symbol, tag)
+
+  session_guards:
+    enabled: true
+
+    # Guard 1: DD_HALT 다음 거래일 복귀 방어
+    halt_recovery:
+      enabled: true
+      recovery_days: 1           # HALT 발생 후 방어 모드 유지 거래일 수
+      defensive_end_min: 30      # 복귀 당일 09:00~09:30 진입 완전 차단
+      recovery_size_mult: 0.7    # 30분 이후 당일 size 배수
+
+    # Guard 2: 동일 섹터 집중 리스크
+    sector_concentration:
+      enabled: true
+      max_same_sector: 2         # 동일 섹터 포지션 수 임계값 (이상 시 발동)
+      size_mult: 0.7
+
+    # Guard 3: 무거운 시장(KOSPI 급락) 감지
+    heavy_market:
+      enabled: true
+      drop_threshold_pct: -1.5   # KOSPI 등락률 임계값 (이하 시 발동)
+      size_mult: 0.7
+
+    # Guard 4: 당일 승리 과열 방지
+    win_overheat:
+      enabled: true
+      daily_gain_threshold_pct: 3.0  # 당일 누적 실현 수익 임계값 (%)
+      size_mult: 0.5
+
 risk_control:
   max_daily_loss_pct: 3.0      # SignalOrchestrator L0 필터용 (일일 손실 한도)
   max_weekly_loss_pct: 5.0     # 🔧 REFACTOR: 주간 손실 한도 5%
@@ -215,6 +261,20 @@ risk_control:
   hard_stop_relax:
     enabled: true
     bull_pct: 8.0            # TREND regime 시 긴급 손절 완화 (-6% → -8%)
+
+  # 🔧 2026-05-13: SWING 전용 리스크 임계값 (일봉 중기 추세추종용)
+  swing_hard_stop_pct: 12.0        # SWING 구조손절 없을 때 fallback hard stop (-12%)
+  swing_emergency_stop_pct: 15.0   # SWING 계좌 생존 stop: 플래시 크래시/하한가 방어 (-15%)
+
+  # 🔧 2026-06-26: 오버나이트 포지션 개장 초기 HARD_STOP 유예
+  #   배경: 시초가 동시호가 왜곡/기관 프로그램/ETF 리밸런싱으로 09:00~09:20 가격이 노이즈
+  #   조건: 거래량 < 평균의 volume_surge_ratio배 → 유예 (노이즈)
+  #         거래량 ≥ volume_surge_ratio배 → 즉시 손절 (진짜 폭락)
+  #   emergency stop (swing_emergency_stop_pct=15%)은 이 유예보다 우선 적용됨
+  overnight_open_defer:
+    enabled: true
+    end_minute: 20           # 09:00~09:20 유예 (09:20 이후 정상 HARD_STOP)
+    volume_surge_ratio: 1.5  # 현재봉 거래량 ≥ 직전5봉 평균의 1.5배 → 유예 해제
 
   # 🔧 2026-04-17: 최소 락 (동적 락 제거 후 고정 5분으로 단순화)
   min_hold_minutes: 5
@@ -575,10 +635,32 @@ squeeze_momentum:
 # ========================================
 # 🔥 2026-03-26: overnight 전면 금지 — A급 포함 모든 등급 14:50 강제 청산
 # 근거: A급도 갭다운 리스크 통제 불가 (09:07 에이치브이엠 -3.75% 사례)
+# 🔧 2026-05-11: Soft Carry Mode 도입 — 스윙 전략에서 overnight = 기본 허용
 overnight_close:
   enabled: true
   check_time: "14:50:00"
   use_market_order: true
+
+  # ── Soft Carry Mode (swing_mode: true 시 아래 legacy 조건 무시) ──────────
+  swing_mode: true              # 스윙 전략: overnight 기본 허용, 예외만 차단
+  swing_block_conditions:
+    block_on_reversal_with_loss: true   # 시장 REVERSAL 레짐 + 포지션 손실 중 → 차단
+    max_loss_for_block: -3.0         # hard floor: 등급 무관 -3% 이상 손실이면 항상 차단
+    # 🔧 2026-06-26: 추세 약세 시 낮은 손실 임계값 추가
+    #   배경: B급 보합권(기가비스+5.5%, 비츠로셀+26%)을 -3% hard floor만으로 살렸지만
+    #         -1.5%~-3% 구간에서 추세 약세 종목은 여전히 갭다운 리스크 존재
+    trend_weak_loss_for_block: -1.5  # 추세 약세 등급이면 -1.5%부터 차단
+    trend_weak_grades: ['B', 'C']    # 이 등급 = 추세 약세 간주 (CHoCH 기반)
+
+  # ── 결과 추적 (overnight_tracking 테이블, analysis/overnight_tracker.py) ─
+  tracking:
+    enabled: true
+    policy_version: "v2_weak_trend"  # 현재 정책 버전 태그 (A/B 비교용)
+    saved_winner_threshold: 5.0      # 익일 +5% 이상 = saved_winner
+    wrong_stop_threshold:   3.0      # 강제청산 후 익일 +3% 이상 = wrong_stop
+    correct_stop_threshold: -1.0     # 강제청산 후 익일 -1% 이하 = correct_stop
+
+  # ── Legacy 조건 (swing_mode: false 시 사용) ─────────────────────────────
   # 🔧 2026-04-17: 조건부 오버나이트 허용 (A/A+ + HTF alive + 수익 +1.5% 이상)
   exempt_grades: ['A', 'A+']        # 등급 조건 (단독으론 부족, 아래 조건도 충족 필요)
   min_profit_for_overnight: 1.5     # 최소 쿠션 수익률 (%)
@@ -598,7 +680,7 @@ overnight_close:
 # ========================================
 exit_strategy:
   min_mfe_check:
-    enabled: true
+    enabled: false           # 2026-05-11 비활성화: 스윙 전략에서 인트라데이 30분 체크 부적합
     window_min: 30          # 진입 후 N분 이후 체크 시작 (EF 15분 윈도우 이후)
     min_mfe_pct: 0.20       # MFE 이 % 미만이면 청산 (방향 미진행 판단)
     skip_overnight: true    # 오버나이트 포지션(entry_date != today) 제외
@@ -679,10 +761,17 @@ market_context:
     enabled: true
     fast_period: 20      # EMA20 (단기 추세)
     slow_period: 60      # EMA60 (중기 추세)
-    min_bear_gap_pct: 0.5  # 역배열 허용 임계치: gap이 이 값 미만이면 약역배열로 허용
-                           # 0.5 → gap=-0.44% 허용, gap=-0.6% 차단
-                           # 0.0 (기본) → 모든 역배열 차단 (기존 동작)
+    min_bear_gap_pct: 5.0  # 역배열 허용 임계치: gap이 이 값 미만이면 약역배열로 허용
+                           # 2026-06-08: 3.0→5.0 (KOSPI200 기준 — KOSDAQ 강세 시 KOSPI 약세 감내)
+                           # 3.0 → -3.41% 차단(오늘 KOSDAQ BULL_STRONG인데도 블록)
+                           # 5.0 → -5%+ 역배열만 차단 (진짜 베어마켓 기준)
     # EMA20 < EMA60 → Bear Regime → NO_TRADE_DAY
+
+  # 🔧 2026-06-08: Opening Range 체크 비활성화 (스윙 전략 — 인트라데이 OR 불필요)
+  # OR 하단 여부는 당일 모멘텀 개념 — 멀티데이 구조 기반 스윙에는 적합하지 않음
+  # HTF structure(LH+LL) + EMA regime은 계속 유효
+  opening_range_check:
+    enabled: false
 
   # 🔧 2026-02-26: 재평가 슬롯 (단방향: NO→OK만 허용)
   first_eval_after: "09:30"      # OR 완성 후 최초 평가 허용
@@ -715,7 +804,7 @@ entry_quality:
 trend:
   enabled: false           # ⚠️ 기본 OFF — market_context가 TREND 감지 시 자동 ON
   auto_enable_on_trend: true  # TREND 레짐 감지 시 자동 활성화
-  min_atr_ratio_for_breakout: 0.85  # ATR비율 미달 시 돌파 진입 차단 (NO_TRADE_DAY 보조 방어선)
+  min_atr_ratio_for_breakout: 0.75  # 🔧 2026-06-01: 0.85→0.75 (저변동 상승 포함 — 시간필터 ATR 충돌 해소)
 
   fake_breakout_filter:
     enabled: true
@@ -754,7 +843,7 @@ trend:
   regime_detection:
     ema_fast: 20           # 단기 EMA
     ema_slow: 60           # 중기 EMA
-    trend_ema_gap_pct: 0.5 # EMA 갭 이 이상 → TREND 레짐 판단
+    trend_ema_gap_pct: 0.3 # EMA 갭 이 이상 → TREND 레짐 판단 (0.5→0.3, 2026-06-04: 실측 max=0.20% 기준 완화)
 
   # 포지션 사이즈
   size:
@@ -1070,13 +1159,22 @@ smc:
   enabled: true                        # SMC 전략 활성화
 
   # 스윙 포인트 설정
-  swing_lookback: 20                   # 🔧 2026-03-18: 10→20 (좌표계 불일치 해소 — lookback=10 스윙이 너무 조밀해 5.6% 거리 오차 발생)
+  swing_lookback: 10                   # 🔧 2026-05-26: 20→10 rollback (진단: lb=20 시 swing_count=0~1, signal collapse 확인)
   min_swing_size_pct: 0.3              # 최소 스윙 크기 (%) - 노이즈 제거
 
   # 유동성 스윕 설정
   sweep_threshold_pct: 0.12            # 🔧 2026-03-18: 0.4→0.12% (한국 5분봉 1~2틱 현실화 — 1틱=0.1~0.15%)
   choch_penetration_pct: 0.2          # 🔧 2026-03-18: CHoCH 확정 침투율 (0=비활성) — 1원 초과 CHoCH 차단
   sweep_lookback: 20                   # 유동성 스윕 탐색 범위
+
+  # 🔧 EXP-002: RANGING 조건부 재허용 (2026-05-28 준비 — enabled=false 기본)
+  # EXP-001 리뷰(2026-05-29) 후 enabled: true 전환만으로 활성화
+  # T9a 경로: last_candle이 BEARISH→RANGING 전환 유발 → prev_structure.last_lh 기준으로 CHoCH 평가
+  choch:
+    ranging_choch:
+      enabled: true               # 🔧 EXP-002 활성화 2026-05-29 (T9a 복구 경로)
+      require_prev_trend: bearish # prev=bearish 직후 1캔들 전환만 허용 (T9a 복구 경로)
+      max_transition_age: 1       # 현재 구조상 last_candle 전환만 평가 가능 (값 고정)
 
   # 🔧 2026-03-09: Equal Level Sweep (Tier 2) — 한국 시장 1~2틱 터치 후 반전 패턴
   liquidity_sweep:
@@ -1191,6 +1289,47 @@ smc:
     rvol_min: 1.3                      # 🔧 2026-05-03: RVOL 하드 게이트 — NEUTRAL 레짐 기본값 (0.0=비활성)
     rvol_min_trend: 1.4                # TREND 레짐 — 이미 유동성 충분, 소폭 강화
     rvol_min_reversal: 1.5             # REVERSAL 레짐 — 가짜 반등 빈도 높아 가장 엄격
+
+    # 🔧 2026-05-06: 하락 초기 구간 필터 (Early Downtrend Gate)
+    # "지지선 있어도 매수세 없으면 그냥 깨진다" — 조기 진입 방지 최우선 게이트
+    # 5조건 AND: N봉하락 + MA5이탈 + MA5기울기하락 + 거래량감소 + MA20근방
+    # 로그태그: [EARLY_DOWNTREND] / [EARLY_DOWNTREND_REVERSAL]
+    early_downtrend_filter:
+      enabled: true
+      # 점수 기반 차단: 5조건 중 N개 이상 충족 시 차단
+      min_score: 5                  # 저변동·중간변동(추세유지) 기준 (5=ALL AND)
+      min_score_volatile: 4         # 고변동·중간변동(추세약화) 기준
+      # 3단계 ATR 레짐
+      atr_ratio_volatile: 0.05      # ≥5% → 고변동 (min_score_volatile 무조건 적용)
+      atr_ratio_mid: 0.035          # 3.5~5% → 중간변동 (close<MA20이면 volatile 적용)
+      atr_ratio_stable: 0.03        # <3% → 저변동 (min_score 유지)
+      # 3단계 부분 차단 (score 기반 사이징 계단)
+      partial_size_enabled: true
+      partial_size_mult: 0.5        # score == min_score-1 → size × 0.5  (강한 경고)
+      partial_size_mult_far: 0.7    # score == min_score-2 → size × 0.7  (약한 경고)
+      # 건강한 눌림 예외: 단기눌림 + close>MA20(+gap) + MA20↑ + 중기구조(MA20>MA60) → 차단 우회
+      healthy_pullback_enabled: true
+      healthy_pullback_gap_pct: 0.01   # MA20 이격 하한 (고정) — 이 값과 ATR기반값 중 큰 것 사용
+      hp_gap_atr_mult: 0.5             # ATR 동적 이격 기준: gap > max(1%, ATR × 0.5)
+      # MA20 기울기 기반 동적 size_mult (강한 추세일수록 크게 베팅)
+      hp_slope_strong: 0.02            # MA20 5봉 기울기 > 2% → size×1.3
+      hp_slope_mid:    0.01            # MA20 5봉 기울기 > 1% → size×1.2
+      hp_size_mult_strong: 1.3         # 강한 추세
+      hp_size_mult_mid:    1.2         # 중간 추세
+      hp_size_mult_weak:   1.1         # 약한 추세 (최소 부스트)
+      # 변동성 디스카운트: 고변동 종목 size 자동 감소 (MDD 방어)
+      hp_vol_adj_enabled: true
+      hp_vol_adj_ref_atr: 0.05         # 기준 ATR비율 5% — 초과분만큼 size 축소
+      vol_decline_ratio: 0.9        # 거래량 < 20봉 평균 × ratio
+      ma20_proximity_pct: 0.02      # MA20 ±2% 이내 (진짜 핵심 존)
+      reversal_vol_ratio: 1.3       # 반전 신호: 거래량 ≥ 20봉 평균 × ratio (MA5회복+상승캔들과 AND)
+      # 강한 상승추세 예외: MA20>MA60+gap% + close>MA20 → 건강한 눌림 통과
+      strong_uptrend_exception: true
+      strong_uptrend_gap_pct: 0.03  # MA20-MA60 이격률 기준 (3%)
+      # 튜닝 가이드:
+      #   손실 많다 → atr_ratio_volatile: 0.04 (더 빨리 변동성 모드 진입)
+      #   기회 놓친다 → min_score_volatile: 5 (변동성장도 엄격하게)
+      #   예외 더 넓히기 → strong_uptrend_gap_pct: 0.02
 
   # 🔧 2026-04-15: EMA9 눌림 진입 대기 필터
   # CHoCH 발생 후 EMA9까지 눌림 대기, 가짜 눌림/추격 차단
@@ -1338,6 +1477,8 @@ ml_filter:
 monitoring:
   rescan_interval_seconds: 600   # 10분마다 리밸런싱 (기존 5분 → 루프 블로킹 감소)
   analysis_timeout_seconds: 10   # 종목당 AI 분석 최대 10초 (초과 시 스킵)
+
+max_watchlist_size: 30           # 루프당 최대 처리 종목 수 — API TR 제한 방지 (2026-05-04)
 
 
 # =============================================================================

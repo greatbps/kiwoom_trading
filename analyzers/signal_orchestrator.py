@@ -79,7 +79,7 @@ class SignalOrchestrator:
         # L2: RS 필터
         self.rs_filter = RelativeStrengthFilter(
             lookback_days=60,
-            min_rs_rating=80,  # 초기 30%, 실전 20%로 조정
+            min_rs_rating=70,  # 2026-06-08: 80→70 (상위 30%), 일 3~8개 → 더 많은 종목 확보
             api=api,
         )
 
@@ -144,6 +144,10 @@ class SignalOrchestrator:
             'total_accepted': 0,
             'alpha_rejected': 0  # Phase 2: Multi-Alpha 차단
         }
+
+        # [DIAG_MODE] ACCEPT 이벤트 추적 — {symbol: timestamp}
+        # diagnostic_mode=True 시 main loop이 이 종목을 watchlist 강제 포함
+        self.recent_accepts: dict = {}
 
     def check_l0_system_filter(self, current_cash: float = 0, daily_pnl: float = 0) -> Tuple[bool, str]:
         """
@@ -562,6 +566,8 @@ class SignalOrchestrator:
         # 모든 레벨 통과!
         self.stats['total_accepted'] += 1
         result['allowed'] = True
+        # [DIAG_MODE] ACCEPT 시각 기록
+        self.recent_accepts[stock_code] = datetime.now().timestamp()
 
         # Confidence 기반 포지션 크기 결정 (0.6 ~ 1.0)
         position_multiplier = self.confidence_aggregator.calculate_position_multiplier(final_confidence)
@@ -574,6 +580,11 @@ class SignalOrchestrator:
         signal_logger.info(msg)
 
         return result
+
+    def get_recent_accepts(self, window_minutes: int = 35) -> set:
+        """최근 window_minutes 내 ACCEPT된 종목 코드 집합 반환."""
+        cutoff = datetime.now().timestamp() - window_minutes * 60
+        return {s for s, ts in self.recent_accepts.items() if ts >= cutoff}
 
     def _get_institutional_flow(self, stock_code: str) -> Optional[Dict]:
         """

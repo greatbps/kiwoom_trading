@@ -49,7 +49,14 @@ class SwingPosition:
     max_profit_pct: float = 0.0
     drawdown_pct: float = 0.0
     allocated_size: float = 0.0
+    quantity: int = 0
     position_lots: list = field(default_factory=list)
+
+    # P0: PostgreSQL 연동 필드
+    trade_id: Optional[int] = None          # PostgreSQL BUY trade_id (최초 진입)
+    peak_price: float = 0.0                 # 보유 중 일봉 최고가
+    trough_price: float = 0.0              # 보유 중 일봉 최저가
+    entry_market_regime: str = ''           # 진입 시 레짐
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -69,6 +76,11 @@ class SwingPosition:
             d['entry_date'] = None
         # 하위 호환: 이전 JSON에 없는 필드 기본값 보장
         d.setdefault('ma5_below_days', 0)
+        d.setdefault('quantity', 0)
+        d.setdefault('trade_id', None)
+        d.setdefault('peak_price', 0.0)
+        d.setdefault('trough_price', 0.0)
+        d.setdefault('entry_market_regime', '')
         return cls(**d)
 
 
@@ -137,3 +149,80 @@ class SwingStateManager:
         if not self._loaded:
             self.load()
         return self._positions
+
+
+# ── 청산 이력 (재진입 쿨다운용) ─────────────────────────────────────────────
+
+@dataclass
+class SwingExitRecord:
+    """종목별 마지막 청산 이력 — 재진입 쿨다운과 성과 분석에 사용."""
+    exit_date: str        # ISO 날짜 "2026-06-10"
+    exit_reason: str      # DRAWDOWN_STOP / MA5_EXIT / MA20_EXIT / TIME_EXIT 등
+    exit_pnl_pct: float   # 진입가 대비 손익% (예: -8.53)
+    exit_price: float     # 실제 체결가 (러너 시점엔 0.0, 익스큐터가 갱신)
+    entry_price: float    # 진입가
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> 'SwingExitRecord':
+        return cls(**d)
+
+
+class SwingExitHistoryManager:
+    """종목별 마지막 청산 이력을 JSON 파일로 영속화."""
+
+    def __init__(self, path: str = "data/swing_exit_history.json"):
+        self._path = Path(path)
+        self._history: dict[str, SwingExitRecord] = {}
+        self._loaded = False
+
+    def load(self) -> None:
+        if not self._path.exists():
+            self._history = {}
+            self._loaded = True
+            return
+        try:
+            raw = json.loads(self._path.read_text(encoding='utf-8'))
+            self._history = {
+                code: SwingExitRecord.from_dict(data)
+                for code, data in raw.items()
+            }
+            logger.info(f"[SWING_EXIT_HIST] 로드 완료: {len(self._history)}개 이력")
+        except Exception as e:
+            logger.error(f"[SWING_EXIT_HIST] 로드 실패: {e}")
+            self._history = {}
+        self._loaded = True
+
+    def save(self) -> None:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            data = {code: rec.to_dict() for code, rec in self._history.items()}
+            self._path.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2),
+                encoding='utf-8',
+            )
+        except Exception as e:
+            logger.error(f"[SWING_EXIT_HIST] 저장 실패: {e}")
+
+    def record(self, code: str, rec: SwingExitRecord) -> None:
+        if not self._loaded:
+            self.load()
+        self._history[code] = rec
+        logger.info(
+            f"[SWING_EXIT_HIST] {code} 이력 저장: "
+            f"reason={rec.exit_reason} pnl={rec.exit_pnl_pct:+.2f}% date={rec.exit_date}"
+        )
+
+    def get(self, code: str) -> Optional[SwingExitRecord]:
+        if not self._loaded:
+            self.load()
+        return self._history.get(code)
+
+    def days_since_exit(self, code: str) -> Optional[int]:
+        rec = self.get(code)
+        if rec is None:
+            return None
+        exit_d = date.fromisoformat(rec.exit_date)
+        return (date.today() - exit_d).days

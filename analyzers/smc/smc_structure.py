@@ -301,7 +301,8 @@ class SMCStructureAnalyzer:
         df: pd.DataFrame,
         structure: MarketStructure,
         config: dict = None,
-        symbol: str = ''
+        symbol: str = '',
+        prev_structure: Optional[MarketStructure] = None,
     ) -> Optional[StructureBreakEvent]:
         """
         CHoCH (Change of Character) 탐지 - 추세 전환 (핵심!)
@@ -397,6 +398,36 @@ class SMCStructureAnalyzer:
                         price=last_candle['close'],
                         broken_level=hl_level,
                         direction='bearish',
+                        timestamp=timestamp
+                    )
+
+        # 🔧 EXP-002: RANGING 조건부 CHoCH (T9a 복구 경로)
+        # prev_structure=BEARISH + structure=RANGING → last_candle이 구조를 뒤집었음
+        # prev_structure.last_lh 기준으로 CHoCH 평가 (RANGING structure는 last_lh=None일 수 있음)
+        _ranging_cfg = (_cfg.get('choch') or {}).get('ranging_choch', {})
+        if _ranging_cfg.get('enabled', False):
+            _req_prev = _ranging_cfg.get('require_prev_trend', 'bearish')
+            _prev_trend = prev_structure.trend.value if prev_structure is not None else None
+            if (structure.trend == MarketTrend.RANGING
+                    and _prev_trend == _req_prev
+                    and prev_structure is not None
+                    and prev_structure.last_lh is not None):
+                lh_level = prev_structure.last_lh.price
+                penetration = lh_level * (choch_penetration_pct / 100)
+                if (last_candle['high'] > lh_level + penetration
+                        and last_candle['close'] > lh_level
+                        and body_ratio >= 0.5):
+                    _pen_pct = (last_candle['high'] - lh_level) / lh_level * 100
+                    get_smc_logger().log_choch(
+                        symbol, 'bullish', lh_level,
+                        last_candle['high'], last_candle['close'], _pen_pct
+                    )
+                    return StructureBreakEvent(
+                        type=StructureBreak.CHOCH,
+                        index=last_idx,
+                        price=last_candle['close'],
+                        broken_level=lh_level,
+                        direction='bullish',
                         timestamp=timestamp
                     )
 

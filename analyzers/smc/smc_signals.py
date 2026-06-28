@@ -393,6 +393,348 @@ class SMCStrategy:
 
         return False
 
+    def check_early_downtrend(
+        self,
+        df: pd.DataFrame,
+        debug: bool = True,
+        symbol: str = '',
+    ) -> Tuple[bool, str, float]:
+        """
+        🔧 2026-05-06: 하락 초기 구간 필터 (Early Downtrend Gate)
+
+        반환: (blocked, reason, size_mult)
+          blocked=True         → 완전 차단
+          blocked=False, mult<1 → 부분 차단 (사이징 감소)
+          blocked=False, mult=1 → 정상 통과
+
+        v3 개선 (2026-05-06):
+        - ATR 레짐 3단계: 고변동 / 중간(추세 감응) / 저변동
+        - 부분 차단: score == min_score-1 → size_mult 반환
+        - 로그: next_3d/5d/10d_return null 필드 추가
+        """
+        try:
+            import json as _json
+            _pf_cfg  = (self._raw_config or {}).get('smc', {}).get('entry_prefilter', {})
+            _edt_cfg = _pf_cfg.get('early_downtrend_filter', {})
+            if not _edt_cfg.get('enabled', True):
+                return False, "", 1.0
+
+            if len(df) < 25:
+                return False, "", 1.0
+
+            close  = df['close']
+            volume = df['volume']
+
+            vol_decline  = _edt_cfg.get('vol_decline_ratio', 0.9)
+            ma20_prox    = _edt_cfg.get('ma20_proximity_pct', 0.02)
+            reversal_vol = _edt_cfg.get('reversal_vol_ratio', 1.3)
+            uptrend_gap  = _edt_cfg.get('strong_uptrend_gap_pct', 0.03)
+
+            ma5      = close.rolling(5).mean()
+            ma20     = close.rolling(20).mean()
+            vol_ma20 = volume.rolling(20).mean()
+
+            cur_close  = close.iloc[-1]
+            cur_ma5    = ma5.iloc[-1]
+            cur_ma20   = ma20.iloc[-1]
+            cur_vol    = volume.iloc[-1]
+            cur_vol_ma = vol_ma20.iloc[-1]
+
+            if cur_ma5 <= 0 or cur_ma20 <= 0 or cur_vol_ma <= 0:
+                return False, "", 1.0
+
+            # ── 5개 조건 점수화 ────────────────────────────────────────────────
+            cond1 = all(close.iloc[-i] < close.iloc[-i - 1] for i in range(1, 4))  # 3봉 연속 하락
+            cond2 = cur_close < cur_ma5                                              # MA5 하향 이탈
+            cond3 = cur_ma5 < ma5.iloc[-3]                                          # MA5 기울기 하락
+            cond4 = cur_vol < cur_vol_ma * vol_decline                              # 거래량 감소
+            cond5 = abs(cur_close - cur_ma20) / cur_ma20 < ma20_prox               # MA20 근방
+
+            score = sum([cond1, cond2, cond3, cond4, cond5])
+
+            # ── 3단계 ATR 레짐 → 동적 min_score ──────────────────────────────
+            # 고변동(≥atr_high) → 무조건 민감 (min_score_volatile)
+            # 중간(atr_mid~atr_high) → 추세 약화 여부로 분기
+            # 저변동(<atr_mid)  → 기회 유지 (min_score)
+            _atr_ratio = 0.0
+            try:
+                _atr_len = min(14, len(df) - 1)
+                _atr_val = (df['high'].iloc[-_atr_len:] - df['low'].iloc[-_atr_len:]).mean()
+                _atr_ratio = _atr_val / cur_close if cur_close > 0 else 0.0
+            except Exception:
+                pass
+
+            _atr_high = _edt_cfg.get('atr_ratio_volatile', 0.05)
+            _atr_mid  = _edt_cfg.get('atr_ratio_mid', 0.035)
+            _ms_base  = _edt_cfg.get('min_score', 5)
+            _ms_vol   = _edt_cfg.get('min_score_volatile', 4)
+
+            if _atr_ratio >= _atr_high:
+                min_score   = _ms_vol
+                _regime_lbl = f"고변동(ATR={_atr_ratio*100:.1f}%≥{_atr_high*100:.0f}%)"
+            elif _atr_ratio >= _atr_mid:
+                trend_weak  = cur_close < cur_ma20
+                min_score   = _ms_vol if trend_weak else _ms_base
+                _trend_flag = "추세약화" if trend_weak else "추세유지"
+                _regime_lbl = (
+                    f"중간변동({_trend_flag},ATR={_atr_ratio*100:.1f}%) "
+                    f"→ min={min_score}"
+                )
+            else:
+                min_score   = _ms_base
+                _regime_lbl = f"저변동(ATR={_atr_ratio*100:.1f}%<{_atr_mid*100:.0f}%)"
+
+            # ── 3단계 부분 차단 ────────────────────────────────────────────────
+            # score == min_score-2 → 0.7x  (약한 경고: 기회 대부분 살림)
+            # score == min_score-1 → 0.5x  (강한 경고: 리스크 절반)
+            # score >= min_score   → 완전 차단 경로 진행
+            _partial_enabled   = _edt_cfg.get('partial_size_enabled', True)
+            _partial_mult_near = _edt_cfg.get('partial_size_mult', 0.5)       # score == ms-1
+            _partial_mult_far  = _edt_cfg.get('partial_size_mult_far', 0.7)   # score == ms-2
+
+            if not _partial_enabled:
+                if score < min_score:
+                    return False, "", 1.0
+            else:
+                if score < min_score - 2:
+                    return False, "", 1.0
+                if score == min_score - 2:
+                    _p2_reason = (
+                        f"하락초기구조 부분차단-약 (score={score}/{min_score}-2, "
+                        f"size×{_partial_mult_far}, {_regime_lbl})"
+                    )
+                    logger.info(f"[EARLY_DOWNTREND_PARTIAL] {symbol} {_p2_reason}")
+                    if debug:
+                        console.print(
+                            f"[yellow]  ⚠ [EDT_PARTIAL_FAR] {symbol} "
+                            f"score={score} → size×{_partial_mult_far}[/yellow]"
+                        )
+                    return False, _p2_reason, _partial_mult_far
+                if score == min_score - 1:
+                    _p1_reason = (
+                        f"하락초기구조 부분차단-강 (score={score}/{min_score}-1, "
+                        f"size×{_partial_mult_near}, {_regime_lbl})"
+                    )
+                    logger.info(f"[EARLY_DOWNTREND_PARTIAL] {symbol} {_p1_reason}")
+                    if debug:
+                        console.print(
+                            f"[yellow]  ⚠ [EDT_PARTIAL_NEAR] {symbol} "
+                            f"score={score} → size×{_partial_mult_near}[/yellow]"
+                        )
+                    return False, _p1_reason, _partial_mult_near
+
+            # score >= min_score → 차단 경로로 진행
+            _ts = str(df.index[-1]) if hasattr(df.index[-1], '__str__') else ''
+
+            # ── 강한 상승추세 예외 ─────────────────────────────────────────────
+            _uptrend_exempt = _edt_cfg.get('strong_uptrend_exception', True)
+            if _uptrend_exempt and len(df) >= 65:
+                ma60     = close.rolling(60).mean()
+                cur_ma60 = ma60.iloc[-1]
+                if cur_ma60 > 0:
+                    st_aligned = cur_ma20 > cur_ma60
+                    st_above   = cur_close > cur_ma20
+                    st_gap     = (cur_ma20 - cur_ma60) / cur_ma60 > uptrend_gap
+                    if st_aligned and st_above and st_gap:
+                        _gap_pct = (cur_ma20 - cur_ma60) / cur_ma60 * 100
+                        logger.info(_json.dumps({
+                            "tag":     "EARLY_DOWNTREND_UPTREND_EXEMPT",
+                            "symbol":  symbol,
+                            "ts":      _ts,
+                            "close":   round(float(cur_close), 2),
+                            "ma20":    round(float(cur_ma20), 2),
+                            "ma60":    round(float(cur_ma60), 2),
+                            "gap_pct": round(_gap_pct, 2),
+                            "score":   score,
+                            "next_3d_return":  None,
+                            "next_5d_return":  None,
+                            "next_10d_return": None,
+                            "hold_days":       None,
+                        }, ensure_ascii=False))
+                        if debug:
+                            console.print(
+                                f"[cyan]  ✅ [UPTREND_EXEMPT] {symbol} "
+                                f"MA20={cur_ma20:.0f}>MA60={cur_ma60:.0f} "
+                                f"gap={_gap_pct:.1f}%[/cyan]"
+                            )
+                        return False, f"강한상승추세 예외 (gap={_gap_pct:.1f}%)", 1.0
+
+            # ── 반전 신호 체크 ─────────────────────────────────────────────────
+            reversal_ma5_ok    = cur_close > cur_ma5
+            reversal_vol_ok    = cur_vol > cur_vol_ma * reversal_vol
+            reversal_candle_ok = cur_close > close.iloc[-2]
+            if reversal_ma5_ok and reversal_vol_ok and reversal_candle_ok:
+                logger.info(_json.dumps({
+                    "tag":       "EARLY_DOWNTREND_REVERSAL",
+                    "symbol":    symbol,
+                    "ts":        _ts,
+                    "close":     round(float(cur_close), 2),
+                    "ma5":       round(float(cur_ma5), 2),
+                    "vol_ratio": round(float(cur_vol / cur_vol_ma), 2),
+                    "score":     score,
+                    "next_3d_return":  None,
+                    "next_5d_return":  None,
+                    "next_10d_return": None,
+                    "hold_days":       None,
+                }, ensure_ascii=False))
+                if debug:
+                    console.print(
+                        f"[cyan]  ✅ [EARLY_DOWNTREND_REVERSAL] {symbol} "
+                        f"MA5회복+거래량{cur_vol/cur_vol_ma:.1f}x+상승캔들[/cyan]"
+                    )
+                return False, f"반전신호 발생 (MA5회복+거래량{reversal_vol}x+상승캔들)", 1.0
+
+            # ── 건강한 눌림 예외 ───────────────────────────────────────────────
+            # "3d↓/10d↑" 패턴 실시간 버전 — 상승 구조 유지 중 단기 눌림
+            # cond1: 최근 3봉 기준 하락 (단기 눌림 확인)
+            # cond2: 현재가 > MA20 (상승 구조 유지 — 눌림이지 이탈 아님)
+            # cond3: MA20 기울기 상승 (중기 추세 살아 있음)
+            if _edt_cfg.get('healthy_pullback_enabled', True) and len(df) >= 25:
+                # ATR 기반 동적 이격 기준: max(고정하한, ATR비율×배수)
+                # 저변동 종목 → 엄격 / 고변동 종목 → 과도 차단 방지
+                _hp_gap_floor   = _edt_cfg.get('healthy_pullback_gap_pct', 0.01)
+                _hp_gap_atr_mult = _edt_cfg.get('hp_gap_atr_mult', 0.5)
+                _hp_gap_min     = max(_hp_gap_floor, _atr_ratio * _hp_gap_atr_mult)
+                hp_cond1 = cur_close < close.iloc[-3]                              # 단기 눌림
+                hp_cond2 = cur_close > cur_ma20                                    # MA20 위
+                hp_cond3 = cur_ma20 > ma20.iloc[-5]                               # MA20 기울기 상승
+                hp_cond4 = (cur_close - cur_ma20) / cur_ma20 > _hp_gap_min        # ATR 동적 이격
+                if hp_cond1 and hp_cond2 and hp_cond3 and hp_cond4:
+                    # 중기 구조 보호: MA20 > MA60 AND MA20 최소 횡보 이상
+                    _struct_ok = False
+                    _cur_ma60  = 0.0
+                    if len(df) >= 65:
+                        _ma60     = close.rolling(60).mean()
+                        _cur_ma60 = _ma60.iloc[-1]
+                        if _cur_ma60 > 0:
+                            _s1 = cur_ma20 > _cur_ma60
+                            _s2 = cur_ma20 >= ma20.iloc[-3]
+                            _struct_ok = _s1 and _s2
+                    else:
+                        _struct_ok = cur_ma20 >= ma20.iloc[-3]
+
+                    if not _struct_ok:
+                        logger.info(
+                            f"[HEALTHY_PULLBACK_BLOCKED] {symbol} "
+                            f"건강한 눌림 조건 만족하나 중기 구조 붕괴 → 차단 유지"
+                        )
+                        if debug:
+                            console.print(
+                                f"[yellow]  ⛔ [HP_STRUCT_FAIL] {symbol} "
+                                f"MA20 구조 미확인 → 가짜 눌림 차단[/yellow]"
+                            )
+                        # fall through → 완전 차단
+                    else:
+                        # 기울기 기반 동적 size_mult
+                        _ma20_slope = (cur_ma20 - ma20.iloc[-5]) / ma20.iloc[-5] if ma20.iloc[-5] > 0 else 0.0
+                        _slope_strong = _edt_cfg.get('hp_slope_strong', 0.02)
+                        _slope_mid    = _edt_cfg.get('hp_slope_mid', 0.01)
+                        _mult_strong  = _edt_cfg.get('hp_size_mult_strong', 1.3)
+                        _mult_mid     = _edt_cfg.get('hp_size_mult_mid', 1.2)
+                        _mult_weak    = _edt_cfg.get('hp_size_mult_weak', 1.1)
+
+                        if _ma20_slope > _slope_strong:
+                            _hp_mult    = _mult_strong
+                            _slope_tier = f"강(slope={_ma20_slope*100:.2f}%>{_slope_strong*100:.0f}%)"
+                        elif _ma20_slope > _slope_mid:
+                            _hp_mult    = _mult_mid
+                            _slope_tier = f"중(slope={_ma20_slope*100:.2f}%)"
+                        else:
+                            _hp_mult    = _mult_weak
+                            _slope_tier = f"약(slope={_ma20_slope*100:.2f}%≤{_slope_mid*100:.0f}%)"
+
+                        # 변동성 디스카운트: 고변동 종목 → size 자동 감소
+                        # vol_adj = min(1.0, ref_atr / atr_ratio)
+                        # ATR=5% 기준: ATR=3%→adj=1.0 / ATR=5%→adj=1.0 / ATR=8%→adj=0.625
+                        _vol_adj = 1.0
+                        _vol_adj_str = ""
+                        if _edt_cfg.get('hp_vol_adj_enabled', True) and _atr_ratio > 0:
+                            _ref_atr  = _edt_cfg.get('hp_vol_adj_ref_atr', 0.05)
+                            _vol_adj  = min(1.0, _ref_atr / _atr_ratio)
+                            _hp_mult  = round(_hp_mult * _vol_adj, 3)
+                            _vol_adj_str = f" vol_adj={_vol_adj:.2f}(ATR={_atr_ratio*100:.1f}%)"
+
+                        _hp_struct_info = (
+                            f"MA20={cur_ma20:.0f}>MA60={_cur_ma60:.0f}" if len(df) >= 65
+                            else "MA20기울기OK"
+                        )
+                        _gap_pct = (cur_close - cur_ma20) / cur_ma20 * 100
+                        logger.info(_json.dumps({
+                            "tag":        "EARLY_DOWNTREND_HEALTHY_PULLBACK",
+                            "symbol":     symbol,
+                            "ts":         _ts,
+                            "close":      round(float(cur_close), 2),
+                            "ma20":       round(float(cur_ma20), 2),
+                            "gap_pct":    round(_gap_pct, 2),
+                            "gap_min_pct": round(_hp_gap_min * 100, 3),
+                            "ma20_slope": round(_ma20_slope * 100, 3),
+                            "atr_ratio":  round(_atr_ratio * 100, 3),
+                            "vol_adj":    round(_vol_adj, 3),
+                            "size_mult":  _hp_mult,
+                            "score":      score,
+                            "next_3d_return":  None,
+                            "next_5d_return":  None,
+                            "next_10d_return": None,
+                            "hold_days":       None,
+                        }, ensure_ascii=False))
+                        if debug:
+                            console.print(
+                                f"[cyan]  ✅ [HEALTHY_PULLBACK] {symbol} "
+                                f"{_hp_struct_info} gap={_gap_pct:.1f}%(min={_hp_gap_min*100:.1f}%) "
+                                f"slope={_slope_tier}{_vol_adj_str} → size×{_hp_mult}[/cyan]"
+                            )
+                        return (
+                            False,
+                            f"건강한 눌림 ({_hp_struct_info}, slope={_slope_tier}{_vol_adj_str}, size×{_hp_mult})",
+                            _hp_mult,
+                        )
+
+            # ── 완전 차단 확정 ─────────────────────────────────────────────────
+            _record = {
+                "tag":             "EARLY_DOWNTREND",
+                "symbol":          symbol,
+                "ts":              _ts,
+                "close":           round(float(cur_close), 2),
+                "ma5":             round(float(cur_ma5), 2),
+                "ma20":            round(float(cur_ma20), 2),
+                "vol_ratio":       round(float(cur_vol / cur_vol_ma), 2),
+                "atr_ratio":       round(_atr_ratio, 4),
+                "score":           score,
+                "min_score_used":  min_score,
+                "regime":          _regime_lbl,
+                "conds":           [int(cond1), int(cond2), int(cond3), int(cond4), int(cond5)],
+                "next_3d_return":  None,
+                "next_5d_return":  None,
+                "next_10d_return": None,
+                "hold_days":       None,
+            }
+            logger.info(_json.dumps(_record, ensure_ascii=False))
+
+            # 트래킹 파일 기록
+            try:
+                import os
+                _track_path = os.path.join('logs', 'edt_blocked_candidates.jsonl')
+                with open(_track_path, 'a', encoding='utf-8') as _f:
+                    _f.write(_json.dumps(_record, ensure_ascii=False) + '\n')
+            except Exception:
+                pass
+
+            _cond_str = (
+                f"3봉연속하락={'✅' if cond1 else '❌'} "
+                f"MA5이탈={'✅' if cond2 else '❌'} "
+                f"MA5하락={'✅' if cond3 else '❌'} "
+                f"거래량감소={'✅' if cond4 else '❌'} "
+                f"MA20근방={'✅' if cond5 else '❌'} "
+                f"score={score}/{min_score} {_regime_lbl}"
+            )
+            if debug:
+                console.print(f"[yellow]  ⛔ [EARLY_DOWNTREND] {symbol} {_cond_str}[/yellow]")
+            return True, f"하락초기구조 차단 ({_cond_str})", 1.0
+
+        except Exception as e:
+            logger.debug(f"[EARLY_DOWNTREND] 계산 오류 (무시): {e}")
+            return False, "", 1.0
+
     def check_entry_prefilter(
         self,
         df: pd.DataFrame,
@@ -401,9 +743,11 @@ class SMCStrategy:
         liquidity_sweep,
         debug: bool = True,
         market_regime: str = None,    # 🔧 2026-05-03: 레짐별 RVOL 임계값 분기용
+        symbol: str = '',             # 🔧 2026-05-06: JSON 로그용
     ) -> Tuple[bool, str, Dict]:
         """
         🔧 2026-02-06: SMC 진입 프리필터
+        🔧 2026-05-06: early_downtrend_filter 게이트 추가 (최우선 차단)
 
         CHoCH 감지 후, 등급 평가 전에 3가지 조건 중 min_conditions 이상 충족 필수:
         1. HTF 추세 생존 (15m~1H에서 HH/HL 롱 or LH/LL 숏 패턴)
@@ -428,6 +772,16 @@ class SMCStrategy:
             'conditions_met': 0,
             'min_required': self.prefilter_min_conditions
         }
+
+        # 🔧 2026-05-06: 하락 초기 구간 게이트 (최우선, score 기반)
+        _edt_blocked, _edt_reason, _edt_size_mult = self.check_early_downtrend(
+            df, debug=debug, symbol=symbol
+        )
+        details['early_downtrend_blocked'] = _edt_blocked
+        details['edt_size_mult'] = _edt_size_mult   # 부분 차단 시 <1.0
+        if _edt_blocked:
+            self.stats['prefilter_rejected'] += 1
+            return False, f"SMC: {_edt_reason}", details
 
         conditions_met = 0
 
@@ -756,21 +1110,59 @@ class SMCStrategy:
         df.columns = [c.lower() for c in df.columns]
 
         # 1. 시장 구조 분석
+        # prev_structure: last candle 제외 버전 — 구조 전환 감지용 (T9a 유형 진단)
+        _lb = self.structure_analyzer.swing_lookback
+        _prev_structure = (
+            self.structure_analyzer.analyze_structure(df.iloc[:-1])
+            if len(df) >= _lb * 2 + 6 else None
+        )
         structure = self.structure_analyzer.analyze_structure(df)
+        _prev_trend = _prev_structure.trend.value if _prev_structure is not None else structure.trend.value
+        _transition_origin = (
+            'T9a' if (_prev_trend == 'bearish' and structure.trend.value == 'ranging') else None
+        )
         details['structure'] = {
             'trend': structure.trend.value,
             'swing_count': len(structure.swing_points),
+            'swing_high_count': sum(1 for sp in structure.swing_points if sp.type == 'high'),
+            'swing_low_count':  sum(1 for sp in structure.swing_points if sp.type == 'low'),
             'last_hh': structure.last_hh.price if structure.last_hh else None,
             'last_hl': structure.last_hl.price if structure.last_hl else None,
             'last_lh': structure.last_lh.price if structure.last_lh else None,
-            'last_ll': structure.last_ll.price if structure.last_ll else None
+            'last_ll': structure.last_ll.price if structure.last_ll else None,
+            'prev_trend': _prev_trend,
+            'transition_note': (
+                f"last_candle: {_prev_trend}→{structure.trend.value}"
+                if _prev_trend != structure.trend.value else "stable"
+            ),
+            'transition_origin': _transition_origin,
         }
 
         if debug:
             console.print(f"[cyan]  SMC 구조: {structure.trend.value}, 스윙 {len(structure.swing_points)}개[/cyan]")
 
-        # 2. CHoCH 탐지 (핵심!)
-        choch = self.structure_analyzer.detect_choch(df, structure, config=self._raw_config, symbol=symbol)
+        # 2. CHoCH 탐지 (핵심!) — prev_structure 전달로 EXP-002 T9a 복구 경로 활성화 가능
+        choch = self.structure_analyzer.detect_choch(
+            df, structure, config=self._raw_config, symbol=symbol,
+            prev_structure=_prev_structure,
+        )
+
+        # ranging_choch_candidate: EXP-002 비활성 시에도 T9a 조건 충족 여부 기록 (shadow observation)
+        _ranging_candidate = (
+            choch is None
+            and structure.trend == MarketTrend.RANGING
+            and _prev_structure is not None
+            and _prev_structure.trend == MarketTrend.BEARISH
+            and _prev_structure.last_lh is not None
+        )
+        details['ranging_choch_candidate'] = _ranging_candidate
+        # choch_mode: NORMAL vs T9a_RECOVERED — 향후 승률 분리 분석용
+        # (None: CHoCH 미발생, 'NORMAL': 정상 bearish 구조, 'T9a_RECOVERED': RANGING 복구 경로)
+        details['choch_mode'] = (
+            'T9a_RECOVERED' if (choch is not None and _transition_origin == 'T9a')
+            else 'NORMAL'   if choch is not None
+            else None
+        )
 
         if choch is None:
             # BOS 체크 (추세 지속, 참고용)
@@ -790,7 +1182,8 @@ class SMCStrategy:
             'type': choch.type.value,
             'direction': choch.direction,
             'broken_level': choch.broken_level,
-            'price': choch.price
+            'price': choch.price,
+            'choch_mode': details['choch_mode'],
         }
 
         if debug:
@@ -836,6 +1229,7 @@ class SMCStrategy:
                 liquidity_sweep=liquidity_sweep,
                 debug=debug,
                 market_regime=market_regime,  # 🔧 2026-05-03: 레짐별 RVOL 임계값
+                symbol=symbol,                # 🔧 2026-05-06: JSON 로그용
             )
             details['prefilter'] = pf_details
             if not pf_passed:
@@ -1397,7 +1791,9 @@ class SMCStrategy:
         structure = self.structure_analyzer.analyze_structure(df)
         details['structure'] = {
             'trend': structure.trend.value,
-            'swing_count': len(structure.swing_points)
+            'swing_count': len(structure.swing_points),
+            'swing_high_count': sum(1 for sp in structure.swing_points if sp.type == 'high'),
+            'swing_low_count':  sum(1 for sp in structure.swing_points if sp.type == 'low'),
         }
 
         # CHoCH 체크

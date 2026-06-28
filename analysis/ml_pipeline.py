@@ -76,6 +76,7 @@ def load_dataset(days: int = 90) -> pd.DataFrame:
         WHERE md.label_binary IS NOT NULL
           AND md.source_type = 'trade'
           AND (md.entry_time IS NULL OR md.entry_time >= %(since)s)
+          AND COALESCE(md.use_for_ml, TRUE) = TRUE
         ORDER BY md.entry_time DESC NULLS LAST
     """
     import psycopg2.extras

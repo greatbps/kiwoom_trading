@@ -69,6 +69,31 @@ class SMCDecisionLogger:
             msg += f' | RR={rr:.1f}'
         self._log.info(msg)
 
+    def log_no_sig(self, code: str, details: dict, reason: str):
+        """SMC 신호 없음 — 종목별 차단 근거를 파일에 기록.
+
+        필드: choch=T/F, bos=T/F, sweep=T/F, prefilter=pass/fail, reason_key
+        """
+        choch   = 'T' if details.get('choch') else 'F'
+        bos     = 'T' if details.get('bos')   else 'F'
+        sweep   = 'T' if details.get('liquidity_sweep') else 'F'
+        pf      = details.get('prefilter', {})
+        pf_met  = pf.get('conditions_met', '?')
+        pf_req  = pf.get('min_required', '?')
+        htf     = 'T' if pf.get('htf_trend_alive') else 'F'
+        reclaim = 'T' if pf.get('reclaim_detected') else 'F'
+        rvol    = pf.get('rvol_at_prefilter', '?')
+        # reason을 30자로 압축
+        reason_short = reason[:80].replace('\n', ' ')
+        self._log.info(
+            f'[NO_SIG] {code} | choch={choch} bos={bos} sweep={sweep} '
+            f'| pf={pf_met}/{pf_req} htf={htf} reclaim={reclaim} rvol={rvol} '
+            f'| {reason_short}'
+        )
+        # 집계에도 추가
+        _key = reason_short[:40].strip()
+        self._rejects[_key] += 1
+
     def log_reject(self, reason: str):
         """진입 차단 사유 집계 (개별 출력 없음, EOD 요약만)"""
         self._rejects[reason] += 1

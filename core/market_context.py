@@ -166,10 +166,12 @@ def _check_opening_range(df_5min: Optional[pd.DataFrame], fetch_err: str = "") -
     if "cntr_tm" not in df_5min.columns or len(df_5min) < 3:
         return True, f"OR 봉 수 부족(통과, n={len(df_5min)})"
 
-    or_mask = (df_5min["cntr_tm"] >= 900) & (df_5min["cntr_tm"] <= 930)
+    # cntr_tm = YYYYMMDDHHMMSS (14자리) → HHMM 추출
+    _tm_hhmm = (df_5min["cntr_tm"] % 1_000_000) // 100
+    or_mask = (_tm_hhmm >= 900) & (_tm_hhmm <= 930)
     or_bars = df_5min[or_mask]
     if len(or_bars) < 2:
-        return True, "OR 봉 부족(통과)"
+        return True, f"OR 봉 부족(통과, n={len(or_bars)})"
 
     or_high = or_bars["high"].max()
     or_low  = or_bars["low"].min()
@@ -449,10 +451,11 @@ class MarketContextChecker:
                     self._kodex200_change_pct = 0.0
             except Exception:
                 self._kodex200_change_pct = 0.0
+            or_check_enabled = cfg.get("opening_range_check", {}).get("enabled", True)
             or_ok, or_reason = _check_opening_range(df200_5m, err200_5m)
-            details["opening_range"] = {"ok": or_ok, "reason": or_reason}
+            details["opening_range"] = {"ok": or_ok, "reason": or_reason, "check_enabled": or_check_enabled}
 
-            if not or_ok:
+            if not or_ok and or_check_enabled:
                 block_reasons.append(f"OR하단❌ {or_reason}")
 
             # ── 3. 변동성 (KODEX200 30분봉 ATR) — 3단계 모드 판별 ──────────────

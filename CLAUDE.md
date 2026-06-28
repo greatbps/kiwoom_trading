@@ -1,237 +1,446 @@
-# Kiwoom Trading — Claude Code 지침
+목적
 
-## 프로젝트 개요
+이 문서는 다음 두 가지를 통합한 프로젝트 실행 지침이다.
+
+LLM 코딩 실수 방지용 일반 엔지니어링 원칙
+Kiwoom Trading 실거래 프로젝트 전용 운영 규칙
+
+본 프로젝트는 실계좌 자동매매 시스템이다.
+속도보다 안정성, 재현성, 최소 변경, 검증 가능성을 우선한다.
+
+⚠️ 절대 원칙 (2026-05-11 확정)
+- 매매 전략: 스윙(Swing)만 한다. 인트라데이/단타 전략 없음.
+- DB: PostgreSQL만 사용한다. SQLite 절대 금지.
+- 분석/코드 작업 시 이 두 가지를 반드시 전제로 한다.
+
+1. 핵심 원칙 (Global Engineering Rules)
+1.1 구현 전 사고 (Think Before Coding)
+
+코드를 쓰기 전에 반드시 읽는다.
+
+관련 파일을 먼저 읽는다. 읽지 않고 추측하지 않는다.
+main_auto_trading.py는 5000줄이다. 함수 전체를 파악한 뒤 수정한다.
+기존 패턴을 확인한 후 동일 패턴을 따른다.
+
+가정하지 않는다.
+모호함을 숨기지 않는다.
+트레이드오프를 명확히 밝힌다.
+
+구현 시작 전 반드시:
+
+자신의 가정을 명시한다.
+불확실하면 질문한다.
+해석 가능성이 여러 개라면 대안을 제시한다.
+더 단순한 접근이 있으면 먼저 제안한다.
+불명확하면 작업을 멈추고 질문한다.
+반드시 피할 것
+"아마 이럴 것이다" 기반 구현
+사용자 의도 추정 후 독단적 변경
+설정 없이 하드코딩 추가
+요청되지 않은 구조 개선
+1.2 단순성 우선 (Simplicity First)
+
+최소한의 코드만 작성한다.
+
+원칙
+문제 해결에 필요한 최소 코드만 작성
+요청되지 않은 기능 추가 금지
+추측 기반 추상화 금지
+일회성 코드에 클래스/레이어 추가 금지
+미래 확장성을 이유로 복잡성 추가 금지
+불가능한 시나리오에 대한 방어 코드 금지
+자가 점검
+
+다음 질문에 YES면 다시 단순화:
+
+"시니어 엔지니어가 보기에 과하게 복잡한가?"
+
+1.3 정밀한 수정 (Surgical Changes)
+
+필요한 부분만 수정한다.
+
+기존 코드 수정 시
+인접 코드 건드리지 않는다
+포맷팅 임의 변경 금지
+리팩토링 금지
+기존 스타일 유지
+unrelated dead code 삭제 금지
+단, 자신의 수정으로 인해 생긴 것은 정리
+
+허용:
+
+불필요 import 제거
+미사용 변수 제거
+본인이 만든 dead code 제거
+
+금지:
+
+기존 legacy dead code 정리
+unrelated cleanup
+변경 검증 기준
+
+변경된 모든 라인은 사용자 요청과 직접 연결되어야 한다.
+
+1.4 목표 중심 실행 (Goal-Driven Execution)
+
+작업은 반드시 검증 가능한 목표로 변환한다.
+
+예시:
+
+"버그 수정"
+→ 버그 재현 → 테스트 → 통과 확인
+"유효성 검사 추가"
+→ 잘못된 입력 테스트 추가 → 통과 확인
+"리팩토링"
+→ 전후 동작 동일성 검증
+1.5 다단계 작업 수행 방식
+
+복잡 작업은 항상 계획 기반으로 진행한다.
+
+형식:
+
+[작업]
+→ 검증: [확인 사항]
+[작업]
+→ 검증: [확인 사항]
+[작업]
+→ 검증: [확인 사항]
+2. 프로젝트 개요
 
 키움증권 API 기반 SMC(Smart Money Concept) 자동매매 시스템.
-실계좌 운용 중 — 코드 변경 시 항상 신중하게 접근할 것.
 
----
+⚠️ 실계좌 운용 중
+코드 변경은 항상 보수적으로 접근한다.
 
-## 핵심 실행 파일
-
-- **`main_auto_trading.py`** — 메인 트레이딩 루프 (~5000+ 라인). 모든 매수/매도 로직의 진입점.
-- **`config/strategy_hybrid.yaml`** — 전략 파라미터 전체. 코드 수정 없이 숫자 조정 가능.
-- **`watchdog.py`** — 프로세스 감시 및 자동 재시작.
-
----
-
-## 아키텍처
-
-```
+3. 핵심 실행 파일
+파일	역할
+main_auto_trading.py	메인 트레이딩 루프 (~5000+ lines)
+config/strategy_hybrid.yaml	전략 파라미터 (코드 수정 전 YAML 먼저)
+watchdog.py	프로세스 감시/재시작
+api_server.py	대시보드 백엔드 API (port 8765)
+swing_runner.py	스윙 종목 선정 크론 (15:35 실행)
+swing_executor.py	스윙 매수 실행 크론 (09:00 실행)
+4. 시스템 아키텍처
 main_auto_trading.py
 ├── Signal Orchestrator (L0~L6 독립 파이프라인)
 │   └── logs/signal_orchestrator.log
 ├── SMC Strategy (CHoCH → Sweep → OB → Entry)
-│   ├── analyzers/smc/smc_signals.py      ← CHoCH 등급, OB, 신호 생성
-│   ├── analyzers/smc/smc_structure.py    ← BOS/CHoCH 탐지
-│   └── analyzers/smc/smc_utils.py        ← 스윙포인트, Sweep 탐지
-├── core/risk_manager.py                  ← 포지션 사이즈, 연패 카운트
-├── metrics/reentry_metrics.py            ← 재진입 쿨다운, Market Sensor, Conservative Mode
-├── trading/exit_logic_optimized.py       ← Hard Stop, Trailing, Partial Exit
-└── core/market_context.py               ← 당일 시장 상태 판단 (NO_TRADE_DAY)
-```
+│   ├── analyzers/smc/smc_signals.py      ← EDT 필터 포함
+│   ├── analyzers/smc/smc_structure.py
+│   └── analyzers/smc/smc_utils.py
+├── core/risk_manager.py
+├── core/edt_sizer.py                     ← Kelly × 섹터/시장 세션 가드
+├── core/drawdown_engine.py               ← DD 레벨 (NORMAL/CAUTION/DANGER/HALT)
+├── core/market_context.py
+├── metrics/reentry_metrics.py
+└── trading/exit_logic_optimized.py
 
-### 두 파이프라인은 독립 AND 구조
-Signal Orchestrator ACCEPT ≠ SMC 진입. 둘 다 독립적으로 조건 충족해야 매수.
+분석/오프라인 도구
+├── analysis/edt_performance_tracker.py  ← EDT 성과 추적 + Kelly 갱신
+├── swing_runner.py                       ← 스윙 종목 선정
+└── swing_executor.py                     ← 스윙 매수 실행
+5. 중요 전략 구조
+Signal Orchestrator 와 SMC는 독립
+Orchestrator ACCEPT ≠ SMC 진입
 
----
+둘 다 조건 충족해야 매수 가능.
 
-## SMC 진입 흐름
-
-```
-check_entry_signal() [main_auto_trading.py ~line 4010]
-  → 시간 필터 (10:30~12:30)
-  → Market Context / Market Sensor gate
-  → smc_strategy.check_entry_signal() [smc_signals.py]
-      → analyze_structure() → detect_choch()
+6. SMC 진입 흐름
+check_entry_signal()
+  → 시간 필터
+  → Market Context / Market Sensor
+  → smc_strategy.check_entry_signal()
+      → analyze_structure()
+      → detect_choch()
       → detect_liquidity_sweep()
-      → check_entry_prefilter() [min 2/4 조건]
+      → check_entry_prefilter()
       → displacement_filter
-      → evaluate_choch_grade() [A/B/C]
-          A: 80점+  →  100% size
-          B: 50점+  →  40% size
-          C: 50점-  →  C_FALLBACK (12% size, OB+reclaim 필수)
-      → signal=True → execute_buy()
-```
+      → evaluate_choch_grade()
+      → signal=True
+      → execute_buy()
+7. 포지션 사이즈 체계
+케이스	Size
+A급 + Sweep	~100%
+B급 + Sweep	~40%
+B급 fallback	~20%
+C급 fallback	~12%
+추가 감산
+Conservative Mode → ×0.5
+Loss Streak Guard → ×LSG_mult
+8. 핵심 YAML 규칙
 
----
+전략 수정 시 우선순위:
 
-## 포지션 Size 계층
+코드 수정 < YAML 파라미터 조정
 
-| 케이스 | 최종 size |
-|--------|----------|
-| A급 + Sweep | ~100% |
-| B급 + Sweep | ~40% |
-| B급 Fallback (no sweep) | ~20% |
-| C급 C_FALLBACK | ~12% |
+새 기능 추가 시:
 
-Conservative Mode 활성화 시: 위 값 × 0.5
-Loss Streak Guard 활성화 시: 추가 × LSG_mult
+YAML 설정 추가
+config.get() 사용
+enabled: true/false 포함
+9. 절대 금지 사항
+실거래 위험 행동 금지
+금지
+execute_buy() 직접 호출 추가
+execute_sell() 직접 호출 추가
+risk_log.json 임의 조작
+time_filter 비활성화
+dry-run 없이 테스트
+보호 로직 우회
+Hard Stop 우회
+LSG 우회
+api_server.py 포트(8765) 임의 변경
+.env 파일 내 API 키 코드에 직접 삽입
 
----
+긴급 정지 절차 (시스템 이상 시)
+# 1. 자동매매 즉시 중단
+kill $(pgrep -f "main_auto_trading.py")
 
-## 주요 설정 파라미터 (strategy_hybrid.yaml)
+# 2. watchdog 중단 (자동재시작 방지)
+kill $(pgrep -f "watchdog.py")
 
-```yaml
-smc:
-  swing_lookback: 20         # 스윙포인트 탐지 범위 (크면 포인트 적음)
-  sweep_lookback: 20         # Sweep 탐색 범위
-  smc_afternoon_cutoff: 12:30  # 이후 신규 진입 차단
-  sweep_fallback_enabled: true
-  max_fallback_per_day: 3
-  grade_c_fallback_size_mult: 0.6
-  max_c_fallback_per_day: 2
-  c_fallback_cooldown_min: 15
+# 3. api_server 중단
+kill $(pgrep -f "api_server.py")
 
-  choch_grade:
-    min_grade: B             # C급 단독 차단 (OB없으면)
-    grade_b_cutoff: "11:30"  # B급 11:30 이후 차단
-    htf_b_block: true        # HTF 없는 B급 추가 차단
+# 4. 포지션 확인 후 수동 청산 (HTS에서 직접)
+python3 check_account_pnl.py
+10. 개발 전 체크리스트
 
-risk_control:
-  conservative_mode:
-    trading_halt_threshold: 2  # Hard Stop 2회 → 당일 종료
+코드 수정 전 반드시:
 
-  loss_streak_guard:
-    threshold: 3             # 연패 3회 → LSG 발동
-    auto_reset_days: 3
-```
+실계좌 영향 여부 판단
+YAML 조정으로 해결 가능한지 확인
+변경 범위 최소화
+영향 파일 명시
+성공 기준 정의
+11. 개발 후 필수 검증
+최소 검증
+python3 -m py_compile <파일>
+주요 검증
+python3 -m py_compile main_auto_trading.py
+python3 -m py_compile analyzers/smc/smc_signals.py
+12. 로그 시스템
+주요 로그 파일
+파일	용도
+logs/signal_orchestrator.log	Orchestrator 결과
+logs/smc_decision_YYYYMMDD.log	CHoCH 기록
+logs/sweep_attempt_YYYYMMDD.log	Sweep 탐지
+logs/auto_trading_YYYYMMDD.log	메인 로그
+logs/auto_trading_errors.log	에러 로그
+logs/reentry_report_YYYY-MM-DD.json	재진입 리포트
+data/risk_log.json	연패 기록
+13. 로그 태그 규칙
 
----
+새 로그는 반드시:
 
-## 로그 파일 위치
+[TAG_NAME]
 
-| 파일 | 내용 |
-|------|------|
-| `logs/signal_orchestrator.log` | Orchestrator ACCEPT/REJECT |
-| `logs/smc_decision_YYYYMMDD.log` | CHoCH 감지 기록 |
-| `logs/sweep_attempt_YYYYMMDD.log` | Sweep 탐지 상세 (디버그용) |
-| `logs/auto_trading_YYYYMMDD.log` | 메인 루프 전체 로그 |
-| `logs/auto_trading_errors.log` | 에러 전용 |
-| `logs/reentry_report_YYYY-MM-DD.json` | 당일 재진입/쿨다운 리포트 |
-| `data/risk_log.json` | consecutive_losses, 일일 거래 기록 |
+형식 사용.
 
-### 중요 로그 태그
+예시:
 
-```
-[C_GRADE_FALLBACK]   C급 fallback 진입
-[SWEEP_FALLBACK]     B급 no-sweep 진입
-[C_FALLBACK_LIMIT]   C급 일일 한도 초과
-[C_FALLBACK_CD]      C급 쿨다운 차단
-[C_FALLBACK_RECLAIM] C급 reclaim 없어 차단
-[LSG_PASS]           Loss Streak Guard 통과 (고확신)
-[LSG_BLOCK]          LSG 차단
-[LSG_BOOST]          LSG 탈출 부스트 진입
-[LSG_AUTO_RESET]     LSG N일 자동 해제
-[TRADING_HALT]       Hard Stop 2회 → 당일 종료
-[MKT_CTX]            Market Context 판단
-[DISP_BLOCK]         Displacement 필터 차단
-[EXPLORATION_TRY]    EXPLORATION 조건 체크 시작
-[EXPLORATION_ENTRY]  EXPLORATION 진입 확정
-[EXPLORATION_SKIP_RVOL] RVOL < min_rvol → 가짜 돌파 차단
-[EXPLORATION_STATS]  EXPLORATION 누적 통계 (count/WR/avg)
-[EXPLORATION_KILLED] 승률 30% 미만 → 자동 비활성화
-[EXPLORATION_NO_SIG] 돌파/RVOL 조건 미충족
-[EXPL_PEND]          1봉 확인 대기 등록 (RVOL < 2.8)
-[EXPL_PEND_EARLY]    조기 진입 (RVOL≥4.0 + 가격유지 + VWAP위)
-[EXPL_PEND_CONFIRM]  강확인 (가격 -0.2% 이내)
-[EXPL_PEND_SOFT]     약확인 (가격 -0.5% 이내 + VWAP↑ + RVOL + HH방향)
-[EXPL_PEND_REJECT]   폐기 (가격이탈 or 조건미충족)
-[EXPL_PEND_EXPIRED]  폐기 (75s 초과)
-[EXPL_SNAP]          진입 직전 스냅샷 (type/rvol/price_vs_bp/vwap_dist/vol_trend)
-[EXPLORATION_TIME_BLOCK] 시간 필터 차단
-[EXPLORATION_NO_TRADE_BLOCK] NO_TRADE_DAY → 탐색 차단
-```
+[C_GRADE_FALLBACK]
+[LSG_BLOCK]
+[TREND_SIG]
+[DISP_BLOCK]
+14. Trend Breakout 전략
+활성 조건
+SMC Sweep 부족
+→ regime == TREND
+→ TrendBreakoutStrategy 활성
+진입 유형
+BREAKOUT
+N봉 고점 돌파
+거래량 증가
+EMA 정배열
+PULLBACK
+EMA20 눌림
+추세 유지
+거래량 확인
+15. 현재 전략 상태 (2026-05-07 기준)
+기능	상태	비고
+SMC 진입	활성	mode=smc
+스윙 전략	활성	기본 전략 (2026-05-04~), 크론 등록
+C_GRADE_FALLBACK	활성	일 최대 2회
+Sweep Fallback (B급)	활성	일 최대 3회
+EDT 필터	활성	check_early_downtrend() in smc_signals.py
+EDT Sizer	활성	Kelly × 심볼가중 × DD캡 × 세션가드 4종
+Session Guards	활성	HALT복구/섹터집중/무거운장/승리과열
+Conservative Mode	비활성	Hard Stop 0회
+Loss Streak Guard	비활성	연패 0회
+Overnight Close	활성	B급 이하 14:50 강제청산
+Market Context	활성	NO_TRADE_DAY 게이트
+Trend Breakout	활성	레짐 TREND 감지 시, 일 최대 2회
+SOXL	장기보유	자동매매 분석/손절 대상 아님 — 제외
+16. 자주 사용하는 운영 명령
+컴파일 검증
+python3 -m py_compile main_auto_trading.py && \
+python3 -m py_compile analyzers/smc/smc_signals.py && \
+python3 -m py_compile core/edt_sizer.py && \
+echo "OK"
+거래 현황
+grep "매수완료\|매도완료\|EDT_GUARD\|HALT" logs/auto_trading_$(date +%Y%m%d).log
+연패 상태
+python3 -c "
+import json
+d=json.load(open('data/risk_log.json'))
+print('연패:', d['consecutive_losses'])
+"
+계좌/포지션 확인
+python3 check_account_pnl.py
+EDT Kelly 갱신 (오프라인)
+python3 -m analysis.edt_performance_tracker --days 30
+api_server 상태
+curl -s http://localhost:8765/api/health
+17. Claude 작업 행동 규칙
+수정 제안 시
 
----
+반드시 먼저:
 
-## 개발 규칙
+변경 목적
+영향 범위
+리스크
+대안
+검증 방법
 
-### 수정 전 반드시 확인
-1. `python3 -m py_compile <파일>` — 문법 오류 체크
-2. 실계좌 영향 있는 변경은 YAML 파라미터로 먼저 시도
-3. `data/risk_log.json` 직접 수정 시 백업 필수
+을 설명한다.
 
-### 절대 하지 말 것
-- `execute_buy()` / `execute_sell()` 직접 호출 코드 추가 (테스트라도)
-- `risk_log.json` 의 `consecutive_losses` 임의 증가
-- time_filter 비활성화 (`use_time_filter: false`)
-- `dry_run: false` → `true` 변경 없이 실거래 로직 테스트
+코드 작성 시
 
-### 새 기능 추가 패턴
-- YAML에 설정 키 먼저 추가 → 코드에서 `config.get()` 로 읽기
-- 로그 태그 `[TAG_NAME]` 형식으로 통일
-- 기능 ON/OFF 플래그 반드시 YAML에 `enabled: true/false` 포함
+우선순위:
 
----
+안정성 > 단순성 > 가독성 > 확장성 > 성능
+실거래 코드 작업 시
 
-## Trend Breakout 전략 (2026-03-21 추가)
+항상 보수적으로 행동한다.
 
-```
-SMC Sweep = 0 (강한 상승장) → get_regime() → "TREND" → TrendBreakoutStrategy 자동 발동
+허용:
 
-check_entry_signal():
-  SMC 신호 없음 → regime == "TREND" && auto_enable_on_trend → trend_strategy.check_entry()
-    → BREAKOUT: N봉 고점 돌파 + 거래량 1.5x+ + EMA 정배열
-    → PULLBACK: EMA20 눌림 + 추세 유지 + 거래량 확인
-    → Grade: STRONG(100%) / NORMAL(60%) / WEAK(40%)
-    → 일일 최대 2회 (max_per_day)
-```
+작은 수정
+YAML 기반 조정
+로깅 강화
+검증 코드 추가
 
-레짐 감지: `market_context.get_regime()` → EMA갭 ≥ 0.5% → "TREND"
-로그 태그: `[TREND_SIG]` `[TREND_NO_SIG]` `[TREND_TIME_BLOCK]` `[TREND_REGIME_SKIP]`
+주의:
 
-## 현재 전략 상태 (2026-03-21 기준)
+진입 조건 변경
+포지션 사이즈 변경
+리스크 관리 수정
+시간 필터 수정
 
-| 기능 | 상태 |
-|------|------|
-| SMC 진입 | 활성 (mode=smc) |
-| C_GRADE_FALLBACK | 활성 (2026-03-20 추가) |
-| Sweep Fallback (B급) | 활성 |
-| Conservative Mode | 비활성 (Hard Stop 0회) |
-| Loss Streak Guard | 비활성 (연패 0회) |
-| Overnight Close | 활성 (B급 14:50 강제청산) |
-| Market Context | 활성 |
-| Trend Breakout | 활성 (레짐 TREND 감지 시 자동, 일 최대 2회) |
+고위험:
 
----
+execute_buy 흐름 변경
+risk_manager 수정
+stop logic 수정
+regime detection 수정
+18. 수정-확인 루프 (Verify-Always Loop)
 
-## Trend Breakout 모니터링 명령
+모든 코드 변경은 다음 루프를 따른다:
 
-```bash
-# Trend 신호 발생 수 (목표: 0이면 조건 너무 빡셈, 5+ 이면 과다)
-grep "TREND_SIG" logs/auto_trading_$(date +%Y%m%d).log | wc -l
+수정 전   → 관련 파일 읽기 (Read before write)
+수정      → 최소 범위 변경
+컴파일    → python3 -m py_compile <파일>
+동작 확인 → 로그 또는 API 응답으로 검증
+완료      → 변경 내용 사용자에게 요약 보고
 
-# Trend 신호 상세 (등급, 거래량, 이격)
-grep "TREND_SIG\|TREND_NO_SIG\|TREND_BLOCK" logs/auto_trading_$(date +%Y%m%d).log | tail -20
+롤백 전략
 
-# 레짐 판단 결과 (TREND / REVERSAL / NEUTRAL)
-grep "TREND_REGIME" logs/auto_trading_$(date +%Y%m%d).log | tail -10
+파일 수정 전 백업이 필요하다고 판단되면:
+cp <파일> <파일>.bak_$(date +%Y%m%d_%H%M%S)
 
-# SMC vs TREND 진입 비율
-echo "SMC:"; grep "SMC_SIG" logs/auto_trading_$(date +%Y%m%d).log | wc -l
-echo "TREND:"; grep "TREND_SIG" logs/auto_trading_$(date +%Y%m%d).log | wc -l
+단, 불필요한 백업 파일을 남기지 않는다.
+백업이 필요 없다면 git이 역할을 대신한다.
 
-# Trend 차단 이유 분류
-grep "TREND_NO_SIG\|TREND_BLOCK" logs/auto_trading_$(date +%Y%m%d).log | \
-  grep -oP 'TREND: [^|]+' | sort | uniq -c | sort -rn | head -10
-```
+20. 기능 추가 전 필수 체크리스트 (2026-05-14 확정)
 
-## 자주 쓰는 분석 명령
+새 기능 구현 전에 아래 6개 항목을 모두 확인한다.
+"동작하나?" 보다 이 질문들이 먼저다.
 
-```bash
-# 오늘 거래 현황
-grep "C_GRADE_FALLBACK\|SWEEP_FALLBACK\|SMC_SIG\|매수완료\|매도완료" logs/auto_trading_$(date +%Y%m%d).log
+1. Observability — 실패했을 때 로그만 보고 원인을 알 수 있는가?
+   □ 성공 로그 있음
+   □ 실패 로그 있음
+   □ 실패 이유가 분리됨 (단순 "미통과" 아님)
+   □ 주요 변수값이 출력됨
 
-# CHoCH 감지 내역
-cat logs/smc_decision_$(date +%Y%m%d).log
+2. Explainability — 2주 후 내가 이 결과를 해석할 수 있는가?
+   □ composite score는 컴포넌트로 분해 가능
+   □ threshold 근거가 로그에 보임
+   □ reject reason이 enum화됨 (자유 문자열 금지)
 
-# Sweep 탐지 상세
-cat logs/sweep_attempt_$(date +%Y%m%d).log
+3. Analytics compatibility — 나중에 통계 분석 가능한 형태로 저장되는가?
+   □ reason normalized (BOS_ONLY, CHOCH_MISSING 등)
+   □ timestamp / symbol / regime / alpha 포함
+   □ CSV/DB friendly 구조
 
-# 연패/LSG 상태
-python3 -c "import json; d=json.load(open('data/risk_log.json')); print('연패:', d['consecutive_losses'], '/ 오늘:', d['today'])"
+4. State consistency — 재시작 후에도 상태가 꼬이지 않는가?
+   □ restart safe
+   □ duplicate execution 방지
+   □ cache invalidation 존재
 
-# 컴파일 검증
-python3 -m py_compile main_auto_trading.py && python3 -m py_compile analyzers/smc/smc_signals.py && echo "OK"
-```
+5. Silent failure — 기능이 망가져도 에러 없이 통과할 수 있는가?
+   □ 예: log_no_sig() 호출 누락 → 시스템 정상, 데이터만 안 쌓임
+   □ expected log count 검증 또는 health check 존재
+
+6. Research readiness — 이 결과를 가설 검증에 쓸 수 있는가?
+   □ factor analysis 가능 (alpha, regime, hour 등 저장)
+   □ forward outcome 추적 가능
+   □ bucket analysis 가능
+
+실패 교훈 (2026-05-14):
+오늘 수정한 사항 대부분이 "전략 문제"가 아니라
+"observability/analytics completeness 문제"였다.
+4~5개월 반복 수정의 근본 원인.
+
+19. 최종 원칙
+
+이 프로젝트의 목표는:
+
+"더 똑똑한 코드"
+가 아니라
+"실거래에서 안정적으로 살아남는 시스템"
+이다.
+
+따라서:
+
+최소 변경
+검증 가능성
+재현성
+보수적 수정
+YAML 우선 접근
+
+을 항상 유지한다.
+
+의심스러우면 하지 않는다. (When in doubt, don't.)
+
+21. 운영자 모드 — 주간 리뷰 (2026-06-28~, GD-003)
+
+이 프로젝트는 2026-06-28부터 "운영자 모드"에 들어갔다.
+
+"새로운 기능 제안 회의" 대신 "운영 데이터 리뷰"만 한다.
+
+주간 리뷰 4개 질문:
+
+  1. 이번 주 새로 발견된 증거는 무엇인가?
+     → knowledge_base 신규 항목, decision_log 패턴, session_review 내용
+
+  2. 기존 가설을 반박하는 데이터가 있는가?
+     → 예상과 다른 결과, regime별 성과 이탈, 반복되는 SKIP 패턴
+
+  3. Calibration은 개선되고 있는가?
+     → scientist_predictions 평가 결과, Unknown Rate 추이
+
+  4. Architecture를 변경해야 할 정도의 증거가 있는가?
+     → "No Architecture Changes Without Evidence" (CONSTITUTION.md) 기준 적용
+
+Phase A (2026 Q3) 금지 사항:
+  - 새로운 AI Agent / LLM / Dashboard / Strategy / Prompt / DB 테이블
+
+  아이디어가 생기면 research_notebook에 제목과 근거만 기록한다.
+  데이터가 그 아이디어를 지지하면 그때 가설로 격상한다.
+
+  Idea → Research Notebook → Evidence → Hypothesis → Experiment → Approval → Implementation
+
+운영 상태 확인:
+  python3 -m analysis.os_status
+  python3 -m analysis.acceptance_test

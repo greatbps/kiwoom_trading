@@ -35,6 +35,8 @@ MAIN_SCRIPT   = PROJECT_DIR / 'main_auto_trading.py'
 LOG_DIR       = PROJECT_DIR / 'logs'
 
 HEARTBEAT_MAX_AGE_SEC = 600   # 10분: 이 이상 갱신 없으면 좀비
+STARTUP_GRACE_SEC     = 3600  # 1시간: PID 파일만 있고 하트비트 없을 때 초기화 중으로 허용
+                               # (08:45 시작 → 09:00 장 시작 후 첫 heartbeat, 09:15 watchdog 오검지 방지)
 STALE_DATE_FORCE_RESTART = True  # 하트비트 날짜가 오늘과 다르면 강제 재시작 (월요일 대응)
 
 # ─── 로거 ─────────────────────────────────────────────────────────────────────
@@ -131,6 +133,7 @@ def start_trading():
                 cwd=str(PROJECT_DIR),
                 stdout=lf,
                 stderr=lf,
+                stdin=subprocess.DEVNULL,  # 크론 환경 stdin(/dev/null) EOF spinloop 방지
                 start_new_session=True,  # 이 프로세스가 종료돼도 자식 유지
             )
         logger.info(f"✅ 재시작 완료: PID {proc.pid}")
@@ -172,7 +175,7 @@ def run():
         try:
             pid_mtime = PID_FILE.stat().st_mtime
             pid_age = time.time() - pid_mtime
-            if pid_age < HEARTBEAT_MAX_AGE_SEC:
+            if pid_age < STARTUP_GRACE_SEC:
                 logger.info(f"PID 파일 {pid_age:.0f}초 전 생성됨 → 초기화 중으로 판단, 재시작 보류")
                 return
         except Exception:

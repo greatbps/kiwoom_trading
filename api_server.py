@@ -75,27 +75,45 @@ def _kiwoom_cached(key: str, fn, ttl: int = _KIWOOM_TTL):
 
 def fetch_kiwoom_positions() -> list[dict]:
     """
-    Kiwoom API (ka01690) → 포지션 목록.
+    Kiwoom API (ka10085) → 포지션 목록.
+    ka01690은 오전 1~7시 데이터 생성 중 오류를 반환하므로 ka10085 사용.
     반환: [{'symbol', 'name', 'qty', 'entry_price', 'current_price',
              'eval_profit', 'profit_rate', 'eval_amount'}, ...]
     """
     def _call():
-        result = _kiwoom_api().get_account_info()  # ka01690 — WORKS
-        rows = result.get('day_bal_rt', [])
+        api = _kiwoom_api()
+        if not api.access_token:
+            api.get_access_token()
+        r = api.session.post(
+            f'{api.BASE_URL}/api/dostk/acnt',
+            headers={
+                'Content-Type': 'application/json;charset=UTF-8',
+                'authorization': f'Bearer {api.access_token}',
+                'cont-yn': 'N', 'next-key': '',
+                'api-id': 'ka10085',
+            },
+            json={'stex_tp': '0'}, timeout=10,
+        )
+        rows = r.json().get('acnt_prft_rt', [])
         out = []
-        for r in rows:
-            qty = int(r.get('rmnd_qty', 0) or 0)
+        for row in rows:
+            qty = int(row.get('rmnd_qty', 0) or 0)
             if qty <= 0:
                 continue
+            entry_price   = float(row.get('pur_pric', 0) or 0)
+            current_price = float(row.get('cur_prc',  0) or 0)
+            eval_amount   = current_price * qty
+            eval_profit   = (current_price - entry_price) * qty
+            profit_rate   = ((current_price / entry_price) - 1) * 100 if entry_price else 0
             out.append({
-                'symbol':        r.get('stk_cd', '').strip(),
-                'name':          r.get('stk_nm', '').strip(),
+                'symbol':        row.get('stk_cd', '').strip(),
+                'name':          row.get('stk_nm', '').strip(),
                 'qty':           qty,
-                'entry_price':   float(r.get('buy_uv', 0) or 0),
-                'current_price': float(r.get('cur_prc', 0) or 0),
-                'eval_profit':   float(r.get('evltv_prft', 0) or 0),
-                'profit_rate':   float(r.get('prft_rt', 0) or 0),
-                'eval_amount':   float(r.get('evlt_amt', 0) or 0),
+                'entry_price':   entry_price,
+                'current_price': current_price,
+                'eval_profit':   round(eval_profit),
+                'profit_rate':   round(profit_rate, 2),
+                'eval_amount':   round(eval_amount),
             })
         return out
 
@@ -141,36 +159,63 @@ def _read_account_snapshot_from_db() -> dict:
     return {}
 
 
+_DB_SNAPSHOT_TTL = 600   # DB 스냅샷 10분 초과 시 Kiwoom API 직접 호출
+
 def fetch_kiwoom_balance() -> dict:
     """
-    1순위: account_snapshot DB (항상 최신 유효값)
-    2순위: Kiwoom API 직접 호출 (DB가 비었을 때만)
+    1순위: account_snapshot DB (10분 이내 신선한 데이터)
+    2순위: Kiwoom API 직접 호출 (DB 없거나 10분 초과)
+    3순위: stale DB 스냅샷 (API가 0 반환 시 fallback)
     반환: {'deposit', 'holding_value', 'total_assets', 'eval_profit'}
     """
-    # DB에서 먼저 읽기
+    stale_db_val: dict = {}   # API 실패 시 폴백용 보관
     db_val = _read_account_snapshot_from_db()
     if db_val:
-        return db_val
+        snap_at = db_val.get('_snapshot_at')
+        if snap_at:
+            try:
+                age = (datetime.now() - datetime.fromisoformat(snap_at)).total_seconds()
+                if age > _DB_SNAPSHOT_TTL:
+                    stale_db_val = db_val   # stale이지만 폴백용으로 보관
+                    db_val = {}             # API 직접 호출 시도
+            except Exception:
+                pass
+        if db_val:
+            return db_val
 
-    # DB 없을 때만 API 직접 호출
+    # Kiwoom API 직접 호출
     def _call():
-        acct = _kiwoom_api().get_account_info()
-        holding_value = int(float(acct.get('tot_evlt_amt',   0) or 0))
-        eval_profit   = int(float(acct.get('tot_evltv_prft', 0) or 0))
-        deposit = 0
+        deposit = withdrawable = holding_value = eval_profit = 0
         try:
             bal = _kiwoom_api().get_balance()
-            deposit = int(float(bal.get('fc_stk_krw_repl_set_amt', 0) or 0))
+            def _int(v): return abs(int(float(str(v or '0').replace(',', ''))))
+            # entr = 예수금(원화 현금)
+            deposit      = _int(bal.get('entr', 0))
+            # fc_stk_krw_repl_set_amt = 외화주식 원화환산 인출가능금
+            withdrawable = _int(bal.get('fc_stk_krw_repl_set_amt', 0))
+        except Exception:
+            pass
+        # 보유종목 평가금액: ka10085 결과에서 직접 집계
+        try:
+            pos_list = fetch_kiwoom_positions()
+            holding_value = sum(int(p.get('eval_amount', 0)) for p in pos_list)
+            eval_profit   = sum(int(p.get('eval_profit', 0)) for p in pos_list)
         except Exception:
             pass
         return {
             'deposit':       deposit,
+            'withdrawable':  withdrawable,
             'holding_value': holding_value,
-            'total_assets':  deposit + holding_value,
+            'total_assets':  deposit + withdrawable + holding_value,
             'eval_profit':   eval_profit,
         }
 
-    return _kiwoom_cached('balance', _call, ttl=_BALANCE_TTL) or {}
+    api_val = _kiwoom_cached('balance', _call, ttl=_BALANCE_TTL) or {}
+    # Kiwoom API가 0을 반환하면 stale DB 스냅샷으로 폴백 (estimate보다 정확)
+    if api_val.get('total_assets', 0) == 0 and stale_db_val:
+        logger.debug('[ACCT_DB] Kiwoom API total_assets=0 → stale DB 스냅샷 사용')
+        return stale_db_val
+    return api_val
 
 
 
@@ -938,6 +983,14 @@ DAILY_WATCHLIST_PATH = BASE / 'data' / 'daily_watchlist.json'
 
 
 async def build_candidates() -> list[dict]:
+    # config에서 max_watchlist_size 읽기 (WL_CAP)
+    try:
+        import yaml
+        _cfg = yaml.safe_load(open(CONFIG_PATH, encoding='utf-8'))
+        _wl_cap = int(_cfg.get('max_watchlist_size', 30))
+    except Exception:
+        _wl_cap = 30
+
     # ① monitoring_watchlist.json — main_auto_trading.py가 매 루프마다 저장하는 실시간 감시 목록
     watchlist: list[dict] = []
     mon = read_json(MONITORING_WATCHLIST_PATH)
@@ -949,11 +1002,14 @@ async def build_candidates() -> list[dict]:
                     'stock_name': item.get('stock_name', item['stock_code']),
                 })
 
+    # WL_CAP 적용 — 모니터링 실제 종목 수와 일치
+    watchlist = watchlist[:_wl_cap]
+
     # ② fallback: watchlist.json (validated_stocks 스냅샷)
     if not watchlist:
         raw = read_json(WATCHLIST_PATH)
         if isinstance(raw, list):
-            watchlist = raw
+            watchlist = raw[:_wl_cap]
 
     positions_raw: dict = read_json(POSITIONS_PATH)
 
@@ -1192,7 +1248,8 @@ def build_trades(limit: int = 50, days: int = 7,
                       stock_code, stock_name, trade_type,
                       quantity, price, realized_profit,
                       COALESCE(exit_reason, entry_reason, ''),
-                      COALESCE(strategy_name, 'SMC')
+                      COALESCE(strategy_name, 'SMC'),
+                      entry_context
                FROM trades
                WHERE trade_time::date >= %s AND trade_time::date <= %s
                ORDER BY trade_id ASC""",
@@ -1207,10 +1264,12 @@ def build_trades(limit: int = 50, days: int = 7,
     raw = []
     for r in all_rows:
         ts_val = r[2].isoformat() if r[2] else ''
+        ec = r[11] or {}
         raw.append({
             'id': r[0], 'date': str(r[1]), 'ts': ts_val, 'code': r[3], 'name': r[4],
             'type': r[5], 'qty': r[6], 'price': float(r[7] or 0), 'pnl': float(r[8] or 0),
             'reason': r[9] or '', 'strategy': r[10] or 'SMC',
+            'entry_price_ctx': float(ec.get('entry_price', 0)) if isinstance(ec, dict) else 0,
         })
 
     # Match each SELL to the latest BUY of the same stock
@@ -1223,12 +1282,16 @@ def build_trades(limit: int = 50, days: int = 7,
             last_buy[t['code']] = t
         elif t['type'] == 'SELL':
             buy = last_buy.get(t['code'])
-            # BUY 없으면 positions_state entry_price로 보완
-            if buy is None and t['code'] in positions_raw:
-                pos = positions_raw[t['code']]
-                ep = float(pos.get('entry_price') or pos.get('avg_price') or 0)
+            # BUY 없으면: 1) SELL의 entry_context.entry_price 2) positions_state로 보완
+            if buy is None:
+                ep = t.get('entry_price_ctx', 0)
                 if ep > 0:
-                    buy = {'price': ep, 'strategy': pos.get('entry_reason', 'SMC'), 'ts': pos.get('entry_date', ''), 'qty': t['qty']}
+                    buy = {'price': ep, 'strategy': t['strategy'], 'ts': '', 'qty': t['qty']}
+                elif t['code'] in positions_raw:
+                    pos = positions_raw[t['code']]
+                    ep = float(pos.get('entry_price') or pos.get('avg_price') or 0)
+                    if ep > 0:
+                        buy = {'price': ep, 'strategy': pos.get('entry_reason', 'SMC'), 'ts': pos.get('entry_date', ''), 'qty': t['qty']}
             pairs.append((buy, t))
 
     # Sort by SELL id DESC, take limit
@@ -1754,7 +1817,7 @@ def api_account():
         deposit       = kbal['deposit']
         holding_value = kbal['holding_value']
         total_assets  = kbal['total_assets']
-        daily_pnl     = kbal.get('eval_profit', 0) + _today_realized_pnl_from_db()
+        daily_pnl     = _today_realized_pnl_from_db()
         data_source   = 'db_snapshot' if kbal.get('_from_db') else 'kiwoom_api'
         snapshot_age  = 0
 
@@ -1998,7 +2061,7 @@ def api_daily_report(date: Optional[str] = None):
     """
     from collections import defaultdict
 
-    target_date = date or today_str()
+    target_date = (date or today_str()).replace('-', '')  # YYYY-MM-DD → YYYYMMDD
     log_path = LOGS_DIR / f'auto_trading_{target_date}.log'
 
     if not log_path.exists():
@@ -2484,7 +2547,7 @@ def api_daily_report(date: Optional[str] = None):
 
     # ── 일일 헬스 기록 저장 (trend용) ────────────────────────────────────────
     import json as _json
-    _history_path = BASE_DIR / 'data' / 'health_history.json'
+    _history_path = BASE / 'data' / 'health_history.json'
     try:
         _history: list = _json.loads(_history_path.read_text()) if _history_path.exists() else []
         # 중복 날짜 제거 후 최신 항목 추가
@@ -2600,7 +2663,7 @@ def api_before_after():
 
     tuner   = ParamTuner()
     cl      = tuner.load_change_log()
-    history_path = BASE_DIR / 'data' / 'health_history.json'
+    history_path = BASE / 'data' / 'health_history.json'
 
     applied = [e for e in cl if e.get('ops_type') != 'ROLLBACK' and e.get('applied')]
     if not applied:
@@ -2659,7 +2722,7 @@ def api_health_trend(days: int = 7):
     최근 N일 전략 건강도 추세
     """
     import json as _json
-    _history_path = BASE_DIR / 'data' / 'health_history.json'
+    _history_path = BASE / 'data' / 'health_history.json'
     if not _history_path.exists():
         return {'trend': [], 'avg_7d': None, 'direction': 'unknown'}
 

@@ -51,8 +51,20 @@ swing:
     max_hold_days: 30
     drawdown_exit_pct: 5.0       # 고점 대비 5% 이상 하락 시 청산
 
+  cooldown:
+    by_reason:
+      DRAWDOWN_STOP: 5    # 드로우다운 손절 → 5거래일 쿨다운
+      MA20_EXIT: 5        # MA20 강제 청산 → 5거래일 쿨다운
+      MA5_EXIT: 3         # MA5 연속 이탈 → 3거래일 쿨다운
+      TIME_EXIT: 1        # 최대 보유일 → 1거래일 쿨다운
+      TARGET_HIT: 0       # 목표가 도달 → 즉시 재진입 허용
+      PARTIAL_REDUCE: 0   # 부분 청산 → 재진입 제한 없음
+      default: 3          # 미분류 reason 기본값
+    override_min_score: 9.0   # 이 점수 이상이면 쿨다운 예외 허용
+
   data:
     lookback_days: 120
     universe_file: "data/swing_universe.json"
     state_file: "data/swing_positions.json"
+    exit_history_file: "data/swing_exit_history.json"
     order_dir: "logs/"

@@ -74,9 +74,23 @@ def is_trading_day(target_date=None):
         day_name = '토요일' if weekday == 5 else '일요일'
         return False, f'주말 ({day_name})'
 
-    # 휴장일 체크
+    # 휴장일 체크 (DB)
     holiday_name = is_holiday(target_date)
     if holiday_name:
+        # DB가 휴장이라고 해도 pykrx 실제 거래 데이터로 교차 검증
+        # → DB 오류로 인한 잘못된 휴장 처리 방지
+        try:
+            from pykrx import stock as _krx_stock
+            tickers = _krx_stock.get_market_ticker_list(target_date.strftime('%Y%m%d'))
+            if tickers:
+                import logging
+                logging.getLogger(__name__).warning(
+                    f"[HOLIDAY_MISMATCH] DB=휴장({holiday_name}) but pykrx=거래일 "
+                    f"({target_date}) — treating as trading day"
+                )
+                return True, None
+        except Exception:
+            pass
         return False, f'휴장일 ({holiday_name})'
 
     return True, None

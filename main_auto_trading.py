@@ -1631,6 +1631,54 @@ class IntegratedTradingSystem:
         except Exception:
             pass
 
+    def _log_buy_failure(self, stock_code: str, stock_name: str, stage: str, reason: str,
+                         entry_reason: str = None, confidence: float = None,
+                         choch_grade: str = None, market_regime: str = None,
+                         rvol: float = None, vwap_distance: float = None,
+                         price: float = None) -> None:
+        """execute_buy 게이트 차단을 buy_failures 테이블에 기록.
+        실패 시 무시 — 트레이딩 흐름에 영향 없음."""
+        try:
+            self.db.insert_buy_failure({
+                'stock_code': stock_code,
+                'stock_name': stock_name,
+                'fail_stage': stage,
+                'fail_reason': reason,
+                'confidence': confidence,
+                'choch_grade': choch_grade,
+                'market_regime': market_regime,
+                'rvol': rvol,
+                'vwap_distance': vwap_distance,
+                'price_at_failure': price,
+                'entry_reason': str(entry_reason or '')[:200],
+                'attempted_at': datetime.now().isoformat(),
+            })
+        except Exception:
+            pass
+
+    def _log_rejection(self, stock_code: str, stock_name: str, stage: str, reason: str,
+                       confidence: float = None, choch_grade: str = None,
+                       market_regime: str = None, rvol: float = None,
+                       atr_percent: float = None, price: float = None) -> None:
+        """신호 거절을 signal_rejections 테이블에 비동기-안전하게 기록.
+        실패 시 무시 — 트레이딩 흐름에 영향 없음."""
+        try:
+            self.db.insert_signal_rejection({
+                'stock_code': stock_code,
+                'stock_name': stock_name,
+                'rejection_stage': stage,
+                'rejection_reason': reason,
+                'confidence': confidence,
+                'choch_grade': choch_grade,
+                'market_regime': market_regime,
+                'rvol': rvol,
+                'atr_percent': atr_percent,
+                'price_at_rejection': price,
+                'rejected_at': datetime.now().isoformat(),
+            })
+        except Exception:
+            pass
+
     def _handle_data_quality_failure(self, stock_code: str, stock_name: str, failure_reason: str):
         """
         데이터 품질 실패 처리 (문서 명세)
@@ -1822,13 +1870,34 @@ class IntegratedTradingSystem:
 
     # ─── 포지션 상태 영속화 (재시작 복원용) ─────────────────────────────────
     _POSITIONS_STATE_PATH = 'data/positions_state.json'
+    _positions_state_version: int = 0
 
     def _save_positions_state(self):
-        """self.positions를 JSON 파일로 저장 (재시작 복원용)"""
+        """self.positions를 JSON 파일로 저장 (재시작 복원용).
+
+        무결성 보장:
+        - updated_at / state_version: stale·순서 추적
+        - atomic save: .tmp → rename
+        - .bak 백업: 성공 시 이전 파일 보존
+        """
         import json as _json
+        import time as _time
+        target = Path(self._POSITIONS_STATE_PATH)
+        tmp    = target.with_suffix('.tmp')
+        bak    = target.with_suffix('.bak')
+        t0 = _time.monotonic()
         try:
-            today = datetime.now().strftime('%Y-%m-%d')
-            state = {}
+            self.__class__._positions_state_version += 1
+            ver   = self.__class__._positions_state_version
+            now   = datetime.now()
+            today = now.strftime('%Y-%m-%d')
+            state = {
+                '_meta': {
+                    'updated_at':     now.strftime('%Y-%m-%d %H:%M:%S'),
+                    'state_version':  ver,
+                    'position_count': len(self.positions),
+                }
+            }
             for code, pos in self.positions.items():
                 entry = {}
                 for k, v in pos.items():
@@ -1836,50 +1905,94 @@ class IntegratedTradingSystem:
                         entry[k] = v.isoformat()
                     else:
                         try:
-                            _json.dumps(v)  # serializable 검증
+                            _json.dumps(v)
                             entry[k] = v
                         except (TypeError, ValueError):
                             entry[k] = str(v)
                 entry['_saved_date'] = today
+                entry['_updated_at'] = now.strftime('%Y-%m-%d %H:%M:%S')
                 state[code] = entry
-            with open(self._POSITIONS_STATE_PATH, 'w', encoding='utf-8') as f:
-                _json.dump(state, f, ensure_ascii=False, indent=2)
+
+            # atomic write: tmp → rename
+            tmp.write_text(_json.dumps(state, ensure_ascii=False, indent=2), encoding='utf-8')
+            if target.exists():
+                target.replace(bak)   # 이전 파일을 .bak으로 보존
+            tmp.replace(target)
+
+            elapsed_ms = int((_time.monotonic() - t0) * 1000)
+            logger.debug(
+                f"[STATE_SAVE] version={ver} positions={len(self.positions)} "
+                f"duration={elapsed_ms}ms file={target.name}"
+            )
         except Exception as e:
-            logger.warning(f"[POS_STATE] 저장 실패: {e}")
+            logger.warning(f"[POS_STATE] 저장 실패 (v{self.__class__._positions_state_version}): {e}")
+            tmp.unlink(missing_ok=True)
 
     def _restore_positions_state(self):
-        """재시작 시 positions_state.json에서 self.positions 복원"""
+        """재시작 시 positions_state.json에서 self.positions 복원.
+        메인 파일 손상 시 .bak 자동 폴백.
+        로드 후 sanity check 수행.
+        """
         import json as _json
-        import os as _os
-        try:
-            if not _os.path.exists(self._POSITIONS_STATE_PATH):
-                return
-            today = datetime.now().strftime('%Y-%m-%d')
-            with open(self._POSITIONS_STATE_PATH, 'r', encoding='utf-8') as f:
-                state = _json.load(f)
-            restored = 0
-            for code, entry in state.items():
-                # entry_date 기준으로 당일 여부 판단 (재시작 날짜가 아닌 진입 날짜)
-                entry_date_str = entry.get('entry_date', entry.get('entry_time', ''))
-                if isinstance(entry_date_str, str) and not entry_date_str.startswith(today):
-                    continue  # 당일 포지션만 복원
-                if code in self.positions:
-                    continue  # 이미 있으면 스킵
-                # datetime 필드 복원
-                for dt_key in ('entry_time', 'entry_date'):
-                    if dt_key in entry and isinstance(entry[dt_key], str):
-                        try:
-                            entry[dt_key] = datetime.fromisoformat(entry[dt_key])
-                        except ValueError:
-                            pass
-                entry.pop('_saved_date', None)
-                self.positions[code] = entry
-                restored += 1
-                logger.info(f"[POS_RESTORE] {entry.get('stock_name', code)} 복원 완료 (진입가={entry.get('entry_price')})")
-            if restored > 0:
-                logger.info(f"[POS_RESTORE] 총 {restored}건 포지션 복원")
-        except Exception as e:
-            logger.warning(f"[POS_STATE] 복원 실패: {e}")
+        target = Path(self._POSITIONS_STATE_PATH)
+        bak    = target.with_suffix('.bak')
+        today  = datetime.now().strftime('%Y-%m-%d')
+
+        state = None
+        for candidate in (target, bak):
+            if not candidate.exists():
+                continue
+            try:
+                state = _json.loads(candidate.read_text(encoding='utf-8'))
+                if candidate == bak:
+                    logger.warning(f"[POS_STATE] 메인 파일 손상 → .bak 복구 사용")
+                break
+            except Exception as e:
+                logger.warning(f"[POS_STATE] {candidate.name} 로드 실패: {e}")
+
+        if state is None:
+            return
+
+        restored = skipped_sanity = 0
+        for code, entry in state.items():
+            if code.startswith('_'):
+                continue  # _meta 등 메타 키 스킵
+            entry_date_str = entry.get('entry_date', entry.get('entry_time', ''))
+            if isinstance(entry_date_str, str) and not entry_date_str.startswith(today):
+                continue
+            if code in self.positions:
+                continue
+
+            # sanity check — 깨진 state 감지
+            high  = entry.get('highest_price') or 0
+            trail = entry.get('trailing_stop_price') or 0
+            ep    = entry.get('entry_price') or 0
+            if high > 0 and ep > 0 and high < ep * 0.5:
+                logger.warning(f"[STATE_INVALID] {code} highest_price={high} < entry*0.5 → 무시")
+                skipped_sanity += 1
+                continue
+            if trail > 0 and high > 0 and trail > high * 1.05:
+                logger.warning(f"[STATE_INVALID] {code} trailing={trail} > highest*1.05 → 무시")
+                skipped_sanity += 1
+                continue
+
+            for dt_key in ('entry_time', 'entry_date'):
+                if dt_key in entry and isinstance(entry[dt_key], str):
+                    try:
+                        entry[dt_key] = datetime.fromisoformat(entry[dt_key])
+                    except ValueError:
+                        pass
+            entry.pop('_saved_date', None)
+            entry.pop('_updated_at', None)
+            # 복원 포지션은 strategy_horizon 기본값 SWING 보장
+            if 'strategy_horizon' not in entry:
+                entry['strategy_horizon'] = 'SWING'
+            self.positions[code] = entry
+            restored += 1
+            logger.info(f"[POS_RESTORE] {entry.get('stock_name', code)} 복원 (진입가={ep} high={high} trail={trail})")
+
+        if restored > 0 or skipped_sanity > 0:
+            logger.info(f"[POS_RESTORE] 복원={restored}건 sanity_skip={skipped_sanity}건")
     # ────────────────────────────────────────────────────────────────────────
 
     def refresh_access_token(self):
@@ -1991,8 +2104,8 @@ class IntegratedTradingSystem:
                     console.print()
                     return True
 
-                # 토큰 오류 (8005)
-                elif return_code == 8005:
+                # 토큰 오류 (8005 REST / 805004 WebSocket)
+                elif return_code in (8005, 805004):
                     console.print(f"[red]❌ 로그인 실패: 토큰 인증 오류 [CODE={return_code}][/red]")
                     console.print(f"[red]   메시지: {return_msg}[/red]")
 
@@ -2118,6 +2231,31 @@ class IntegratedTradingSystem:
             )
 
             # 5. 보유 포지션 로드
+            # positions_strategy.json 우선 (주문 시점 기록) → swing_positions.json 보조
+            _pos_strategy: dict = {}
+            try:
+                import json as _json
+                _psf = Path('data/positions_strategy.json')
+                if _psf.exists():
+                    _pos_strategy = _json.loads(_psf.read_text(encoding='utf-8'))
+            except Exception:
+                pass
+            _swing_codes: set = set()
+            try:
+                _sp = Path('data/swing_positions.json')
+                if _sp.exists():
+                    _swing_codes = set(_json.loads(_sp.read_text(encoding='utf-8')).keys())
+            except Exception:
+                pass
+            # positions_state.json — trailing 상태 복원용 (highest_price, trailing_stop_price)
+            _pos_state_cache: dict = {}
+            try:
+                _psc = Path(self._POSITIONS_STATE_PATH)
+                if _psc.exists():
+                    _pos_state_cache = _json.loads(_psc.read_text(encoding='utf-8'))
+            except Exception:
+                pass
+
             if positions:
                 console.print("[bold]보유 포지션:[/bold]")
                 for pos in positions:
@@ -2158,9 +2296,16 @@ class IntegratedTradingSystem:
                     if not entry_date:
                         entry_date = datetime.now()
 
+                    # positions_strategy.json 우선, 없으면 swing_positions.json으로 보조 판단
+                    _strategy_tag = _pos_strategy.get(stock_code) or (
+                        'swing' if stock_code in _swing_codes else 'smc'
+                    )
+                    _is_swing_pos = _strategy_tag == 'swing'
+
                     # 🔧 FIX: 기존 position 데이터 보존 (모든 필드 유지)
                     if stock_code in self.positions:
-                        # 기존 포지션이 있으면 업데이트만
+                        # 기존 포지션이 있으면 가격/수량만 업데이트, trailing 상태 보존
+                        _cur_high = self.positions[stock_code].get('highest_price', avg_price)
                         self.positions[stock_code].update({
                             'stock_name': stock_name,
                             'name': stock_name,
@@ -2170,10 +2315,20 @@ class IntegratedTradingSystem:
                             'current_price': current_price,
                             'profit_rate': profit_rate,
                             'eval_amount': quantity * current_price,
-                            'entry_date': entry_date
+                            'entry_date': entry_date,
+                            'strategy': _strategy_tag,
+                            # highest_price: 기존값이 avg_price보다 높으면 보존
+                            'highest_price': max(_cur_high, avg_price),
                         })
                     else:
                         # 신규 포지션이면 새로 생성
+                        # trailing 상태: positions_state에서 복원 (재시작 시 손실 방지)
+                        _saved = _pos_state_cache.get(stock_code, {})
+                        _restored_high  = _saved.get('highest_price') or avg_price
+                        _restored_trail = _saved.get('trailing_stop_price')
+                        _restored_active = _saved.get('trailing_active', False)
+                        if _restored_high < avg_price:
+                            _restored_high = avg_price   # 현재가 기준 최솟값 보장
                         self.positions[stock_code] = {
                             'stock_name': stock_name,
                             'name': stock_name,
@@ -2184,12 +2339,21 @@ class IntegratedTradingSystem:
                             'profit_rate': profit_rate,
                             'eval_amount': quantity * current_price,
                             'entry_date': entry_date,
-                            'highest_price': avg_price,
-                            'trailing_active': False,
-                            'trailing_stop_price': None,
-                            'partial_exit_stage': 0,
-                            'gap_reentered_today': False
+                            'highest_price': _restored_high,
+                            'trailing_active': _restored_active,
+                            'trailing_stop_price': _restored_trail,
+                            'partial_exit_stage': _saved.get('partial_exit_stage', 0),
+                            'gap_reentered_today': False,
+                            'strategy': _strategy_tag,
+                            'overnight_held': _saved.get('overnight_held', False),
                         }
+                        if _restored_trail:
+                            logger.info(
+                                f"[POS_RESTORE] {stock_name}({stock_code}) trailing 복원: "
+                                f"high={_restored_high:,} stop={_restored_trail:,}"
+                            )
+                    if _is_swing_pos:
+                        console.print(f"  [cyan][SWING][/cyan] {stock_name}({stock_code}) — 일중 trailing 제외")
 
                     console.print(f"  • {stock_name}({stock_code}): {quantity}주 @ {current_price:,}원 "
                                 f"[{'green' if profit_rate >= 0 else 'red'}]{profit_rate:+.2f}%[/]")
@@ -3364,6 +3528,7 @@ class IntegratedTradingSystem:
         last_sync = datetime.now()  # 거래 내역 동기화 마지막 시간
         last_status_update = datetime.now()
         last_kis_check = datetime.now() - timedelta(seconds=kis_interval)  # 즉시 첫 체크
+        last_swing_attach = datetime.now() - timedelta(seconds=300)  # [P0.5] 즉시 첫 실행
         eod_executed = False  # ✅ EOD 프로세스 실행 여부 플래그
         overnight_close_executed = False  # 🔧 2026-02-15: 오버나이트 강제 청산 실행 여부
         failsafe_close_executed = False   # 🔥 2026-04-03: 15:25 무조건 전량 청산 실행 여부
@@ -3420,6 +3585,11 @@ class IntegratedTradingSystem:
 
                 # 🔧 2026-02-23: Watchdog 하트비트 갱신
                 self._write_heartbeat("monitoring")
+
+                # [P0.5] Swing Risk Attach 주기적 실행 (5분마다 — swing_executor 동기화)
+                if (current_time - last_swing_attach).seconds >= 300:
+                    self._attach_swing_risk_positions()
+                    last_swing_attach = current_time
 
                 # 🔧 CRITICAL FIX: 15:30 이후 자동 종료 (장마감 후 불필요한 활동 방지)
                 shutdown_time = current_time.replace(hour=15, minute=30, second=0, microsecond=0)
@@ -3549,6 +3719,13 @@ class IntegratedTradingSystem:
                                 if _fc_code not in self.positions:
                                     continue
                                 _fc_pos = self.positions[_fc_code]
+                                # overnight 승인 포지션은 FAILSAFE에서도 보호 (swing carry)
+                                if _fc_pos.get('allow_overnight_final_confirm', False):
+                                    logger.info(
+                                        f"[FAILSAFE_SKIP] {_fc_pos.get('stock_name', _fc_code)} "
+                                        f"overnight 승인 포지션 — FAILSAFE 청산 skip"
+                                    )
+                                    continue
                                 _fc_cur = _fc_pos.get('current_price', _fc_pos['entry_price'])
                                 _fc_pnl = (_fc_cur - _fc_pos['entry_price']) / _fc_pos['entry_price'] * 100
                                 _fc_reason = f"15:25 무조건 강제청산 [OVERNIGHT_FAILSAFE]"
@@ -3828,7 +4005,21 @@ class IntegratedTradingSystem:
         stock_data = []
 
         # 모니터링 대상: watchlist + 보유 종목 (중복 제거)
-        all_stocks = set(self.watchlist) | set(self.positions.keys())
+        # 🔧 2026-05-04: API TR 제한 방지 — watchlist 최대 N개 cap
+        _max_wl = int(self.config.get('max_watchlist_size', 30))
+        _wl_capped = set(list(self.watchlist)[:_max_wl])
+        if len(self.watchlist) > _max_wl:
+            logger.info(f"[WL_CAP] watchlist {len(self.watchlist)}개 → {_max_wl}개로 제한")
+        all_stocks = _wl_capped | set(self.positions.keys())
+
+        # [DIAG_MODE] diagnostic_mode=True 시 최근 ACCEPT 종목을 watchlist에 강제 포함
+        # 실거래 진입 조건 변경 없음 — 관측 목적만
+        if self.config.get('diagnostic_mode', False):
+            _diag_accepts = self.signal_orchestrator.get_recent_accepts(window_minutes=35)
+            _injected = _diag_accepts - all_stocks - set(self.positions)
+            if _injected:
+                logger.info(f"[DIAG_INJECT] ACCEPT 강제포함: {sorted(_injected)}")
+                all_stocks |= _injected
 
         for stock_code in all_stocks:
             try:
@@ -5056,6 +5247,10 @@ class IntegratedTradingSystem:
             _ks_reason = getattr(self, '_kill_switch_reason', '미청산 포지션')
             return False, f"[KILL_SWITCH] {_ks_reason}"
 
+        # 1b. Orphan Halt (고아 포지션 — 손절 보호 없는 브로커 보유 종목 존재)
+        if getattr(self, '_orphan_halt', False):
+            return False, "[ORPHAN_HALT] 고아 포지션 — 수동 확인 후 재시작 필요"
+
         # 2. Daily Risk Controls (일일 손실 한도 + 최대 거래 횟수)
         _dr_cfg = self.config.get('risk_control.daily_risk', {})
         if _dr_cfg.get('enabled', True):
@@ -5133,6 +5328,10 @@ class IntegratedTradingSystem:
             _gate_ok, _gate_reason = self._check_global_risk_gates(stock_code, stock_name)
             if not _gate_ok:
                 logger.debug(f"[GLOBAL_GATE] {stock_code}: {_gate_reason}")
+                # 시스템 리스크 이벤트만 기록 (물리적 시간 필터는 제외)
+                if not _gate_reason.startswith('[TIME_PHYSICAL]'):
+                    self._log_rejection(stock_code=stock_code, stock_name=stock_name,
+                                        stage='GLOBAL_GATE', reason=_gate_reason[:200])
                 return
 
             # ② Per-stock State Gate — 종목별 (손절 이력 / 당일 매매 이력 / 무효화 신호)
@@ -5710,6 +5909,118 @@ class IntegratedTradingSystem:
 
                     if not signal:
                         logger.info(f"[SMC_NO_SIG] {stock_code} {reason}")
+                        try:
+                            _rej_grade = details.get('choch_grade', {}).get('grade') if isinstance(details.get('choch_grade'), dict) else details.get('choch_grade')
+                            _rej_price = details.get('current_price') or current_price
+                            _rej_rvol = details.get('rvol')
+                            self._log_rejection(
+                                stock_code=stock_code, stock_name=stock_name,
+                                stage='SMC_NO_SIG', reason=reason[:200],
+                                choch_grade=str(_rej_grade) if _rej_grade else None,
+                                market_regime=str(_smc_regime) if _smc_regime else None,
+                                rvol=float(_rej_rvol) if _rej_rvol else None,
+                                price=float(_rej_price) if _rej_price else None,
+                            )
+                        except Exception:
+                            pass
+                        try:
+                            from analyzers.smc.smc_decision_logger import get_smc_logger as _gsmc
+                            _gsmc().log_no_sig(stock_code, details, reason)
+                        except Exception:
+                            pass
+
+                        # [DIAG_MODE] ACCEPT 종목이 SMC 탈락한 이유를 상세 로그로 저장
+                        if (self.config.get('diagnostic_mode', False)
+                                and stock_code in self.signal_orchestrator.recent_accepts):
+                            try:
+                                import json as _json
+                                _d = details or {}
+                                # volume ratio (현재봉 vs 20봉 평균)
+                                _vol_ratio = None
+                                if df_5min is not None and len(df_5min) >= 21 and 'volume' in df_5min.columns:
+                                    _v_now = float(df_5min['volume'].iloc[-1])
+                                    _v_avg = float(df_5min['volume'].iloc[-21:-1].mean())
+                                    _vol_ratio = round(_v_now / _v_avg, 2) if _v_avg > 0 else None
+                                # CHoCH grade
+                                _choch_raw = _d.get('choch_grade')
+                                _choch_str = str(_choch_raw.get('grade', '-')) if isinstance(_choch_raw, dict) else str(_choch_raw or '-')
+                                # sweep
+                                _sweep_raw = _d.get('liquidity_sweep')
+                                _sweep_detected = bool(_sweep_raw)
+                                _sweep_type = _sweep_raw.get('sweep_type') if isinstance(_sweep_raw, dict) else None
+                                # BOS (CHoCH 없을 때 추세 지속 여부)
+                                _bos_confirmed = bool(_d.get('bos'))
+                                # HTF bias trend (30분봉 MTF)
+                                _htf_trend = (_d.get('mtf_bias') or {}).get('htf_trend')
+                                # 5분봉 structure trend (CHoCH 가능 여부 결정 변수)
+                                _structure_trend = (_d.get('structure') or {}).get('trend')
+                                # ATR% (14봉 기준)
+                                _atr_pct = None
+                                if (df_5min is not None and len(df_5min) >= 15
+                                        and all(c in df_5min.columns for c in ('high', 'low', 'close'))):
+                                    _h  = df_5min['high'].values[-14:]
+                                    _l  = df_5min['low'].values[-14:]
+                                    _pc = df_5min['close'].values[-15:-1]
+                                    _trs = [max(h - l, abs(h - p), abs(l - p)) for h, l, p in zip(_h, _l, _pc)]
+                                    _atr_pct = round(sum(_trs) / len(_trs) / current_price * 100, 2) if current_price > 0 else None
+                                # OR position pct (당일 고저 범위 내 현재가 위치)
+                                _or_pos = None
+                                if (df_5min is not None and len(df_5min) >= 2
+                                        and all(c in df_5min.columns for c in ('high', 'low'))):
+                                    _dh = float(df_5min['high'].max())
+                                    _dl = float(df_5min['low'].min())
+                                    _or_pos = round((current_price - _dl) / (_dh - _dl), 3) if _dh > _dl else None
+                                _diag = {
+                                    "ts":           datetime.now().isoformat(timespec='seconds'),
+                                    "symbol":       stock_code,
+                                    "name":         stock_name,
+                                    "accept_price": int(current_price),
+                                    "smc_passed":          False,
+                                    "smc_reason":          reason[:120] if reason else None,
+                                    "regime":              str(_smc_regime) if _smc_regime else None,
+                                    "pipeline_exit_stage": "SMC_GATE",
+                                    "gate_snapshot": {
+                                        "sweep_detected":    _sweep_detected,
+                                        "sweep_type":        _sweep_type,
+                                        "bos_confirmed":     _bos_confirmed,
+                                        "choch_grade":       _choch_str,
+                                        "htf_trend":         _htf_trend,
+                                        "volume_ratio":      _vol_ratio,
+                                        "atr_pct":           _atr_pct,
+                                        "or_position_pct":   _or_pos,
+                                        "compression_score": None,   # D+1 enricher
+                                        "swing_count":       (_d.get('structure') or {}).get('swing_count'),
+                                        "swing_high_count":  (_d.get('structure') or {}).get('swing_high_count'),
+                                        "swing_low_count":   (_d.get('structure') or {}).get('swing_low_count'),
+                                        "structure_trend":   _structure_trend,
+                                        "prev_trend":        (_d.get('structure') or {}).get('prev_trend'),
+                                        "transition_note":   (_d.get('structure') or {}).get('transition_note'),
+                                        "transition_origin": (_d.get('structure') or {}).get('transition_origin'),
+                                        "ranging_choch_cand": _d.get('ranging_choch_candidate', False),
+                                        "ranging_choch_cfg": (self.config.get('smc', {}).get('choch', {})
+                                                              .get('ranging_choch', {}).get('enabled', False)),
+                                        "choch_mode":        _d.get('choch_mode'),
+                                        # regime context (state transition map용)
+                                        "market_regime":     getattr(self, '_market_context_status', None),
+                                        "atr_regime":        ("high" if (_atr_pct or 0) >= 2.0
+                                                               else "low" if (_atr_pct or 0) < 1.0
+                                                               else "normal"),
+                                        "or_zone":           ("upper" if (_or_pos or 0) >= 0.7
+                                                              else "lower" if (_or_pos or 0) < 0.3
+                                                              else "mid") if _or_pos is not None else None,
+                                        "sweep_present":     bool(_sweep_detected),
+                                    },
+                                }
+                                _diag_path = Path(f"logs/smc_diag_{datetime.now().strftime('%Y%m%d')}.jsonl")
+                                with open(_diag_path, 'a', encoding='utf-8') as _f:
+                                    _f.write(_json.dumps(_diag, ensure_ascii=False) + '\n')
+                                logger.info(
+                                    f"[SMC_DIAG] {stock_code} reason={reason[:50] if reason else '-'} "
+                                    f"htf={_htf_trend} or={_or_pos} atr={_atr_pct}% "
+                                    f"sweep={_sweep_type} choch={_choch_str} vol={_vol_ratio}"
+                                )
+                            except Exception as _de:
+                                logger.debug(f"[SMC_DIAG_ERR] {stock_code}: {_de}")
 
                         # 🔧 2026-03-21: Trend Breakout Fallback
                         # SMC 신호 없을 때 → 레짐 확인 후 TREND 전략 시도
@@ -5744,6 +6055,10 @@ class IntegratedTradingSystem:
                                     )
                                     return
 
+                                logger.info(
+                                    f"[TREND_READY] {stock_code} {stock_name}: "
+                                    f"ATR={_atr_ratio_val:.2f} 통과 → regime 체크"
+                                )
                                 regime, regime_reason = self.market_context.get_regime()
                                 if regime == "TREND":
                                     # 시간 필터
@@ -5810,7 +6125,7 @@ class IntegratedTradingSystem:
                                                 entry_reason=entry_reason,
                                             )
                                         else:
-                                            logger.debug(f"[TREND_NO_SIG] {stock_code}: {t_reason}")
+                                            logger.info(f"[TREND_NO_SIG] {stock_code} {stock_name}: {t_reason}")
                                             # 🔥 2026-04-03: MISSED_BY_EMA9 추적 시작
                                             _would_grade = t_details.get("would_be_grade")
                                             if _would_grade and stock_code not in self._ema9_blocks:
@@ -5826,9 +6141,9 @@ class IntegratedTradingSystem:
                                                     f"→ 15분 추적 시작"
                                                 )
                                     else:
-                                        logger.debug(f"[TREND_TIME_BLOCK] {stock_code}: {now_hm} 범위밖 {t_start}~{t_end}")
+                                        logger.info(f"[TREND_TIME_BLOCK] {stock_code} {stock_name}: {now_hm} 범위밖 {t_start}~{t_end}")
                                 else:
-                                    logger.debug(f"[TREND_REGIME_SKIP] {stock_code}: {regime} ({regime_reason})")
+                                    logger.info(f"[TREND_REGIME_SKIP] {stock_code} {stock_name}: {regime} ({regime_reason})")
                             except Exception as _te:
                                 logger.debug(f"[TREND_ERR] {stock_code}: {_te}")
 
@@ -5952,7 +6267,7 @@ class IntegratedTradingSystem:
                                                                 f"hb_ok={_sqz_hb_ok}"
                                                             )
                                 except Exception as _sqze:
-                                    logger.debug(f"[SQZ_ERR] {stock_code}: {_sqze}")
+                                    logger.error(f"[SQZ_ERR] {stock_code}: {_sqze}")
 
                         # 🔧 2026-04-03: RS (Relative Strength) Mode
                         # TRADE_OK 상태에서만 작동 (DEFENSIVE 반대)
@@ -7095,8 +7410,9 @@ class IntegratedTradingSystem:
 
             # ── 3봉 조기 청산 검증: 진입 후 N봉 이내 역방향 → 즉시 이탈 ──────────
             # 핵심: 좋은 자리 진입 = 즉시 움직임. 안 가면 틀린 자리
+            # SWING 포지션 제외: 진입 초기 noise는 스윙의 정상 흔들림
             _ev_cfg = self.config.get('entry_verification', {})
-            if _ev_cfg.get('enabled', True):
+            if _ev_cfg.get('enabled', True) and position.get('strategy_horizon', 'SWING') != 'SWING':
                 try:
                     _ev_bars    = int(_ev_cfg.get('max_bars', 3))
                     _ev_min_pnl = float(_ev_cfg.get('min_pnl_pct', -0.3))  # -0.3% 이상 손실 시 이탈
@@ -7143,11 +7459,28 @@ class IntegratedTradingSystem:
                     position['mfe_pct'] = round((position['peak_price'] - _ep) / _ep * 100, 3)
                     position['mae_pct'] = round((_ep - position['trough_price']) / _ep * 100, 3)
 
+            # SWING 포지션 보유 마일스톤 로그 (4h/8h/24h/48h/72h)
+            if position.get('strategy_horizon', 'SWING') == 'SWING' and position.get('entry_time'):
+                _hold_secs = (datetime.now() - position['entry_time']).total_seconds()
+                _hold_hours = _hold_secs / 3600
+                _ms_ep = position.get('entry_price', 0)
+                _ms_pnl = (current_price - _ms_ep) / _ms_ep * 100 if _ms_ep > 0 else 0.0
+                for _ms_h in [4, 8, 24, 48, 72]:
+                    if not position.get(f'_hold_log_{_ms_h}h') and _hold_hours >= _ms_h:
+                        position[f'_hold_log_{_ms_h}h'] = True
+                        logger.info(
+                            f"[SWING_HOLD] {stock_code} {position.get('name', '')} "
+                            f"held={_hold_hours:.1f}h pnl={_ms_pnl:+.2f}% "
+                            f"mfe={position.get('mfe_pct', 0.0):.2f}%"
+                        )
+
             # MA Cross 모드: 데드크로스 우선 체크
+            # SWING 포지션 제외: 인트라데이 모멘텀 신호는 스윙 시간축과 충돌
             squeeze_config = self.config.get('squeeze_momentum', {})
             entry_mode = squeeze_config.get('entry_mode', 'squeeze_only')
+            _is_swing_pos = position.get('strategy_horizon', 'SWING') == 'SWING'
 
-            if entry_mode == "ma_cross":
+            if entry_mode == "ma_cross" and not _is_swing_pos:
                 try:
                     # cntr_tm을 DatetimeIndex로 변환
                     df_temp = df.copy()
@@ -7186,8 +7519,8 @@ class IntegratedTradingSystem:
                 except Exception as e:
                     console.print(f"[yellow]⚠️  MA Cross 데드크로스 체크 실패: {e}[/yellow]")
 
-            elif entry_mode == "squeeze_2tf":
-                # 2-타임프레임 전략 청산 체크 (30분봉 기준)
+            elif entry_mode == "squeeze_2tf" and not _is_swing_pos:
+                # 2-타임프레임 전략 청산 체크 (30분봉 기준) — SWING 포지션 제외
                 try:
                     df_temp = df.copy()
                     if 'cntr_tm' in df_temp.columns:
@@ -7221,8 +7554,8 @@ class IntegratedTradingSystem:
                 except Exception as e:
                     console.print(f"[yellow]⚠️  2-타임프레임 청산 체크 실패: {e}[/yellow]")
 
-            # 🔧 2026-04-03: RS 모드 청산 체크 (trail/EMA20이탈/RS소멸)
-            if str(position.get('entry_reason', '')).startswith('RS:'):
+            # 🔧 2026-04-03: RS 모드 청산 체크 (trail/EMA20이탈/RS소멸) — SWING 포지션 제외
+            if str(position.get('entry_reason', '')).startswith('RS:') and not _is_swing_pos:
                 try:
                     _rs_exit, _rs_exit_reason, _rs_exit_det = self.rs_strategy.check_exit(
                         position=position,
@@ -7696,6 +8029,168 @@ class IntegratedTradingSystem:
                 logger.warning(msg)
                 console.print(f'[bold yellow]⏸️ {msg}[/bold yellow]')
 
+    def _attach_swing_risk_positions(self):
+        """[P0.5] swing_positions.json 기반 스윙 포지션 hard stop 어태치.
+
+        swing_executor가 매수한 종목 중 self.positions에 없는 것을 추가.
+        strategy_horizon='SWING' + risk_only=True → 긴급 hard stop(-6%)만 적용.
+        반드시 브로커 잔고에도 실재해야 어태치 (ghost 방지).
+        """
+        try:
+            import json as _json
+            _sp = Path('data/swing_positions.json')
+            if not _sp.exists():
+                return
+
+            swing_data = _json.loads(_sp.read_text(encoding='utf-8'))
+            if not swing_data:
+                return
+
+            # swing_positions.json에 qty>0인 종목이 없으면 브로커 조회 생략
+            candidates = {
+                code: entry for code, entry in swing_data.items()
+                if int(entry.get('quantity', 0) or 0) > 0 and code not in self.positions
+            }
+            if not candidates:
+                logger.debug("[SWING_RISK_ATTACH] 신규 어태치 없음")
+                return
+
+            # 브로커 잔고 이중 검증 (ghost position 방지)
+            broker_codes: set = set()
+            try:
+                _acct = self.api.get_account_info()
+                for item in _acct.get('day_bal_rt', []):
+                    _c = item.get('stk_cd', '').strip()
+                    _q = int(item.get('rmnd_qty', 0) or 0)
+                    if _c and _q > 0:
+                        broker_codes.add(_c)
+            except Exception as _be:
+                logger.warning(f"[SWING_RISK_ATTACH] 브로커 잔고 조회 실패 → 어태치 보류: {_be}")
+                return  # 브로커 확인 불가 시 어태치 금지
+
+            attached_count = 0
+            for code, sp_entry in candidates.items():
+                if code not in broker_codes:
+                    # swing_positions.json에 qty>0이지만 브로커엔 없음 → 이미 청산됨
+                    logger.info(f"[SWING_RISK_ATTACH] {code} swing_positions qty>0이나 브로커 잔고 없음 → skip (이미 청산)")
+                    continue
+
+                entry_price = float(sp_entry.get('entry_price', 0) or 0)
+                if entry_price <= 0:
+                    logger.warning(f"[SWING_RISK_ATTACH] {code} entry_price=0 → skip")
+                    continue
+
+                qty = int(sp_entry.get('quantity', 0) or 0)
+                entry_date_str = sp_entry.get('entry_date', '')
+                try:
+                    entry_time = datetime.fromisoformat(entry_date_str + 'T09:00:00') if entry_date_str else datetime.now()
+                except Exception:
+                    entry_time = datetime.now()
+
+                stock_name = sp_entry.get('stock_name', code)
+                self.positions[code] = {
+                    'stock_code': code,
+                    'stock_name': stock_name,
+                    'name': stock_name,
+                    'quantity': qty,
+                    'avg_price': entry_price,
+                    'entry_price': entry_price,
+                    'current_price': entry_price,
+                    'highest_price': entry_price,
+                    'entry_time': entry_time,
+                    'entry_date': entry_date_str,
+                    'trailing_active': False,
+                    'trailing_stop_price': None,
+                    'partial_exit_stage': 0,
+                    'strategy_horizon': 'SWING',
+                    'strategy': 'swing',
+                    'risk_only': True,
+                    'allow_overnight': True,
+                }
+
+                logger.warning(
+                    f"[SWING_RISK_ATTACH] {code} {stock_name} "
+                    f"entry={entry_price:,.0f} qty={qty} "
+                    f"entry_date={entry_date_str} → hard stop 어태치"
+                )
+                console.print(
+                    f"[bold yellow]⚠️  [SWING_RISK_ATTACH] {stock_name}({code}) "
+                    f"entry={entry_price:,.0f} qty={qty} → hard stop 감시 시작[/bold yellow]"
+                )
+                attached_count += 1
+
+            if attached_count > 0:
+                logger.info(f"[SWING_RISK_ATTACH] 총 {attached_count}개 포지션 어태치 완료")
+
+        except Exception as e:
+            logger.warning(f"[SWING_RISK_ATTACH] 오류 (무시): {e}")
+
+    def _check_orphan_positions(self):
+        """[P0] 고아 포지션 감지 — 브로커 보유 종목 vs 엔진 포지션 불일치 시 매수 차단.
+
+        고아 = 브로커에는 있지만 self.positions에 없는 종목.
+        이 경우 손절 보호가 없으므로 신규 진입을 전면 차단한다.
+        """
+        try:
+            account_info = self.api.get_account_info()
+            broker_holdings = account_info.get('day_bal_rt', [])
+
+            # 브로커 보유 종목 코드 집합 (잔고 0 제외)
+            broker_codes: set = set()
+            for item in broker_holdings:
+                code = item.get('stk_cd', '').strip()
+                qty = int(item.get('rmnd_qty', 0) or 0)
+                if code and qty > 0:
+                    broker_codes.add(code)
+
+            if not broker_codes:
+                logger.info("[ORPHAN_CHECK] 브로커 보유 종목 없음 → 고아 없음")
+                return
+
+            engine_codes = set(self.positions.keys())
+            orphan_codes = broker_codes - engine_codes
+
+            if not orphan_codes:
+                logger.info(f"[ORPHAN_CHECK] 정상 — 브로커={sorted(broker_codes)} 엔진={sorted(engine_codes)}")
+                return
+
+            # 고아 발견 → 매수 차단
+            self._orphan_halt = True
+            orphan_list = ', '.join(sorted(orphan_codes))
+            msg = (
+                f"[ORPHAN_HALT] 고아 포지션 감지: {orphan_list} "
+                f"(브로커 보유지만 엔진 미등록) → 신규 매수 전면 차단"
+            )
+            logger.critical(msg)
+            console.print(f"[bold red]🚨 {msg}[/bold red]")
+
+            # 텔레그램 긴급 알림
+            try:
+                import requests as _req
+                _bot  = os.getenv("TELEGRAM_BOT_TOKEN", "")
+                _cids = os.getenv("TELEGRAM_CHAT_IDS", "")
+                if _bot and _cids:
+                    _tg_msg = (
+                        f"🚨 *ORPHAN HALT*\n"
+                        f"고아 종목: `{orphan_list}`\n"
+                        f"브로커 보유지만 엔진 미등록\n"
+                        f"조치: 신규 매수 차단, *수동 확인 필요*\n"
+                        f"시각: {datetime.now().strftime('%H:%M:%S')}"
+                    )
+                    for _cid in _cids.split(','):
+                        _cid = _cid.strip()
+                        if _cid:
+                            _req.post(
+                                f"https://api.telegram.org/bot{_bot}/sendMessage",
+                                json={"chat_id": _cid, "text": _tg_msg, "parse_mode": "Markdown"},
+                                timeout=5,
+                            )
+            except Exception as _tg_e:
+                logger.warning(f"[ORPHAN_HALT] 텔레그램 알림 실패: {_tg_e}")
+
+        except Exception as e:
+            logger.warning(f"[ORPHAN_CHECK] 조회 실패 (무시): {e}")
+
     def _calc_entry_confidence(
         self,
         df_5min,
@@ -8103,6 +8598,11 @@ class IntegratedTradingSystem:
                 else:
                     logger.info(f"[RVOL_BLOCK] {stock_code} {stock_name}: RVOL={rvol:.2f} < {rvol_threshold}")
                     console.print(f"[yellow]📊 [RVOL_BLOCK] {stock_name}: RVOL {rvol:.2f} < {rvol_threshold} → 거래량 부족, 차단[/yellow]")
+                    _bf_price = float(df['close'].iloc[-1]) if 'close' in df.columns and not df.empty else None
+                    self._log_buy_failure(stock_code, stock_name, 'RVOL_BLOCK',
+                                          f"RVOL={rvol:.2f} < {rvol_threshold}",
+                                          entry_reason=entry_reason, confidence=entry_confidence,
+                                          rvol=rvol, price=_bf_price)
                     return
 
         # [EQ-2] EMA9 Micro Pullback Filter: 현재가 > EMA9 AND 직전봉 저가 ≤ EMA9×1.002
@@ -8123,6 +8623,10 @@ class IntegratedTradingSystem:
                     else:
                         logger.info(f"[EMA9_BLOCK] {stock_code} {stock_name}: close={curr_close:.0f} EMA9={ema9:.0f} prev_low={prev_low:.0f}")
                         console.print(f"[yellow]📈 [EMA9_BLOCK] {stock_name}: EMA9 pullback 미확인 (close={curr_close:.0f}, EMA9={ema9:.0f}) → 차단[/yellow]")
+                        self._log_buy_failure(stock_code, stock_name, 'EMA9_BLOCK',
+                                              f"close={curr_close:.0f} EMA9={ema9:.0f} prev_low={prev_low:.0f}",
+                                              entry_reason=entry_reason, confidence=entry_confidence,
+                                              price=curr_close)
                         return
             except Exception:
                 pass  # EMA9 계산 실패 시 통과
@@ -8140,6 +8644,10 @@ class IntegratedTradingSystem:
                     if vwap_dist > vwap_dist_max:
                         logger.info(f"[VWAP_DIST_BLOCK] {stock_code} {stock_name}: dist={vwap_dist*100:.2f}% > {vwap_dist_max*100:.1f}%")
                         console.print(f"[yellow]📏 [VWAP_DIST] {stock_name}: VWAP 위 {vwap_dist*100:.2f}% > {vwap_dist_max*100:.1f}% → 추격 차단[/yellow]")
+                        self._log_buy_failure(stock_code, stock_name, 'VWAP_DIST_BLOCK',
+                                              f"dist={vwap_dist*100:.2f}% > {vwap_dist_max*100:.1f}%",
+                                              entry_reason=entry_reason, confidence=entry_confidence,
+                                              vwap_distance=round(vwap_dist * 100, 3), price=curr_price)
                         return
             except Exception:
                 pass
@@ -9042,6 +9550,48 @@ class IntegratedTradingSystem:
             console.print(f"[red]❌ 매수 API 호출 실패: {e}[/red]")
             return
 
+        # [P0 FIX] Kiwoom 주문 성공 직후 PostgreSQL BUY 즉시 기록 (이후 예외로 함수 종료 시 DB 누락 방지)
+        entry_time = datetime.now()
+        _es_info = self.validated_stocks.get(stock_code, {})
+        _es_stats = _es_info.get('stats', {})
+        _es_analysis = _es_info.get('analysis', {})
+        _es_scores = _es_analysis.get('scores', {})
+        scores = _es_scores  # position dict 생성 시 UnboundLocalError 방지 (line ~9226)
+        try:
+            trade_id = self.db.insert_trade({
+                'stock_code': stock_code,
+                'stock_name': stock_name,
+                'trade_type': 'BUY',
+                'trade_time': entry_time.isoformat(),
+                'price': float(price),
+                'quantity': int(quantity),
+                'amount': float(amount),
+                'process_id': os.getpid(),
+                'order_no': order_no,
+                'condition_name': 'VWAP+AI',
+                'strategy_config': 'hybrid',
+                'entry_reason': entry_reason or f"{entry_time.strftime('%H:%M')} 진입",
+                'vwap_validation_score': float(_es_stats.get('avg_profit_pct', 0)) if _es_stats.get('avg_profit_pct') is not None else 0,
+                'sim_win_rate': float(_es_stats.get('win_rate')) if _es_stats.get('win_rate') is not None else None,
+                'sim_avg_profit': float(_es_stats.get('avg_profit_pct')) if _es_stats.get('avg_profit_pct') is not None else None,
+                'sim_trade_count': int(_es_stats.get('total_trades')) if _es_stats.get('total_trades') is not None else None,
+                'sim_profit_factor': float(_es_stats.get('profit_factor')) if _es_stats.get('profit_factor') is not None else None,
+                'total_score': float(_es_analysis.get('total_score', 0)),
+                'score_news': float(_es_scores.get('news', 50)),
+                'score_technical': float(_es_scores.get('technical', 50)),
+                'score_supply_demand': float(_es_scores.get('supply_demand', 50)),
+                'score_fundamental': float(_es_scores.get('fundamental', 50)),
+                'recommendation': _es_analysis.get('recommendation', '관망'),
+                'news_sentiment': _es_analysis.get('news_sentiment', 'neutral'),
+                'news_impact': _es_analysis.get('news_impact', 0),
+                'news_keywords': [],
+                'news_titles': [],
+            })
+            logger.info(f"[BUY_DB_OK] {stock_code} {stock_name} | trade_id={trade_id} qty={int(quantity)} @ {float(price):,.0f}원 | order_no={order_no}")
+        except Exception as _buy_db_e:
+            logger.error(f"[BUY_DB_ERROR] {stock_code} PostgreSQL 즉시 저장 실패: {_buy_db_e}")
+            trade_id = None
+
         # ✅ EOD Manager Phase 1: 진입 시점 overnight 판단
         # choch_grade는 호출자(check_entry_signal)에서 kwargs로 전달되거나 포지션 dict에서 읽힘
         _entry_choch_grade = kwargs.get('choch_grade') if 'kwargs' in dir() else None
@@ -9054,7 +9604,6 @@ class IntegratedTradingSystem:
         )
 
         # 포지션 생성
-        entry_time = datetime.now()
         self.positions[stock_code] = {
             'stock_name': stock_name,  # 잔고 조회와 통일
             'name': stock_name,  # 하위 호환성
@@ -9088,6 +9637,10 @@ class IntegratedTradingSystem:
             'atr_at_entry': None,           # 🔧 2026-02-07: 진입 시 ATR (Early Failure Structure 필터용)
             'mkt_context': mc_tag,          # 🔧 2026-03-24: 진입 시 시장 컨텍스트 (BAD_MARKET / GOOD_MARKET)
 
+            # 2026-05-11: 전략 시간축 — exit logic 분기 기반
+            # SWING=다일 보유, INTRADAY=당일 청산, DEFENSIVE=방어적 단기
+            'strategy_horizon': 'DEFENSIVE' if _is_defensive else 'SWING',
+
             # 🔧 2026-03-31: DEFENSIVE 모드 전용 필드
             'defensive_mode': _is_defensive,
             'defensive_stop_price': price * (1 - stop_loss_pct / 100) if _is_defensive else None,
@@ -9109,6 +9662,11 @@ class IntegratedTradingSystem:
             'score_supply_demand': float(scores.get('supply_demand', 50)),
             'pyramid_added': False,    # 피라미딩 추가 여부 (1회 한도)
             'pyramid_add_count': 0,    # 추가 진입 횟수
+
+            # ML 피처 — 청산 시 record_exit_signal에 전달
+            'entry_confidence':   entry_confidence,
+            'position_size_mult': position_size_mult,
+            'stop_loss_pct':      stop_loss_pct,
         }
 
         # 포지션 상태 저장 (재시작 복원용)
@@ -9175,11 +9733,22 @@ class IntegratedTradingSystem:
         }
 
         try:
-            trade_id = self.db.insert_trade(trade_data)
-            self.positions[stock_code]['trade_id'] = trade_id
+            if trade_id is None:  # 즉시 저장 실패 시에만 재시도
+                trade_id = self.db.insert_trade(trade_data)
+            if trade_id:
+                self.positions[stock_code]['trade_id'] = trade_id
         except Exception as _db_e:
-            logger.error(f"[BUY_DB_ERROR] {stock_code} PostgreSQL 저장 실패 (거래는 정상): {_db_e}")
+            logger.error(f"[BUY_DB_ERROR] {stock_code} PostgreSQL 저장 실패: {_db_e}")
             trade_id = None
+
+        # entry_strategy 영구 기록 (재시작 시 청산 전략 복원용)
+        try:
+            _psf = Path('data/positions_strategy.json')
+            _ps_data = json.loads(_psf.read_text(encoding='utf-8')) if _psf.exists() else {}
+            _ps_data[stock_code] = self.positions[stock_code].get('strategy', 'smc')
+            _psf.write_text(json.dumps(_ps_data, ensure_ascii=False, indent=2), encoding='utf-8')
+        except Exception:
+            pass
 
         # 의사결정 추적 — 진입 신호 기록
         try:
@@ -9233,6 +9802,19 @@ class IntegratedTradingSystem:
                 _smeta = getattr(self, '_pending_signal_meta', None)
                 if _smeta and isinstance(_smeta, dict):
                     _pend_dur = _smeta.get('pending_duration') or _smeta.get('elapsed_sec')
+                _pos_snap = self.positions.get(stock_code, {})
+                _entry_feats_snap = {
+                    'choch_grade':        _pos_snap.get('choch_grade'),
+                    'rvol_at_entry':      _pos_snap.get('rvol_at_entry'),
+                    'atr_at_entry':       _pos_snap.get('atr_at_entry'),
+                    'stop_loss_pct':      stop_loss_pct,
+                    'structure_stop':     _pos_snap.get('structure_stop_price'),
+                    'market_regime':      getattr(self, '_last_regime', None),
+                    'market_context':     _mc_tag,
+                    'entry_confidence':   entry_confidence,
+                    'position_size_mult': position_size_mult,
+                    'entry_type':         _entry_type_ml,
+                }
                 insert_ml_entry(
                     trade_id=trade_id,
                     stock_code=stock_code,
@@ -9241,7 +9823,22 @@ class IntegratedTradingSystem:
                     entry_type=_entry_type_ml,
                     pending_duration=int(_pend_dur) if _pend_dur else None,
                     entry_reason=entry_reason or '',
+                    entry_features=_entry_feats_snap,
+                    confidence=entry_confidence,
+                    position_size_mult=position_size_mult,
+                    risk_per_trade=stop_loss_pct,
                 )
+                try:
+                    from database.decision_trace import update_entry_features
+                    update_entry_features(
+                        trade_id=trade_id,
+                        entry_features=_entry_feats_snap,
+                        confidence=entry_confidence,
+                        position_size_mult=position_size_mult,
+                        risk_per_trade=stop_loss_pct,
+                    )
+                except Exception:
+                    pass
         except Exception as _mle:
             logger.debug(f"[DTRACE] insert_ml_entry 실패 (무시): {_mle}")
 
@@ -9311,6 +9908,34 @@ class IntegratedTradingSystem:
                 )
         except Exception as _le:
             logger.debug(f'[TRADE_LOG] 진입 기록 실패 (무시): {_le}')
+        # ─────────────────────────────────────────────────────────────────
+
+        # ── Trading OS: decision_log 기록 ────────────────────────────────
+        try:
+            _sm2 = getattr(self, '_pending_signal_meta', {}) or {}
+            _pos2 = self.positions.get(stock_code, {})
+            _signals_snap = {
+                'choch_grade':  _sm2.get('choch_grade') or _pos2.get('choch_grade'),
+                'htf_trend':    _sm2.get('htf_bias'),
+                'sweep':        bool(_sm2.get('sweep')),
+                'entry_type':   entry_reason or 'smc',
+                'entry_conf':   round(float(entry_confidence), 4),
+            }
+            if df is not None and not df.empty:
+                try:
+                    _signals_snap['rsi']   = round(float(df['RSI'].iloc[-1]), 1)   if 'RSI'   in df.columns else None
+                    _signals_snap['rvol']  = round(float(df['RVOL'].iloc[-1]), 2)  if 'RVOL'  in df.columns else None
+                    _signals_snap['ema_trend'] = bool(df['EMA20'].iloc[-1] > df['EMA60'].iloc[-1]) if 'EMA20' in df.columns and 'EMA60' in df.columns else None
+                except Exception:
+                    pass
+            self._log_decision(
+                stock_code=stock_code, stock_name=stock_name,
+                decision_type='BUY', signals=_signals_snap,
+                reason=entry_reason, confidence=int(entry_confidence * 100),
+                trade_id=trade_id
+            )
+        except Exception as _dle:
+            logger.debug(f"[DECISION_LOG] BUY 기록 실패: {_dle}")
         # ─────────────────────────────────────────────────────────────────
 
         # ✅ 진입 지표 캡처 (백테스트/AI 학습용)
@@ -9703,6 +10328,7 @@ class IntegratedTradingSystem:
             # EOD 정책 설정 확인
             eod_config = self.config.get_section('eod_policy')
             if not eod_config or not eod_config.get('enabled', False):
+                logger.debug(f"[OV_DISABLED] {stock_code}: eod_policy.enabled=false → overnight 평가 생략")
                 return False, 0.0
 
             # ── overnight_v2 게이트 ─────────────────────────────────────────────
@@ -9857,6 +10483,13 @@ class IntegratedTradingSystem:
             min_overnight_score = eod_config.get('min_overnight_score', 0.6)
             allow_overnight = score >= min_overnight_score
 
+            logger.info(
+                f"[OV_SCORE] {stock_code}: score={score:.2f} | "
+                f"trend={trend_score:.2f}×{weights['trend']} "
+                f"vol={volume_score:.2f}×{weights['volume']} "
+                f"news={news_score:.2f}×{weights['news']} | "
+                f"{'ALLOW' if allow_overnight else 'DENY'} (min={min_overnight_score})"
+            )
             return allow_overnight, score
 
         except Exception as e:
@@ -9926,6 +10559,123 @@ class IntegratedTradingSystem:
         except Exception as e:
             return False, f"오류: {e}"
 
+    def _get_today_market_context_id(self) -> int | None:
+        try:
+            row = self.db.fetchone(
+                "SELECT id FROM market_context WHERE context_date = CURRENT_DATE"
+            )
+            return row[0] if row else None
+        except Exception:
+            return None
+
+    def _get_today_session_id(self) -> int | None:
+        try:
+            row = self.db.fetchone(
+                "SELECT id FROM trading_sessions WHERE session_date = CURRENT_DATE"
+            )
+            return row[0] if row else None
+        except Exception:
+            return None
+
+    def _log_decision(self, stock_code: str, stock_name: str, decision_type: str,
+                      signals: dict, filter_results: dict = None,
+                      gate_results: dict = None, reason: str = None,
+                      confidence: int = None, trade_id: int = None):
+        """Trading OS — 모든 매매 결정을 decision_log에 기록 (블랙박스)"""
+        try:
+            import json as _json
+            from datetime import datetime as _dt
+            _sv  = (self.config.get_section('overnight_close') or {}).get('tracking', {}).get('policy_version', 'unknown')
+            _ctx = self._get_today_market_context_id()
+            _sid = self._get_today_session_id()
+            # P2: 재현성 — 모델·프롬프트 버전 스냅샷
+            _model_ver  = 'claude-sonnet-4-6'
+            _prompt_ver = 'rule-engine-v2.0'
+            self.db.execute(
+                """INSERT INTO decision_log
+                     (decision_time, trade_id, stock_code, stock_name, decision_type,
+                      strategy_version, signals, filter_results, gate_results,
+                      decision_reason, confidence, market_context_id, session_id,
+                      model_version, prompt_version)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                (_dt.now(), trade_id, stock_code, stock_name, decision_type,
+                 _sv,
+                 _json.dumps(signals, ensure_ascii=False, default=str),
+                 _json.dumps(filter_results or {}, ensure_ascii=False, default=str),
+                 _json.dumps(gate_results or {}, ensure_ascii=False, default=str),
+                 reason, confidence, _ctx, _sid,
+                 _model_ver, _prompt_ver)
+            )
+        except Exception as _e:
+            logger.debug(f"[DECISION_LOG] 기록 실패 {stock_code}: {_e}")
+
+    def _log_overnight_tracking(self, stock_code, stock_name, grade, pnl_pct,
+                                 market_regime, decision, block_reason, close_price,
+                                 pos: dict = None):
+        """14:50 오버나이트 결정을 overnight_tracking 테이블에 기록 (결과는 tracker.py가 채움)"""
+        try:
+            import json as _json
+            from datetime import date as _date
+            _oc_cfg    = self.config.get_section('overnight_close') or {}
+            _track_cfg = _oc_cfg.get('tracking', {})
+            _policy_ver = _track_cfg.get('policy_version', 'unknown')
+
+            # 포지션에서 분석 가능한 컨텍스트 추출
+            _ctx = {
+                'grade': grade,
+                'pnl_pct': round(float(pnl_pct), 4) if pnl_pct is not None else None,
+                'market_regime': market_regime,
+            }
+            if pos:
+                for _k in ('swing_score', 'htf_trend_alive', 'choch_grade',
+                           'entry_type', 'strategy_name', 'mfe_pct', 'mae_pct'):
+                    _v = pos.get(_k)
+                    if _v is not None:
+                        _ctx[_k] = _v
+
+            # Confidence: 이 결정이 얼마나 확실한가 (0~100)
+            _sb = _oc_cfg.get('swing_block_conditions', {})
+            _max_loss   = _sb.get('max_loss_for_block', -3.0)
+            _weak_loss  = _sb.get('trend_weak_loss_for_block', -1.5)
+            _weak_grades = _sb.get('trend_weak_grades', ['B', 'C'])
+            _p = float(pnl_pct) if pnl_pct is not None else 0.0
+            _sc = 50
+            if decision == 'FORCED_CLOSE':
+                if _p < _max_loss:
+                    _sc += 20 + min(int(abs(_p - _max_loss) * 4), 15)
+                elif _p < _weak_loss:
+                    _sc += 10 + min(int(abs(_p - _weak_loss) * 5), 10)
+                if grade == 'C':    _sc += 10
+                elif grade == 'A':  _sc -= 20
+                if market_regime == 'REVERSAL': _sc += 5
+            else:  # KEPT
+                if grade == 'A':    _sc += 25
+                elif grade == 'B':  _sc += 8
+                elif grade == 'C':  _sc -= 8
+                if pos and pos.get('htf_trend_alive'): _sc += 12
+                _sw = (pos or {}).get('swing_score') or 0
+                if _sw > 70: _sc += 8
+                if _p > 3.0:    _sc += 12
+                elif _p > 1.0:  _sc += 6
+                elif _p > 0:    _sc += 2
+                elif _p < -1.0: _sc -= 8
+                if market_regime == 'REVERSAL': _sc -= 12
+            _confidence = max(0, min(100, _sc))
+
+            self.db.execute(
+                """INSERT INTO overnight_tracking
+                     (decision_date, stock_code, stock_name, grade, pnl_pct,
+                      market_regime, decision, block_reason, close_price,
+                      policy_version, context_json, decision_confidence)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                   ON CONFLICT (decision_date, stock_code) DO NOTHING""",
+                (_date.today(), stock_code, stock_name, grade, pnl_pct,
+                 market_regime, decision, block_reason, close_price,
+                 _policy_ver, _json.dumps(_ctx, ensure_ascii=False), _confidence)
+            )
+        except Exception as _e:
+            logger.warning(f"[OVERNIGHT_TRACKING] DB 기록 실패 {stock_code}: {_e}")
+
     async def force_close_overnight(self):
         """🔧 2026-02-15: 오버나이트 강제 청산 (CHoCH A급 제외)"""
         config = self.config.get_section('overnight_close')
@@ -9960,6 +10710,19 @@ class IntegratedTradingSystem:
 
         closed_count = 0
         allowed_count = 0
+        # ── 2026-05-11: Soft Carry Mode ──────────────────────────────────────
+        swing_mode = config.get('swing_mode', False)
+        if swing_mode:
+            _sb_cfg      = config.get('swing_block_conditions', {})
+            _max_loss    = _sb_cfg.get('max_loss_for_block', -3.0)
+            _weak_loss   = _sb_cfg.get('trend_weak_loss_for_block', -1.5)
+            _weak_grades = _sb_cfg.get('trend_weak_grades', ['B', 'C'])
+            _blk_rev     = _sb_cfg.get('block_on_reversal_with_loss', True)
+            try:
+                _mkt_regime, _ = self.market_context.get_regime()
+            except Exception:
+                _mkt_regime = 'NEUTRAL'
+
         for stock_code in list(self.positions.keys()):
             # 중복 청산 방지: 루프 내부에서 이미 제거됐을 수 있음
             if stock_code not in self.positions:
@@ -9981,6 +10744,50 @@ class IntegratedTradingSystem:
             current_price = pos.get('current_price', pos['entry_price'])
             entry_price   = pos['entry_price']
             profit_pct    = (current_price - entry_price) / entry_price * 100
+
+            # ── Soft Carry Mode: 스윙 포지션 기본 overnight 허용 ────────────
+            if swing_mode:
+                # hard floor: 등급 무관, 큰 손실은 항상 차단
+                _is_major_loss    = profit_pct < _max_loss
+                # 추세 약세(B/C급) + 중간 손실 → 갭다운 리스크 (2026-06-26)
+                _is_weak_loss     = (grade in _weak_grades) and (profit_pct < _weak_loss)
+                _is_reversal_loss = _blk_rev and (_mkt_regime == 'REVERSAL') and (profit_pct < 0)
+                _block = _is_major_loss or _is_weak_loss or _is_reversal_loss
+
+                if _block:
+                    _deny = []
+                    if _is_major_loss:    _deny.append(f"손실{profit_pct:+.2f}%<{_max_loss}%")
+                    if _is_weak_loss:     _deny.append(f"{grade}급+손실{profit_pct:+.2f}%<{_weak_loss}%")
+                    if _is_reversal_loss: _deny.append(f"하락추세+손실({_mkt_regime})")
+                    reason = f"{datetime.now().strftime('%H:%M')} 오버나이트 차단 ({', '.join(_deny)})"
+                    console.print(f"[red]  X [SWING_BLOCK] {stock_name}: {', '.join(_deny)} → 강제청산[/red]")
+                    logger.info(f"[SWING_OVERNIGHT_BLOCK] {stock_name} ({stock_code}) {', '.join(_deny)}")
+                    self._log_overnight_tracking(
+                        stock_code, stock_name, grade, profit_pct, _mkt_regime,
+                        decision='FORCED_CLOSE', block_reason=', '.join(_deny),
+                        close_price=current_price, pos=pos
+                    )
+                    self.execute_sell(stock_code, current_price, profit_pct, reason, use_market_order=use_market)
+                    closed_count += 1 if stock_code not in self.positions else 0
+                else:
+                    pos['allow_overnight_final_confirm'] = True
+                    pos['overnight_held'] = True
+                    console.print(
+                        f"[green]  ✓ [SWING_CARRY] {stock_name}: pnl={profit_pct:+.2f}% "
+                        f"regime={_mkt_regime} → 스윙 오버나이트 carry[/green]"
+                    )
+                    logger.info(
+                        f"[SWING_CARRY] {stock_name} ({stock_code}) pnl={profit_pct:+.2f}% "
+                        f"regime={_mkt_regime} grade={grade}"
+                    )
+                    self._log_overnight_tracking(
+                        stock_code, stock_name, grade, profit_pct, _mkt_regime,
+                        decision='KEPT', block_reason='carry',
+                        close_price=current_price, pos=pos
+                    )
+                    allowed_count += 1
+                continue  # swing_mode: legacy 조건 체크 skip
+            # ─────────────────────────────────────────────────────────────────
 
             # 🔧 2026-04-17: 조건부 오버나이트 허용 (3조건 모두 충족해야 ALLOW)
             #   ① 등급: A 또는 A+
@@ -10526,7 +11333,8 @@ class IntegratedTradingSystem:
                 # 🔧 2026-03-08: trade_duration 분석용 필드 추가
                 'entry_time': entry_time.isoformat() if entry_time else None,
                 'exit_time': partial_exit_time.isoformat(),
-                'holding_minutes': int(holding_duration // 60)
+                'holding_minutes': int(holding_duration // 60),
+                'entry_context': {'entry_price': float(position['entry_price'])},
             }
             self.db.insert_trade(partial_sell_trade)
 
@@ -10569,6 +11377,65 @@ class IntegratedTradingSystem:
         console.print(f"✅ 부분 청산 완료 (주문번호: {order_no})")
         console.print("=" * 80, style="yellow")
         console.print()
+
+    @staticmethod
+    def _classify_exit(exit_reason: str) -> tuple:
+        """exit_reason 문자열 → (exit_category, exit_subreason, use_for_ml)"""
+        r = (exit_reason or '').lower()
+
+        # ── SYSTEM_EXIT: 시스템 안정성 목적 강제 청산 ──
+        if 'overnight_failsafe' in r or '15:25 무조건' in r:
+            return 'SYSTEM_EXIT', 'OVERNIGHT_FAILSAFE', False
+        if '오버나이트 차단' in r or '14:50' in r:
+            return 'SYSTEM_EXIT', 'OVERNIGHT_FORCE_CLOSE', False
+        if '최종 강제 청산' in r or '장 마감 전 강제 청산' in r:
+            return 'SYSTEM_EXIT', 'FORCE_CLOSE', False
+        if '시간 기반 청산' in r or '시간초과' in r:
+            return 'SYSTEM_EXIT', 'TIME_EXIT', False
+
+        # ── BROKER_EXIT: 브로커 상태 동기화 목적 ──
+        if 'orphan' in r or 'reconcil' in r or 'broker_sync' in r:
+            return 'BROKER_EXIT', 'BROKER_SYNC', False
+
+        # ── EXPERIMENT_EXIT: 실험적 인트라데이 필터 ──
+        if 'mfe부족' in r or 'min_mfe' in r:
+            return 'EXPERIMENT_EXIT', 'MIN_MFE_30MIN', False
+        if 'early failure' in r or 'early_failure' in r or '초기 실패 컷' in r:
+            return 'EXPERIMENT_EXIT', 'EARLY_FAILURE', False
+        if '데드크로스' in r or 'dead_cross' in r or 'ma_cross' in r:
+            return 'EXPERIMENT_EXIT', 'MA_CROSS', False
+        if '다중 약화 신호' in r:
+            return 'EXPERIMENT_EXIT', 'MULTI_WEAK_SIGNAL', False
+        if 'squeeze:' in r:
+            return 'EXPERIMENT_EXIT', 'SQUEEZE_REVERSAL', False
+        if 'vwap 하향 돌파' in r:
+            return 'EXPERIMENT_EXIT', 'VWAP_BREAK', False
+        if 'exploration' in r:
+            return 'EXPERIMENT_EXIT', 'EXPLORATION', False
+        if 'rs_exit' in r or 'rs exit' in r:
+            return 'EXPERIMENT_EXIT', 'RS_EXIT', False
+        if 'ev_exit' in r or '3봉' in r:
+            return 'EXPERIMENT_EXIT', 'THREE_BAR_VALIDATION', False
+
+        # ── RISK_EXIT: 리스크 관리 손절 ──
+        if 'hard stop' in r or 'hard_stop' in r:
+            return 'RISK_EXIT', 'HARD_STOP', True
+        if '갭다운' in r or 'gap_down' in r or 'gap down' in r:
+            return 'RISK_EXIT', 'GAP_DOWN', True
+        if '구조 손절' in r or '기술적 손절' in r:
+            return 'RISK_EXIT', 'STRUCTURE_STOP', True
+        if '손절' in r:
+            return 'RISK_EXIT', 'STOP_LOSS', True
+
+        # ── ALPHA_EXIT: 전략 알파 실현 청산 ──
+        if 'trailing_stop' in r or '트레일링 스탑' in r or 'atr 트레일링' in r:
+            return 'ALPHA_EXIT', 'TRAILING_STOP', True
+        if '부분청산' in r:
+            return 'ALPHA_EXIT', 'PARTIAL_TAKE_PROFIT', True
+        if '익절' in r or 'take_profit' in r:
+            return 'ALPHA_EXIT', 'TAKE_PROFIT', True
+
+        return 'ALPHA_EXIT', 'UNKNOWN', True
 
     def execute_sell(self, stock_code: str, price: float, profit_pct: float, reason: str, use_market_order: bool = False):
         """매도 실행 (전량 청산)"""
@@ -10643,6 +11510,7 @@ class IntegratedTradingSystem:
         # DB에 매도 정보 저장 — trade_id 유무 관계없이 항상 SELL 레코드 저장
         trade_id = position.get('trade_id')
         exit_time_dt = datetime.now()
+        _exit_cat, _exit_sub, _use_ml = self._classify_exit(reason)
         sell_trade = {
             'stock_code': stock_code,
             'stock_name': position['name'],
@@ -10658,18 +11526,32 @@ class IntegratedTradingSystem:
             'entry_time': entry_time.isoformat() if entry_time else None,
             'exit_time': exit_time_dt.isoformat(),
             'holding_minutes': int(holding_duration // 60),
+            'entry_context': {'entry_price': float(position['entry_price'])},
             'exit_context': {
                 'mfe_pct': round((position.get('highest_price', position['entry_price']) - position['entry_price']) / position['entry_price'] * 100, 3),
                 'exit_vs_mfe': round((price - position.get('highest_price', price)) / position['entry_price'] * 100, 3)
-            }
+            },
+            'exit_category': _exit_cat,
+            'exit_subreason': _exit_sub,
+            'use_for_ml': _use_ml,
+            'exit_category_version': 1,
+            'overnight_held': position.get('overnight_held', False),
         }
         try:
-            self.db.insert_trade(sell_trade)
-            logger.info(
-                f"[SELL_COMPLETE] {stock_code} {position['name']} | "
-                f"price={price:,} qty={position['quantity']} pnl={profit_pct:+.2f}% "
-                f"realized={realized_profit:+,.0f} | reason={reason} | trade_id={trade_id}"
-            )
+            # 동일 진입시각 SELL 중복 방지 (OVERNIGHT 이중청산 대응)
+            _entry_time_str = entry_time.isoformat() if entry_time else None
+            if _entry_time_str and self.db.has_sell_for_entry(stock_code, _entry_time_str):
+                logger.warning(
+                    f"[SELL_DEDUP] {stock_code} entry_time={_entry_time_str} SELL 이미 존재 → "
+                    f"DB 중복 삽입 건너뜀 (reason={reason})"
+                )
+            else:
+                self.db.insert_trade(sell_trade)
+                logger.info(
+                    f"[SELL_COMPLETE] {stock_code} {position['name']} | "
+                    f"price={price:,} qty={position['quantity']} pnl={profit_pct:+.2f}% "
+                    f"realized={realized_profit:+,.0f} | reason={reason} | trade_id={trade_id}"
+                )
         except Exception as _sell_db_e:
             logger.error(f"[SELL_DB_ERROR] {stock_code} DB 저장 실패: {_sell_db_e}")
 
@@ -10686,8 +11568,19 @@ class IntegratedTradingSystem:
         # 의사결정 추적 — 청산 신호 기록 + ml_dataset 자동 생성
         try:
             from database.decision_trace import record_exit_signal
-            _mfe = position.get('mfe_pct', 0.0)
-            _mae = position.get('mae_pct', 0.0)
+            _mfe = position.get('mfe_pct')
+            _mae = position.get('mae_pct')
+            # highest_price fallback: SMC 포지션은 peak_price 대신 highest_price 사용
+            if _mfe is None:
+                _ep = float(position.get('entry_price', 0))
+                _high = float(position.get('highest_price') or 0)
+                if _ep > 0 and _high >= _ep:
+                    _mfe = max(0.0, round((_high - _ep) / _ep * 100, 3))
+            if _mae is None:
+                _ep = float(position.get('entry_price', 0))
+                _sell_px = float(price)
+                if _ep > 0:
+                    _mae = max(0.0, round((_ep - _sell_px) / _ep * 100, 3))
             # EXPLORATION 피처 수집 (entry 시 저장된 값 활용)
             _expl_feats = position.get('ml_features')
             if _expl_feats is None and position.get('entry_reason', ''):
@@ -10710,12 +11603,16 @@ class IntegratedTradingSystem:
                 entry_price=float(position['entry_price']),
                 quantity=int(position['quantity']),
                 holding_minutes=int(holding_duration // 60),
-                mfe_pct=_mfe if _mfe else None,
-                mae_pct=_mae if _mae else None,
+                mfe_pct=_mfe if _mfe is not None else None,
+                mae_pct=_mae if _mae is not None else None,
+                confidence=position.get('entry_confidence'),
+                position_size_mult=position.get('position_size_mult'),
+                exit_market_regime=getattr(self, '_last_regime', None),
+                risk_per_trade=position.get('stop_loss_pct'),
                 extra_features=_expl_feats,
             )
-        except Exception:
-            pass
+        except Exception as _re:
+            logger.exception(f"[RECORD_EXIT_FAIL] {stock_code} record_exit_signal 예외: {_re}")
 
         # 실제 키움 API 매도 주문
         # 🔧 2026-04-15: 토큰 만료(8005) 시 재발급 후 1회 재시도 [EOD 강제청산 보호]
@@ -11335,9 +12232,13 @@ class IntegratedTradingSystem:
         import select
 
         # stdin 버퍼 비우기 (남아있는 입력 제거)
+        # EOF(/dev/null) 방어: readline()이 빈 문자열 반환 시 break
         try:
-            while sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
-                sys.stdin.readline()
+            while True:
+                if sys.stdin not in select.select([sys.stdin], [], [], 0)[0]:
+                    break
+                if not sys.stdin.readline():  # EOF
+                    break
         except Exception:
             pass  # Windows 등에서 select 미지원 시 무시
 
@@ -11594,6 +12495,12 @@ class IntegratedTradingSystem:
 
             # 4. 계좌 정보 초기화
             await self.initialize_account()
+
+            # 4b. [P0.5] 스윙 포지션 hard stop 어태치 (swing_executor 동기화)
+            self._attach_swing_risk_positions()
+
+            # 4c. [P0] 고아 포지션 감지 (P0.5 이후 실행 — 스윙 어태치 후 잔여 미등록 탐지)
+            self._check_orphan_positions()
 
             # 4. 조건식 목록 조회
             if not await self.get_condition_list():
