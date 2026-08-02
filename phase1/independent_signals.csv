@@ -1,0 +1,7 @@
+﻿signal,signals,trades,win_rate,profit_factor,mdd_pct,choch_overlap_pct,incremental_trades,union_pf,union_wr,union_mdd,verdict
+BOS,1330,160,35.0,1.218,-19.06,5.1,100,0.936,28.9,-23.3,기각: PF·WR·MDD
+Liquidity Sweep,1612,127,35.4,1.038,-15.91,0.0,89,1.057,32.4,-19.3,기각: PF·WR·MDD
+Order Block,1789,153,33.3,1.091,-26.68,0.1,115,1.085,32.2,-22.88,기각: PF·WR·MDD
+False Breakout,1015,146,39.0,1.52,-8.89,0.9,81,1.315,36.4,-12.59,기각: WR
+Spring (Wyckoff),3325,135,36.3,1.227,-17.42,0.1,78,0.938,29.9,-18.17,기각: PF·WR·MDD
+Volatility Compression,528,71,32.4,1.032,-13.73,0.4,23,1.422,36.6,-13.43,기각: PF·WR

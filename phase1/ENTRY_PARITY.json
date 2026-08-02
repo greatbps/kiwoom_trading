@@ -1,0 +1,61 @@
+{
+  "created_at": "2026-08-02T19:00:59",
+  "signal_match_pct": 100.0,
+  "pass": true,
+  "backtest_signals": 117,
+  "live_signals": 117,
+  "intersection": 117,
+  "only_backtest": 0,
+  "only_live": 0,
+  "max_entry_price_diff": 0.005000000004656613,
+  "funnel": [
+    {
+      "stage": "Pullback 원신호 (현행 Live)",
+      "signals": 2201,
+      "vs_prev_pct": 100.0,
+      "vs_raw_pct": 100.0
+    },
+    {
+      "stage": "CHoCH 원신호",
+      "signals": 684,
+      "vs_prev_pct": 31.1,
+      "vs_raw_pct": 100.0
+    },
+    {
+      "stage": "+거래량 1.5x",
+      "signals": 281,
+      "vs_prev_pct": 41.1,
+      "vs_raw_pct": 41.1
+    },
+    {
+      "stage": "+ATR 2~8%",
+      "signals": 266,
+      "vs_prev_pct": 94.7,
+      "vs_raw_pct": 38.9
+    },
+    {
+      "stage": "+MA50 우상향 (최종)",
+      "signals": 117,
+      "vs_prev_pct": 44.0,
+      "vs_raw_pct": 17.1
+    },
+    {
+      "stage": "포트폴리오 상한 없음",
+      "signals": 80,
+      "vs_prev_pct": 68.4,
+      "vs_raw_pct": 68.4
+    },
+    {
+      "stage": "포트폴리오 Top-5",
+      "signals": 73,
+      "vs_prev_pct": 62.4,
+      "vs_raw_pct": 62.4
+    },
+    {
+      "stage": "포트폴리오 Top-3 (Live)",
+      "signals": 59,
+      "vs_prev_pct": 50.4,
+      "vs_raw_pct": 50.4
+    }
+  ]
+}

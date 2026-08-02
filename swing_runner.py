@@ -35,6 +35,31 @@ _ACTION_PRIORITY: dict[str, int] = {
 }
 
 from analyzers.swing.signal_engine import SignalEngine
+from analyzers.swing.choch_engine import ChochSignalEngine
+
+
+def _entry_engine(df, config):
+    """
+    진입 신호 엔진 선택 (Entry Parity Migration).
+
+    ⚠️ 기본값은 **현행 유지**(pullback). 검증 전에 조용히 바뀌면 안 된다.
+       config `swing.entry_engine` 또는 환경변수 SWING_ENTRY_ENGINE 로
+       'choch' 를 명시해야 바뀐다.
+
+    근거 (Iteration 8, Top-3 상한 · 공통 청산):
+        pullback  140거래 승률32.9% PF1.126  Train PF 0.966(손실)
+        choch      59거래 승률40.7% PF1.639  세 구간 모두 1.3 이상
+    """
+    import os as _os
+    mode = (_os.environ.get('SWING_ENTRY_ENGINE')
+            or (config.get('swing') or {}).get('entry_engine')
+            or 'pullback').lower()
+    if mode == 'choch':
+        return ChochSignalEngine(df, config), 'choch'
+    if mode != 'pullback':
+        # 오타로 조용히 다른 엔진이 도는 것이 가장 위험하다
+        raise ValueError(f'알 수 없는 entry_engine: {mode} (pullback|choch)')
+    return SignalEngine(df, config), 'pullback' 
 from analyzers.swing.state_machine import (
     SwingStateManager, SwingPosition, SwingState,
     SwingExitRecord, SwingExitHistoryManager,
@@ -385,7 +410,7 @@ def process_hold_positions(
         # score drift: 현재 신호 점수 재계산 → 진입 점수 대비 변화량
         score_drift = 0.0
         try:
-            engine = SignalEngine(df, config)
+            engine, _eng_name = _entry_engine(df, config)
             sig = engine.run()
             score_now = sig['final_score'] if sig else pos.score
             score_drift = score_now - pos.score
@@ -557,7 +582,7 @@ def scan_new_signals(
             continue
 
         try:
-            engine = SignalEngine(df, config)
+            engine, _eng_name = _entry_engine(df, config)
             signal = engine.run()
         except Exception as e:
             logger.warning(f"[SWING_RUN] {code} 신호 탐지 실패: {e}")
@@ -565,6 +590,20 @@ def scan_new_signals(
 
         if signal is None:
             continue
+
+        # ── [SWING_ENTRY] 진입 신호 기록 ─────────────────────────────────
+        #
+        # 어떤 엔진이 무슨 근거로 신호를 냈는지 남긴다. Entry Parity 검증과
+        # 사후 감식이 이 줄에 의존한다 (손절 유실을 몇 달간 못 본 이유가
+        # 이런 기록이 없어서였다).
+        logger.info(
+            f"[SWING_ENTRY] symbol={code} engine={_eng_name} "
+            f"signal_type={signal.get('pattern')} "
+            f"score={signal.get('final_score')} "
+            f"structure_condition={signal.get('phase')} "
+            f"entry_price={signal.get('entry')} "
+            f"stop={signal.get('stop')} trigger={signal.get('trigger')}"
+        )
 
         if signal['final_score'] < min_score or not signal['trigger']:
             signal_status[code] = {
@@ -772,7 +811,7 @@ def find_upgrade_candidate(
             continue
 
         try:
-            engine = SignalEngine(df, config)
+            engine, _eng_name = _entry_engine(df, config)
             signal = engine.run()
         except Exception:
             continue
