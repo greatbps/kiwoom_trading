@@ -1,0 +1,269 @@
+{
+  "created_at": "2026-08-02T19:59:00",
+  "exit_profile": {
+    "sl_pct": -0.05,
+    "min_hold_bars": 3,
+    "max_hold_bars": 60
+  },
+  "top_n": 3,
+  "period": [
+    "2024-08-01",
+    "2026-07-30"
+  ],
+  "results": [
+    {
+      "universe": 78,
+      "symbols": 78,
+      "candidates": 37516,
+      "choch": 701,
+      "rvol": 285,
+      "atr": 270,
+      "ma50": 118,
+      "signals": 118,
+      "trades": 60,
+      "win_rate": 41.7,
+      "profit_factor": 1.721,
+      "avg_win_pct": 11.98,
+      "avg_loss_pct": -4.97,
+      "total_return_pct": 25.09,
+      "mdd_pct": -11.48,
+      "expectancy_pct": 2.091,
+      "max_consecutive_loss": 9,
+      "avg_hold_bars": 9.5,
+      "trades_per_month": 2.5,
+      "scan_avg": 0.1328,
+      "scan_max": 0.2661,
+      "scan_p95": 0.1517,
+      "scan_delta_pct": 0.0
+    },
+    {
+      "universe": 120,
+      "symbols": 120,
+      "candidates": 57659,
+      "choch": 1135,
+      "rvol": 491,
+      "atr": 456,
+      "ma50": 215,
+      "signals": 215,
+      "trades": 90,
+      "win_rate": 46.7,
+      "profit_factor": 2.08,
+      "avg_win_pct": 11.57,
+      "avg_loss_pct": -4.87,
+      "total_return_pct": 50.47,
+      "mdd_pct": -9.58,
+      "expectancy_pct": 2.804,
+      "max_consecutive_loss": 6,
+      "avg_hold_bars": 8.4,
+      "trades_per_month": 3.75,
+      "scan_avg": 0.202,
+      "scan_max": 0.3661,
+      "scan_p95": 0.2265,
+      "trade_delta_pct": 50.0,
+      "pf_delta_pct": 20.9,
+      "wr_delta_pp": 5.0,
+      "mdd_delta_pp": 1.9,
+      "scan_delta_pct": 52.1
+    },
+    {
+      "universe": 160,
+      "symbols": 160,
+      "candidates": 76892,
+      "choch": 1562,
+      "rvol": 706,
+      "atr": 644,
+      "ma50": 311,
+      "signals": 311,
+      "trades": 112,
+      "win_rate": 41.1,
+      "profit_factor": 1.725,
+      "avg_win_pct": 12.05,
+      "avg_loss_pct": -4.87,
+      "total_return_pct": 46.59,
+      "mdd_pct": -10.08,
+      "expectancy_pct": 2.08,
+      "max_consecutive_loss": 6,
+      "avg_hold_bars": 7.4,
+      "trades_per_month": 4.67,
+      "scan_avg": 0.2721,
+      "scan_max": 0.4759,
+      "scan_p95": 0.3041,
+      "trade_delta_pct": 86.7,
+      "pf_delta_pct": 0.2,
+      "wr_delta_pp": -0.6,
+      "mdd_delta_pp": 1.4,
+      "scan_delta_pct": 104.9
+    },
+    {
+      "universe": 220,
+      "symbols": 220,
+      "candidates": 105388,
+      "choch": 2067,
+      "rvol": 976,
+      "atr": 881,
+      "ma50": 424,
+      "signals": 424,
+      "trades": 136,
+      "win_rate": 39.7,
+      "profit_factor": 1.552,
+      "avg_win_pct": 11.28,
+      "avg_loss_pct": -4.79,
+      "total_return_pct": 43.34,
+      "mdd_pct": -14.49,
+      "expectancy_pct": 1.593,
+      "max_consecutive_loss": 7,
+      "avg_hold_bars": 6.7,
+      "trades_per_month": 5.67,
+      "scan_avg": 0.3823,
+      "scan_max": 0.6582,
+      "scan_p95": 0.4372,
+      "trade_delta_pct": 126.7,
+      "pf_delta_pct": -9.8,
+      "wr_delta_pp": -2.0,
+      "mdd_delta_pp": -3.01,
+      "scan_delta_pct": 187.9
+    }
+  ],
+  "funnel": [
+    {
+      "universe": "78",
+      "stage": "CHoCH",
+      "passed": 701,
+      "removed": 36815,
+      "removed_pct": 98.13
+    },
+    {
+      "universe": "78",
+      "stage": "RVOL",
+      "passed": 285,
+      "removed": 416,
+      "removed_pct": 59.34
+    },
+    {
+      "universe": "78",
+      "stage": "ATR",
+      "passed": 270,
+      "removed": 15,
+      "removed_pct": 5.26
+    },
+    {
+      "universe": "78",
+      "stage": "MA50",
+      "passed": 118,
+      "removed": 152,
+      "removed_pct": 56.3
+    },
+    {
+      "universe": "78",
+      "stage": "Top3/Trades",
+      "passed": 60,
+      "removed": 58,
+      "removed_pct": 49.15
+    },
+    {
+      "universe": "120",
+      "stage": "CHoCH",
+      "passed": 1135,
+      "removed": 56524,
+      "removed_pct": 98.03
+    },
+    {
+      "universe": "120",
+      "stage": "RVOL",
+      "passed": 491,
+      "removed": 644,
+      "removed_pct": 56.74
+    },
+    {
+      "universe": "120",
+      "stage": "ATR",
+      "passed": 456,
+      "removed": 35,
+      "removed_pct": 7.13
+    },
+    {
+      "universe": "120",
+      "stage": "MA50",
+      "passed": 215,
+      "removed": 241,
+      "removed_pct": 52.85
+    },
+    {
+      "universe": "120",
+      "stage": "Top3/Trades",
+      "passed": 90,
+      "removed": 125,
+      "removed_pct": 58.14
+    },
+    {
+      "universe": "160",
+      "stage": "CHoCH",
+      "passed": 1562,
+      "removed": 75330,
+      "removed_pct": 97.97
+    },
+    {
+      "universe": "160",
+      "stage": "RVOL",
+      "passed": 706,
+      "removed": 856,
+      "removed_pct": 54.8
+    },
+    {
+      "universe": "160",
+      "stage": "ATR",
+      "passed": 644,
+      "removed": 62,
+      "removed_pct": 8.78
+    },
+    {
+      "universe": "160",
+      "stage": "MA50",
+      "passed": 311,
+      "removed": 333,
+      "removed_pct": 51.71
+    },
+    {
+      "universe": "160",
+      "stage": "Top3/Trades",
+      "passed": 112,
+      "removed": 199,
+      "removed_pct": 63.99
+    },
+    {
+      "universe": "220",
+      "stage": "CHoCH",
+      "passed": 2067,
+      "removed": 103321,
+      "removed_pct": 98.04
+    },
+    {
+      "universe": "220",
+      "stage": "RVOL",
+      "passed": 976,
+      "removed": 1091,
+      "removed_pct": 52.78
+    },
+    {
+      "universe": "220",
+      "stage": "ATR",
+      "passed": 881,
+      "removed": 95,
+      "removed_pct": 9.73
+    },
+    {
+      "universe": "220",
+      "stage": "MA50",
+      "passed": 424,
+      "removed": 457,
+      "removed_pct": 51.87
+    },
+    {
+      "universe": "220",
+      "stage": "Top3/Trades",
+      "passed": 136,
+      "removed": 288,
+      "removed_pct": 67.92
+    }
+  ]
+}

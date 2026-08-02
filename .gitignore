@@ -46,3 +46,6 @@ phase0/_cache/
 
 # CHoCH Paper Trading 산출물 — 재생성 가능
 phase1/paper_choch/*.csv
+
+# 유니버스 실험 캐시 — 재생성 가능 (수백 MB)
+phase1/universe/ohlcv_expanded.pkl
