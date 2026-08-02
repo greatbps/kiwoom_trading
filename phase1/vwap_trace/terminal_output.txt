@@ -1,0 +1,37 @@
+==============================
+VWAP ENTRY TRACE AUDIT
+==============================
+
+Condition Search   ✅ 추적 완료
+                   main_auto_trading.filter_stocks_with_vwap()
+                   condition_indices [17~22] → search_condition(seq,name)
+                   → stock_to_condition_map / _cond_sources (Iter8-1)
+
+VWAP Engine        ✅ 계산식 확인
+                   analyzers/entry_timing_analyzer.calculate_vwap()
+                   typical=(H+L+C)/3, pv=typical×V
+                   **20봉 rolling** (config 에 vwap 섹션 없음 → 기본값)
+                   ⚠️ 일중 누적 VWAP 이 아니다
+
+AI Score           ❌ 산출식 미확인
+                   analysis['total_score'] 를 order_executor 가 읽지만
+                   entry_timing_analyzer 에 total_score 정의 없음
+                   실거래 89건(53.9%)이 0.0 이었던 것과 정합
+
+Entry Rule         ⚠️ 부분
+                   'VWAP 상향 돌파' 문자열 생성처 =
+                   trading/order_executor.py:251 — **main 에서 미호출**
+
+Risk Filter        ✅ execute_buy 내 37개 조기 return 경로 (Iter P0 확인)
+
+Position Size      ✅ core/risk_manager.py:301
+                   risk_amount = balance × RISK_PER_TRADE
+                   qty = risk_amount / |entry - stop|
+
+BUY Trigger        ⚠️ 현재 코드 경로와 DB 기록이 불일치
+                   DB 'VWAP 상향 돌파' 96건 = 2025-11-28 ~ 2026-01-16
+                   그 이후 SMC LONG / EXPLORATION / SWING 형식으로 전환
+
+Parity Ready       ❌ NOT READY
+                   VWAP+AI 진입 경로가 현재 코드에 존재하지 않는다
+==============================
