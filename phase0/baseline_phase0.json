@@ -1,0 +1,237 @@
+{
+  "run_id": "phase0.1-20260802-104346",
+  "baseline_hash": "bf1becf0eae692a4",
+  "git_commit": "f19605a575c1f67149ba2531a04a4f815a13831b",
+  "git_dirty": true,
+  "created_at": "2026-08-02T10:43:46",
+  "config": {
+    "period": {
+      "start": "2024-08-01",
+      "end": "2026-07-30",
+      "warmup_start": "2024-01-01",
+      "trading_days": 482
+    },
+    "universe": {
+      "source": "backtest.scanner.DEFAULT_CANDIDATES",
+      "requested": 78,
+      "loaded": 78,
+      "survivorship_bias": true
+    },
+    "signal": {
+      "config": "backtest.daily_scan.BEST_CONFIG",
+      "adapter": "backtest.daily_scan.BEST_ADAPTER_KWARGS"
+    },
+    "score": {
+      "pattern_weights": "OFF",
+      "min_score": 2,
+      "max_selected": 5
+    },
+    "exit_profile": {
+      "swing_mode": true,
+      "tp_pct": 0.15,
+      "sl_pct": -0.05,
+      "min_hold_bars": 3,
+      "trailing_pct": 0.08,
+      "be_trigger_pct": 0.05,
+      "max_hold_bars": 30,
+      "commission": 0.0035
+    },
+    "capital": {
+      "initial": 100000000,
+      "slot_divisor": 5,
+      "compounding": false
+    },
+    "random_seeds": 30
+  },
+  "candidate_density": {
+    "mean": 0.243,
+    "median": 0.0,
+    "max": 4,
+    "days_gt_3": 1,
+    "days_gt_5": 0,
+    "days_with_any": 91
+  },
+  "verdict": "NO EFFECT",
+  "selection_binding": {
+    "top3_days": 24,
+    "top5_days": 9,
+    "top3_dropped": 30,
+    "top5_dropped": 10
+  },
+  "score_vs_random_percentile": {
+    "slots_3": 76.7,
+    "slots_5": 43.3
+  },
+  "kpi": [
+    {
+      "name": "A. Baseline (상한 없음)",
+      "trades": 81,
+      "win_rate": 43.2,
+      "avg_return_pct": 2.25,
+      "avg_win_pct": 11.59,
+      "avg_loss_pct": -4.86,
+      "profit_factor": 1.813,
+      "total_pnl_won": 36381684,
+      "total_return_pct": 36.38,
+      "mdd_pct": -11.27,
+      "sharpe": 1.15,
+      "avg_hold_bars": 8.6,
+      "exit_reasons": {
+        "SL": 38,
+        "TP": 26,
+        "TRAIL": 9,
+        "BE_STOP": 5,
+        "MAX_HOLD": 3
+      },
+      "selection_days": 67,
+      "binding_days": 0,
+      "dropped_candidates": 0
+    },
+    {
+      "name": "B. Score Top3",
+      "trades": 61,
+      "win_rate": 41.0,
+      "avg_return_pct": 2.01,
+      "avg_win_pct": 11.98,
+      "avg_loss_pct": -4.91,
+      "profit_factor": 1.694,
+      "total_pnl_won": 24539849,
+      "total_return_pct": 24.54,
+      "mdd_pct": -11.48,
+      "sharpe": 0.92,
+      "avg_hold_bars": 8.9,
+      "exit_reasons": {
+        "SL": 30,
+        "TP": 20,
+        "TRAIL": 5,
+        "MAX_HOLD": 3,
+        "BE_STOP": 3
+      },
+      "selection_days": 75,
+      "binding_days": 24,
+      "dropped_candidates": 30
+    },
+    {
+      "name": "C. Score Top5",
+      "trades": 74,
+      "win_rate": 43.2,
+      "avg_return_pct": 2.18,
+      "avg_win_pct": 11.47,
+      "avg_loss_pct": -4.9,
+      "profit_factor": 1.783,
+      "total_pnl_won": 32240472,
+      "total_return_pct": 32.24,
+      "mdd_pct": -11.27,
+      "sharpe": 1.13,
+      "avg_hold_bars": 8.8,
+      "exit_reasons": {
+        "SL": 35,
+        "TP": 24,
+        "TRAIL": 8,
+        "BE_STOP": 4,
+        "MAX_HOLD": 3
+      },
+      "selection_days": 69,
+      "binding_days": 9,
+      "dropped_candidates": 10
+    },
+    {
+      "name": "D. Random3 (시드 30개)",
+      "trades": 62.266666666666666,
+      "win_rate": 39.937,
+      "win_rate_sd": 1.416,
+      "win_rate_range": [
+        36.5,
+        42.6
+      ],
+      "avg_return_pct": 1.674,
+      "avg_return_pct_sd": 0.342,
+      "avg_return_pct_range": [
+        0.91,
+        2.34
+      ],
+      "profit_factor": 1.565,
+      "profit_factor_sd": 0.13,
+      "profit_factor_range": [
+        1.286,
+        1.834
+      ],
+      "total_pnl_won": 20850774.333,
+      "total_pnl_won_sd": 4296797.77,
+      "total_pnl_won_range": [
+        11425334.0,
+        28539849.0
+      ],
+      "total_return_pct": 20.853,
+      "total_return_pct_sd": 4.295,
+      "total_return_pct_range": [
+        11.43,
+        28.54
+      ],
+      "mdd_pct": -11.48,
+      "mdd_pct_sd": 0.0,
+      "mdd_pct_range": [
+        -11.48,
+        -11.48
+      ]
+    },
+    {
+      "name": "D. Random5 (시드 30개)",
+      "trades": 74.3,
+      "win_rate": 42.833,
+      "win_rate_sd": 1.397,
+      "win_rate_range": [
+        40.0,
+        44.6
+      ],
+      "avg_return_pct": 2.119,
+      "avg_return_pct_sd": 0.309,
+      "avg_return_pct_range": [
+        1.55,
+        2.52
+      ],
+      "profit_factor": 1.77,
+      "profit_factor_sd": 0.136,
+      "profit_factor_range": [
+        1.533,
+        1.954
+      ],
+      "total_pnl_won": 31455037.6,
+      "total_pnl_won_sd": 4573493.176,
+      "total_pnl_won_range": [
+        23221684.0,
+        37240472.0
+      ],
+      "total_return_pct": 31.454,
+      "total_return_pct_sd": 4.574,
+      "total_return_pct_range": [
+        23.22,
+        37.24
+      ],
+      "mdd_pct": -11.27,
+      "mdd_pct_sd": 0.0,
+      "mdd_pct_range": [
+        -11.27,
+        -11.27
+      ]
+    }
+  ],
+  "funnel": [
+    {
+      "stage": "① CHoCH 원신호",
+      "signals": 684
+    },
+    {
+      "stage": "② +거래량 1.5x",
+      "signals": 281
+    },
+    {
+      "stage": "③ +ATR 2~8%",
+      "signals": 266
+    },
+    {
+      "stage": "④ +MA50 우상향 (운영값)",
+      "signals": 117
+    }
+  ]
+}
