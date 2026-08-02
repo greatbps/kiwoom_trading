@@ -1,0 +1,642 @@
+{
+  "created_at": "2026-08-02T11:55:28",
+  "goal": {
+    "trades": 100,
+    "pf": 2.0,
+    "win_rate": 50.0,
+    "mdd": -10.0
+  },
+  "combos_evaluated": 48,
+  "hits_trades_and_pf": 0,
+  "hits_all_four": 0,
+  "trades_pf_spearman": -0.2008,
+  "rows": [
+    {
+      "profile": "OPS",
+      "filters": [
+        "none"
+      ],
+      "trades": 81,
+      "pf": 1.813,
+      "wr": 43.2,
+      "mdd": -11.27,
+      "ret": 36.38,
+      "exp": 2.246
+    },
+    {
+      "profile": "OPS",
+      "filters": [
+        "A"
+      ],
+      "trades": 75,
+      "pf": 1.831,
+      "wr": 44.0,
+      "mdd": -10.86,
+      "ret": 34.22,
+      "exp": 2.282
+    },
+    {
+      "profile": "OPS",
+      "filters": [
+        "B"
+      ],
+      "trades": 77,
+      "pf": 1.849,
+      "wr": 44.2,
+      "mdd": -11.27,
+      "ret": 35.94,
+      "exp": 2.334
+    },
+    {
+      "profile": "OPS",
+      "filters": [
+        "C"
+      ],
+      "trades": 16,
+      "pf": 2.232,
+      "wr": 50.0,
+      "mdd": -5.46,
+      "ret": 11.24,
+      "exp": 3.512
+    },
+    {
+      "profile": "OPS",
+      "filters": [
+        "D"
+      ],
+      "trades": 61,
+      "pf": 1.696,
+      "wr": 42.6,
+      "mdd": -7.63,
+      "ret": 24.97,
+      "exp": 2.047
+    },
+    {
+      "profile": "OPS",
+      "filters": [
+        "A",
+        "B"
+      ],
+      "trades": 73,
+      "pf": 1.89,
+      "wr": 45.2,
+      "mdd": -10.86,
+      "ret": 35.5,
+      "exp": 2.432
+    },
+    {
+      "profile": "OPS",
+      "filters": [
+        "A",
+        "C"
+      ],
+      "trades": 15,
+      "pf": 1.919,
+      "wr": 46.7,
+      "mdd": -5.6,
+      "ret": 8.38,
+      "exp": 2.793
+    },
+    {
+      "profile": "OPS",
+      "filters": [
+        "A",
+        "D"
+      ],
+      "trades": 58,
+      "pf": 1.874,
+      "wr": 44.8,
+      "mdd": -7.63,
+      "ret": 28.39,
+      "exp": 2.448
+    },
+    {
+      "profile": "OPS",
+      "filters": [
+        "B",
+        "C"
+      ],
+      "trades": 14,
+      "pf": 2.193,
+      "wr": 50.0,
+      "mdd": -5.6,
+      "ret": 9.52,
+      "exp": 3.399
+    },
+    {
+      "profile": "OPS",
+      "filters": [
+        "B",
+        "D"
+      ],
+      "trades": 59,
+      "pf": 1.758,
+      "wr": 44.1,
+      "mdd": -7.63,
+      "ret": 26.25,
+      "exp": 2.225
+    },
+    {
+      "profile": "OPS",
+      "filters": [
+        "C",
+        "D"
+      ],
+      "trades": 11,
+      "pf": 1.722,
+      "wr": 45.5,
+      "mdd": -5.69,
+      "ret": 4.94,
+      "exp": 2.245
+    },
+    {
+      "profile": "OPS",
+      "filters": [
+        "A",
+        "B",
+        "C"
+      ],
+      "trades": 14,
+      "pf": 2.193,
+      "wr": 50.0,
+      "mdd": -5.6,
+      "ret": 9.52,
+      "exp": 3.399
+    },
+    {
+      "profile": "OPS",
+      "filters": [
+        "A",
+        "B",
+        "D"
+      ],
+      "trades": 57,
+      "pf": 1.882,
+      "wr": 45.6,
+      "mdd": -7.63,
+      "ret": 28.53,
+      "exp": 2.503
+    },
+    {
+      "profile": "OPS",
+      "filters": [
+        "A",
+        "C",
+        "D"
+      ],
+      "trades": 11,
+      "pf": 1.722,
+      "wr": 45.5,
+      "mdd": -5.69,
+      "ret": 4.94,
+      "exp": 2.245
+    },
+    {
+      "profile": "OPS",
+      "filters": [
+        "B",
+        "C",
+        "D"
+      ],
+      "trades": 11,
+      "pf": 1.722,
+      "wr": 45.5,
+      "mdd": -5.69,
+      "ret": 4.94,
+      "exp": 2.245
+    },
+    {
+      "profile": "OPS",
+      "filters": [
+        "A",
+        "B",
+        "C",
+        "D"
+      ],
+      "trades": 11,
+      "pf": 1.722,
+      "wr": 45.5,
+      "mdd": -5.69,
+      "ret": 4.94,
+      "exp": 2.245
+    },
+    {
+      "profile": "E",
+      "filters": [
+        "none"
+      ],
+      "trades": 135,
+      "pf": 1.719,
+      "wr": 41.5,
+      "mdd": -15.92,
+      "ret": 52.81,
+      "exp": 1.956
+    },
+    {
+      "profile": "E",
+      "filters": [
+        "A"
+      ],
+      "trades": 125,
+      "pf": 1.552,
+      "wr": 40.0,
+      "mdd": -16.34,
+      "ret": 38.57,
+      "exp": 1.543
+    },
+    {
+      "profile": "E",
+      "filters": [
+        "B"
+      ],
+      "trades": 126,
+      "pf": 1.57,
+      "wr": 40.5,
+      "mdd": -16.34,
+      "ret": 40.43,
+      "exp": 1.605
+    },
+    {
+      "profile": "E",
+      "filters": [
+        "C"
+      ],
+      "trades": 29,
+      "pf": 1.927,
+      "wr": 44.8,
+      "mdd": -7.85,
+      "ret": 14.13,
+      "exp": 2.437
+    },
+    {
+      "profile": "E",
+      "filters": [
+        "D"
+      ],
+      "trades": 95,
+      "pf": 1.882,
+      "wr": 43.2,
+      "mdd": -13.67,
+      "ret": 45.53,
+      "exp": 2.397
+    },
+    {
+      "profile": "E",
+      "filters": [
+        "A",
+        "B"
+      ],
+      "trades": 120,
+      "pf": 1.5,
+      "wr": 40.0,
+      "mdd": -16.78,
+      "ret": 34.27,
+      "exp": 1.428
+    },
+    {
+      "profile": "E",
+      "filters": [
+        "A",
+        "C"
+      ],
+      "trades": 28,
+      "pf": 1.74,
+      "wr": 42.9,
+      "mdd": -8.04,
+      "ret": 11.27,
+      "exp": 2.014
+    },
+    {
+      "profile": "E",
+      "filters": [
+        "A",
+        "D"
+      ],
+      "trades": 89,
+      "pf": 1.824,
+      "wr": 42.7,
+      "mdd": -13.67,
+      "ret": 39.74,
+      "exp": 2.232
+    },
+    {
+      "profile": "E",
+      "filters": [
+        "B",
+        "C"
+      ],
+      "trades": 27,
+      "pf": 1.88,
+      "wr": 44.4,
+      "mdd": -8.04,
+      "ret": 12.41,
+      "exp": 2.299
+    },
+    {
+      "profile": "E",
+      "filters": [
+        "B",
+        "D"
+      ],
+      "trades": 89,
+      "pf": 1.751,
+      "wr": 42.7,
+      "mdd": -13.67,
+      "ret": 37.74,
+      "exp": 2.12
+    },
+    {
+      "profile": "E",
+      "filters": [
+        "C",
+        "D"
+      ],
+      "trades": 23,
+      "pf": 1.759,
+      "wr": 43.5,
+      "mdd": -8.08,
+      "ret": 8.97,
+      "exp": 1.951
+    },
+    {
+      "profile": "E",
+      "filters": [
+        "A",
+        "B",
+        "C"
+      ],
+      "trades": 27,
+      "pf": 1.88,
+      "wr": 44.4,
+      "mdd": -8.04,
+      "ret": 12.41,
+      "exp": 2.299
+    },
+    {
+      "profile": "E",
+      "filters": [
+        "A",
+        "B",
+        "D"
+      ],
+      "trades": 86,
+      "pf": 1.775,
+      "wr": 43.0,
+      "mdd": -13.67,
+      "ret": 37.16,
+      "exp": 2.16
+    },
+    {
+      "profile": "E",
+      "filters": [
+        "A",
+        "C",
+        "D"
+      ],
+      "trades": 23,
+      "pf": 1.759,
+      "wr": 43.5,
+      "mdd": -8.08,
+      "ret": 8.97,
+      "exp": 1.951
+    },
+    {
+      "profile": "E",
+      "filters": [
+        "B",
+        "C",
+        "D"
+      ],
+      "trades": 23,
+      "pf": 1.759,
+      "wr": 43.5,
+      "mdd": -8.08,
+      "ret": 8.97,
+      "exp": 1.951
+    },
+    {
+      "profile": "E",
+      "filters": [
+        "A",
+        "B",
+        "C",
+        "D"
+      ],
+      "trades": 23,
+      "pf": 1.759,
+      "wr": 43.5,
+      "mdd": -8.08,
+      "ret": 8.97,
+      "exp": 1.951
+    },
+    {
+      "profile": "G",
+      "filters": [
+        "none"
+      ],
+      "trades": 148,
+      "pf": 1.727,
+      "wr": 42.6,
+      "mdd": -16.45,
+      "ret": 58.39,
+      "exp": 1.973
+    },
+    {
+      "profile": "G",
+      "filters": [
+        "A"
+      ],
+      "trades": 136,
+      "pf": 1.54,
+      "wr": 41.2,
+      "mdd": -16.88,
+      "ret": 41.43,
+      "exp": 1.523
+    },
+    {
+      "profile": "G",
+      "filters": [
+        "B"
+      ],
+      "trades": 137,
+      "pf": 1.618,
+      "wr": 42.3,
+      "mdd": -16.88,
+      "ret": 47.29,
+      "exp": 1.726
+    },
+    {
+      "profile": "G",
+      "filters": [
+        "C"
+      ],
+      "trades": 37,
+      "pf": 1.465,
+      "wr": 40.5,
+      "mdd": -7.87,
+      "ret": 10.26,
+      "exp": 1.387
+    },
+    {
+      "profile": "G",
+      "filters": [
+        "D"
+      ],
+      "trades": 108,
+      "pf": 1.908,
+      "wr": 44.4,
+      "mdd": -14.2,
+      "ret": 52.19,
+      "exp": 2.416
+    },
+    {
+      "profile": "G",
+      "filters": [
+        "A",
+        "B"
+      ],
+      "trades": 130,
+      "pf": 1.516,
+      "wr": 41.5,
+      "mdd": -17.33,
+      "ret": 38.27,
+      "exp": 1.472
+    },
+    {
+      "profile": "G",
+      "filters": [
+        "A",
+        "C"
+      ],
+      "trades": 36,
+      "pf": 1.335,
+      "wr": 38.9,
+      "mdd": -8.07,
+      "ret": 7.4,
+      "exp": 1.028
+    },
+    {
+      "profile": "G",
+      "filters": [
+        "A",
+        "D"
+      ],
+      "trades": 100,
+      "pf": 1.81,
+      "wr": 44.0,
+      "mdd": -14.2,
+      "ret": 43.67,
+      "exp": 2.184
+    },
+    {
+      "profile": "G",
+      "filters": [
+        "B",
+        "C"
+      ],
+      "trades": 35,
+      "pf": 1.408,
+      "wr": 40.0,
+      "mdd": -7.84,
+      "ret": 8.54,
+      "exp": 1.22
+    },
+    {
+      "profile": "G",
+      "filters": [
+        "B",
+        "D"
+      ],
+      "trades": 100,
+      "pf": 1.834,
+      "wr": 45.0,
+      "mdd": -14.2,
+      "ret": 45.67,
+      "exp": 2.284
+    },
+    {
+      "profile": "G",
+      "filters": [
+        "C",
+        "D"
+      ],
+      "trades": 28,
+      "pf": 1.559,
+      "wr": 42.9,
+      "mdd": -8.18,
+      "ret": 8.52,
+      "exp": 1.522
+    },
+    {
+      "profile": "G",
+      "filters": [
+        "A",
+        "B",
+        "C"
+      ],
+      "trades": 35,
+      "pf": 1.408,
+      "wr": 40.0,
+      "mdd": -7.84,
+      "ret": 8.54,
+      "exp": 1.22
+    },
+    {
+      "profile": "G",
+      "filters": [
+        "A",
+        "B",
+        "D"
+      ],
+      "trades": 96,
+      "pf": 1.804,
+      "wr": 44.8,
+      "mdd": -14.2,
+      "ret": 42.23,
+      "exp": 2.2
+    },
+    {
+      "profile": "G",
+      "filters": [
+        "A",
+        "C",
+        "D"
+      ],
+      "trades": 28,
+      "pf": 1.559,
+      "wr": 42.9,
+      "mdd": -8.18,
+      "ret": 8.52,
+      "exp": 1.522
+    },
+    {
+      "profile": "G",
+      "filters": [
+        "B",
+        "C",
+        "D"
+      ],
+      "trades": 28,
+      "pf": 1.559,
+      "wr": 42.9,
+      "mdd": -8.18,
+      "ret": 8.52,
+      "exp": 1.522
+    },
+    {
+      "profile": "G",
+      "filters": [
+        "A",
+        "B",
+        "C",
+        "D"
+      ],
+      "trades": 28,
+      "pf": 1.559,
+      "wr": 42.9,
+      "mdd": -8.18,
+      "ret": 8.52,
+      "exp": 1.522
+    }
+  ]
+}
