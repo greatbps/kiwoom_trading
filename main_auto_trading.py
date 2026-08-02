@@ -8665,6 +8665,26 @@ class IntegratedTradingSystem:
                     entry_time = datetime.now()
 
                 stock_name = sp_entry.get('stock_name', code)
+
+                # 🔧 2026-08-02: swing_runner가 산출한 손절가를 그대로 넘긴다.
+                #    이 키가 없으면 exit_logic_optimized의 구조손절 분기를 타지
+                #    못하고 SWING fallback(swing_hard_stop_pct=-12%)으로 빠진다.
+                #    즉 설계 손절 -1.4~-5.3%가 집행되지 않고 -12%까지 방치된다.
+                #    (Phase1 Iteration5 감식: 5건 중 4건이 손절가보다 낮게 청산,
+                #     초과손실 691,142원 = 스윙 총손실의 63.5%)
+                _stop = sp_entry.get('stop_price') or sp_entry.get('stop')
+                try:
+                    _stop = float(_stop) if _stop else None
+                except (TypeError, ValueError):
+                    _stop = None
+                # 진입가보다 높은 손절가는 잘못된 값 — 넣으면 즉시 청산된다
+                if _stop is not None and _stop >= entry_price:
+                    logger.warning(
+                        f"[SWING_RISK_ATTACH] {code} stop_price={_stop:,.0f} ≥ "
+                        f"entry={entry_price:,.0f} → 무시"
+                    )
+                    _stop = None
+
                 self.positions[code] = {
                     'stock_code': code,
                     'stock_name': stock_name,
@@ -8678,6 +8698,7 @@ class IntegratedTradingSystem:
                     'entry_date': entry_date_str,
                     'trailing_active': False,
                     'trailing_stop_price': None,
+                    'structure_stop_price': _stop,
                     'partial_exit_stage': 0,
                     'strategy_horizon': 'SWING',
                     'strategy': 'swing',
@@ -8688,11 +8709,19 @@ class IntegratedTradingSystem:
                 logger.warning(
                     f"[SWING_RISK_ATTACH] {code} {stock_name} "
                     f"entry={entry_price:,.0f} qty={qty} "
-                    f"entry_date={entry_date_str} → hard stop 어태치"
+                    f"entry_date={entry_date_str} "
+                    # ⚠️ 손절값을 찍지 않아 '전달 안 됨'을 몇 달간 못 봤다.
+                    f"stop={_stop:,.0f}({(_stop/entry_price-1)*100:+.2f}%)"
+                    if _stop else
+                    f"[SWING_RISK_ATTACH] {code} {stock_name} "
+                    f"entry={entry_price:,.0f} qty={qty} "
+                    f"entry_date={entry_date_str} stop=없음 → SWING fallback(-12%)"
                 )
                 console.print(
                     f"[bold yellow]⚠️  [SWING_RISK_ATTACH] {stock_name}({code}) "
-                    f"entry={entry_price:,.0f} qty={qty} → hard stop 감시 시작[/bold yellow]"
+                    f"entry={entry_price:,.0f} qty={qty} "
+                    f"stop={f'{_stop:,.0f}' if _stop else '없음'} "
+                    f"→ hard stop 감시 시작[/bold yellow]"
                 )
                 attached_count += 1
 
