@@ -7,7 +7,12 @@ from psycopg2.extras import RealDictCursor
 import json
 import os
 from typing import Dict, List, Optional, Any
+import logging
 from dotenv import load_dotenv
+
+# ⚠️ 이 모듈에 logger 가 없었다. 추가한 경고 로그가 NameError 를 내면
+#    거래 기록이 통째로 실패한다 — 반드시 함께 정의한다.
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -525,11 +530,85 @@ class TradingDatabase:
 
     # ==================== 거래 이력 관리 ====================
 
+    # ── 주문 추적 · 중복 방어 (Iteration 8-3) ────────────────────────────
+    #
+    # ⚠️ `order_no` 는 execute_buy 가 이미 trade_data 에 실어 보내는데
+    #    INSERT 문에 대응 컬럼이 없어 **버려지고 있었다.** 컬럼을 추가하는
+    #    대신 기존 entry_context(JSONB)에 접어 넣는다 — DDL 없이 보존된다.
+    #
+    # ⚠️ 중복 방어는 여기(저장 계층)에 둔다. 호출부는 여러 곳이고
+    #    execute_sell 의 기존 가드는 entry_time 이 있을 때만 동작한다
+    #    (`if _entry_time_str and ...`). entry_time 은 411행 중 27행에만
+    #    있어 대부분의 경로에서 가드가 통째로 건너뛰어진다.
+    #    2025-11 에 74건이 중복 기록된 구간이 그 상태였다.
+    _DUP_WINDOW_SEC = 300      # 같은 5필드가 이 시간 안에 다시 오면 중복
+
+    def _fold_order_no(self, trade_data: Dict[str, Any]) -> None:
+        """order_no 를 entry_context 에 보존한다 (컬럼 추가 없이)."""
+        order_no = trade_data.get('order_no')
+        if not order_no:
+            return
+        ctx = trade_data.get('entry_context')
+        if not isinstance(ctx, dict):
+            # 문자열(JSON)로 왔거나 없으면 새로 만든다 — 기존 값을 버리지 않는다
+            ctx = {'_original': ctx} if ctx else {}
+        key = ('exit_order_no' if trade_data.get('trade_type') == 'SELL'
+               else 'order_no')
+        ctx.setdefault(key, str(order_no))
+        ctx.setdefault('order_time', trade_data.get('trade_time'))
+        trade_data['entry_context'] = ctx
+
+    def _is_duplicate_trade(self, cursor, trade_data: Dict[str, Any]) -> bool:
+        """
+        같은 거래가 방금 들어왔는가.
+
+        판단 키: stock_code · trade_type · price · quantity · exit_reason
+        + 최근 _DUP_WINDOW_SEC 이내.
+
+        ⚠️ 시간 창을 두는 이유 — 같은 종목을 같은 가격·수량으로 하루에
+           두 번 사고파는 것은 정상이다. 창이 없으면 정상 거래를 막는다.
+           2025-11 중복은 30~71초 간격이었다.
+        """
+        try:
+            cursor.execute(
+                """SELECT trade_id FROM trades
+                   WHERE stock_code = %s AND trade_type = %s
+                     AND price = %s AND quantity = %s
+                     AND COALESCE(exit_reason,'') = COALESCE(%s,'')
+                     AND trade_time >= %s::timestamp - (%s || ' seconds')::interval
+                     AND trade_time <= %s::timestamp
+                   LIMIT 1""",
+                (trade_data.get('stock_code'), trade_data.get('trade_type'),
+                 trade_data.get('price'), trade_data.get('quantity'),
+                 trade_data.get('exit_reason'),
+                 trade_data.get('trade_time'), self._DUP_WINDOW_SEC,
+                 trade_data.get('trade_time')))
+            return cursor.fetchone() is not None
+        except Exception as e:
+            # ⚠️ 판단 실패 시 **막지 않는다.** 거래 기록을 잃는 것이
+            #    중복이 하나 더 생기는 것보다 나쁘다.
+            logger.warning(f"[TRADE_DEDUP] 중복 검사 실패 → 통과: {e}")
+            return False
+
     def insert_trade(self, trade_data: Dict[str, Any]) -> int:
         """거래 이력 추가"""
         conn = self._get_conn()
         try:
             cursor = conn.cursor()
+
+            self._fold_order_no(trade_data)
+            if self._is_duplicate_trade(cursor, trade_data):
+                logger.warning(
+                    f"[TRADE_DEDUP] 중복 차단 "
+                    f"{trade_data.get('stock_code')} "
+                    f"{trade_data.get('trade_type')} "
+                    f"price={trade_data.get('price')} "
+                    f"qty={trade_data.get('quantity')} "
+                    f"reason={str(trade_data.get('exit_reason'))[:40]} "
+                    f"— {self._DUP_WINDOW_SEC}초 내 동일 기록 존재"
+                )
+                cursor.close()
+                return 0
 
             cursor.execute("""
                 INSERT INTO trades (
