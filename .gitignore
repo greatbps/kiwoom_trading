@@ -43,3 +43,6 @@ htmlcov/
 
 # Phase 0 실험 캐시 — 재생성 가능한 산출물
 phase0/_cache/
+
+# CHoCH Paper Trading 산출물 — 재생성 가능
+phase1/paper_choch/*.csv
