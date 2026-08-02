@@ -1,0 +1,15 @@
+﻿source,reason,rows
+blocked_trades,,128
+signal_rejections,,47796
+signal_rejections.rejection_reason,SMC: 구조 변화 없음,10158
+signal_rejections.rejection_reason,[ORPHAN_HALT] 고아 포지션 — 수동 확인 후 재시작 필요,7220
+signal_rejections.rejection_reason,"[EC_HALT] EC_HALT: dd=-54.4% ≤ -18% (equity=4,563,361 peak=10,000,000)",3737
+signal_rejections.rejection_reason,"[EC_HALT] EC_HALT: dd=-93.7% ≤ -18% (equity=542,250 peak=8,543,116)",2607
+signal_rejections.rejection_reason,"[EC_HALT] EC_HALT: dd=-40.9% ≤ -18% (equity=5,046,915 peak=8,543,116)",1770
+signal_rejections.rejection_reason,"[EC_HALT] EC_HALT: dd=-46.9% ≤ -18% (equity=4,537,767 peak=8,543,116)",1770
+signal_rejections.rejection_reason,"[EC_HALT] EC_HALT: dd=-83.9% ≤ -18% (equity=1,605,311 peak=10,000,000)",1689
+signal_rejections.rejection_reason,"[EC_HALT] EC_HALT: dd=-58.0% ≤ -18% (equity=4,198,911 peak=10,000,000)",1449
+signal_rejections.rejection_reason,[DD_HALT] DD_HALT: 당일 PnL=-5.08% drawdown=-5.08%,1388
+signal_rejections.rejection_reason,"[EC_HALT] EC_HALT: dd=-41.6% ≤ -18% (equity=4,988,840 peak=8,543,116)",1240
+signal_rejections.rejection_reason,"[EC_HALT] EC_HALT: dd=-58.7% ≤ -18% (equity=4,128,711 peak=10,000,000)",1220
+signal_rejections.rejection_reason,"[EC_HALT] EC_HALT: dd=-41.9% ≤ -18% (equity=4,967,450 peak=8,543,116)",1152

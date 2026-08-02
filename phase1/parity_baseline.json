@@ -1,0 +1,38 @@
+{
+  "backtest": {
+    "name": "OPS",
+    "trades": 81,
+    "win_rate": 43.2,
+    "avg_return_pct": 2.25,
+    "avg_win_pct": 11.59,
+    "avg_loss_pct": -4.86,
+    "profit_factor": 1.813,
+    "expectancy_pct": 2.246,
+    "expectancy_won": 449156,
+    "max_consecutive_loss": 10,
+    "total_pnl_won": 36381684,
+    "total_return_pct": 36.38,
+    "mdd_pct": -11.27,
+    "sharpe": 1.15,
+    "avg_hold_bars": 8.6,
+    "exit_reasons": {
+      "SL": 38,
+      "TP": 26,
+      "TRAIL": 9,
+      "BE_STOP": 5,
+      "MAX_HOLD": 3
+    },
+    "selection_days": 67,
+    "binding_days": 0,
+    "dropped_candidates": 0
+  },
+  "live": {
+    "trades": 242,
+    "win_rate": 21.1,
+    "profit_factor": 0.102,
+    "net_won": -1070576,
+    "expectancy_pct": -0.524,
+    "first": "2025-11-10",
+    "last": "2026-07-01"
+  }
+}

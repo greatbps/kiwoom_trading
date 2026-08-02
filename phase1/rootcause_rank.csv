@@ -1,0 +1,7 @@
+﻿rank,factor,share_pct,evidence,measurable
+1,유니버스 불일치,40,Live 94종목 중 BT 유니버스와 겹치는 것 4종목 (4.3%),True
+2,보유기간 불일치,30,BT 8.6일 vs Live 197분 (17배),True
+3,청산규칙 불일치,25,공통 청산사유 0종 / Live 전용 9종. 장중청산 62.4%,True
+4,Unknown,3,위 요인으로 설명되지 않는 잔여,False
+5,슬리피지·수수료,2,0.20% 가산 시 PF 1.617 (실거래 0.102 와 무관),True
+6,체결지연,0,주문·체결 시각 컬럼 미기록 (holding_minutes 22/242),False

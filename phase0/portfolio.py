@@ -135,6 +135,9 @@ class PortfolioBacktest:
         #    켜면 과거 실거래에서 학습한 가중치가 들어가 look-ahead 가 된다.
         self.score_engine = ScoreEngine(score_pattern=score_pattern)
         self.engine = BacktestEngine(**EXIT_PROFILE)
+        # ⚠️ 손익 계산은 이 값을 쓴다. EXIT_PROFILE 을 직접 참조하면
+        #    슬리피지 실험에서 인스턴스별로 다르게 줄 수가 없다.
+        self.commission = EXIT_PROFILE['commission']
         # 종목별 날짜→행번호 (매 루프 검색하면 느리다)
         self._pos_of = {s: {d: i for i, d in enumerate(df.index)}
                         for s, df in data.items()}
@@ -201,7 +204,7 @@ class PortfolioBacktest:
                     p, close, high, low, chg, bars, ep)
                 if not reason:
                     continue
-                pnl = (xp - ep) / ep - EXIT_PROFILE['commission'] * 2
+                pnl = (xp - ep) / ep - self.commission * 2
                 res.trades.append(PTrade(
                     symbol=sym, signal_date=p['sigday'],
                     entry_date=p['entry_date'],

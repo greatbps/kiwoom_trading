@@ -1,0 +1,359 @@
+{
+  "run_id": "phase1-iter2-20260802-121923",
+  "created_at": "2026-08-02T12:19:23",
+  "git_commit": "72349712d1e5d55cadad75166c0776b1838fb95e",
+  "baseline": {
+    "backtest": {
+      "name": "OPS",
+      "trades": 81,
+      "win_rate": 43.2,
+      "avg_return_pct": 2.25,
+      "avg_win_pct": 11.59,
+      "avg_loss_pct": -4.86,
+      "profit_factor": 1.813,
+      "expectancy_pct": 2.246,
+      "expectancy_won": 449156,
+      "max_consecutive_loss": 10,
+      "total_pnl_won": 36381684,
+      "total_return_pct": 36.38,
+      "mdd_pct": -11.27,
+      "sharpe": 1.15,
+      "avg_hold_bars": 8.6,
+      "exit_reasons": {
+        "SL": 38,
+        "TP": 26,
+        "TRAIL": 9,
+        "BE_STOP": 5,
+        "MAX_HOLD": 3
+      },
+      "selection_days": 67,
+      "binding_days": 0,
+      "dropped_candidates": 0
+    },
+    "live": {
+      "trades": 242,
+      "win_rate": 21.1,
+      "profit_factor": 0.102,
+      "net_won": -1070576,
+      "expectancy_pct": -0.524,
+      "first": "2025-11-10",
+      "last": "2026-07-01"
+    }
+  },
+  "exit_parity": {
+    "shared": [],
+    "bt_only": [
+      "BE_STOP",
+      "MAX_HOLD",
+      "SL",
+      "TP",
+      "TRAIL"
+    ],
+    "live_only": [
+      "DRAWDOWN_STOP",
+      "EARLY_FAILURE",
+      "HARD_STOP",
+      "MA5_EXIT",
+      "OTHER",
+      "OVERNIGHT_BLOCK",
+      "STOP_LOSS",
+      "TIME_EXIT",
+      "TRAILING"
+    ],
+    "rows": [
+      {
+        "reason": "OTHER",
+        "bt_trades": 0,
+        "bt_pct": 0.0,
+        "live_trades": 138,
+        "live_pct": 57.0,
+        "live_win_rate": 32.6,
+        "live_net_won": 27770
+      },
+      {
+        "reason": "EARLY_FAILURE",
+        "bt_trades": 0,
+        "bt_pct": 0.0,
+        "live_trades": 35,
+        "live_pct": 14.5,
+        "live_win_rate": 0.0,
+        "live_net_won": -26585
+      },
+      {
+        "reason": "HARD_STOP",
+        "bt_trades": 0,
+        "bt_pct": 0.0,
+        "live_trades": 28,
+        "live_pct": 11.6,
+        "live_win_rate": 0.0,
+        "live_net_won": -418280
+      },
+      {
+        "reason": "STOP_LOSS",
+        "bt_trades": 0,
+        "bt_pct": 0.0,
+        "live_trades": 11,
+        "live_pct": 4.5,
+        "live_win_rate": 9.1,
+        "live_net_won": -19590
+      },
+      {
+        "reason": "TIME_EXIT",
+        "bt_trades": 0,
+        "bt_pct": 0.0,
+        "live_trades": 10,
+        "live_pct": 4.1,
+        "live_win_rate": 20.0,
+        "live_net_won": -2150
+      },
+      {
+        "reason": "OVERNIGHT_BLOCK",
+        "bt_trades": 0,
+        "bt_pct": 0.0,
+        "live_trades": 8,
+        "live_pct": 3.3,
+        "live_win_rate": 0.0,
+        "live_net_won": -236700
+      },
+      {
+        "reason": "MA5_EXIT",
+        "bt_trades": 0,
+        "bt_pct": 0.0,
+        "live_trades": 7,
+        "live_pct": 2.9,
+        "live_win_rate": 14.3,
+        "live_net_won": -241890
+      },
+      {
+        "reason": "TRAILING",
+        "bt_trades": 0,
+        "bt_pct": 0.0,
+        "live_trades": 4,
+        "live_pct": 1.7,
+        "live_win_rate": 50.0,
+        "live_net_won": 83849
+      },
+      {
+        "reason": "DRAWDOWN_STOP",
+        "bt_trades": 0,
+        "bt_pct": 0.0,
+        "live_trades": 1,
+        "live_pct": 0.4,
+        "live_win_rate": 0.0,
+        "live_net_won": -237000
+      },
+      {
+        "reason": "MAX_HOLD",
+        "bt_trades": 3,
+        "bt_pct": 3.7,
+        "live_trades": 0,
+        "live_pct": 0.0,
+        "live_win_rate": null,
+        "live_net_won": 0
+      },
+      {
+        "reason": "TP",
+        "bt_trades": 26,
+        "bt_pct": 32.1,
+        "live_trades": 0,
+        "live_pct": 0.0,
+        "live_win_rate": null,
+        "live_net_won": 0
+      },
+      {
+        "reason": "SL",
+        "bt_trades": 38,
+        "bt_pct": 46.9,
+        "live_trades": 0,
+        "live_pct": 0.0,
+        "live_win_rate": null,
+        "live_net_won": 0
+      },
+      {
+        "reason": "BE_STOP",
+        "bt_trades": 5,
+        "bt_pct": 6.2,
+        "live_trades": 0,
+        "live_pct": 0.0,
+        "live_win_rate": null,
+        "live_net_won": 0
+      },
+      {
+        "reason": "TRAIL",
+        "bt_trades": 9,
+        "bt_pct": 11.1,
+        "live_trades": 0,
+        "live_pct": 0.0,
+        "live_win_rate": null,
+        "live_net_won": 0
+      }
+    ]
+  },
+  "holding_universe": {
+    "backtest_avg_days": 8.6,
+    "live_avg_minutes": 197.2,
+    "live_avg_days_equiv": 0.506,
+    "live_holding_sample": 22,
+    "intraday_exit_pct": 62.4,
+    "same_day_roundtrip_pct": 52.0,
+    "live_symbols": 94,
+    "bt_symbols": 78,
+    "overlap": 4,
+    "overlap_pct": 4.3
+  },
+  "slippage": [
+    {
+      "extra_slippage_pct": 0.0,
+      "trades": 81,
+      "win_rate": 43.2,
+      "profit_factor": 1.813,
+      "total_return_pct": 36.38,
+      "mdd_pct": -11.27,
+      "expectancy_pct": 2.246
+    },
+    {
+      "extra_slippage_pct": 0.05,
+      "trades": 81,
+      "win_rate": 43.2,
+      "profit_factor": 1.761,
+      "total_return_pct": 34.76,
+      "mdd_pct": -11.47,
+      "expectancy_pct": 2.146
+    },
+    {
+      "extra_slippage_pct": 0.1,
+      "trades": 81,
+      "win_rate": 42.0,
+      "profit_factor": 1.711,
+      "total_return_pct": 33.14,
+      "mdd_pct": -11.67,
+      "expectancy_pct": 2.046
+    },
+    {
+      "extra_slippage_pct": 0.2,
+      "trades": 81,
+      "win_rate": 42.0,
+      "profit_factor": 1.617,
+      "total_return_pct": 29.9,
+      "mdd_pct": -12.06,
+      "expectancy_pct": 1.846
+    }
+  ],
+  "gates": {
+    "note": "차단 신호의 반사실 성과가 기록돼 있지 않아 ON/OFF 비교 불가",
+    "observed": [
+      {
+        "source": "blocked_trades",
+        "rows": 128
+      },
+      {
+        "source": "signal_rejections",
+        "rows": 47796
+      },
+      {
+        "source": "signal_rejections.rejection_reason",
+        "reason": "SMC: 구조 변화 없음",
+        "rows": 10158
+      },
+      {
+        "source": "signal_rejections.rejection_reason",
+        "reason": "[ORPHAN_HALT] 고아 포지션 — 수동 확인 후 재시작 필요",
+        "rows": 7220
+      },
+      {
+        "source": "signal_rejections.rejection_reason",
+        "reason": "[EC_HALT] EC_HALT: dd=-54.4% ≤ -18% (equity=4,563,361 peak=10,000,000)",
+        "rows": 3737
+      },
+      {
+        "source": "signal_rejections.rejection_reason",
+        "reason": "[EC_HALT] EC_HALT: dd=-93.7% ≤ -18% (equity=542,250 peak=8,543,116)",
+        "rows": 2607
+      },
+      {
+        "source": "signal_rejections.rejection_reason",
+        "reason": "[EC_HALT] EC_HALT: dd=-40.9% ≤ -18% (equity=5,046,915 peak=8,543,116)",
+        "rows": 1770
+      },
+      {
+        "source": "signal_rejections.rejection_reason",
+        "reason": "[EC_HALT] EC_HALT: dd=-46.9% ≤ -18% (equity=4,537,767 peak=8,543,116)",
+        "rows": 1770
+      },
+      {
+        "source": "signal_rejections.rejection_reason",
+        "reason": "[EC_HALT] EC_HALT: dd=-83.9% ≤ -18% (equity=1,605,311 peak=10,000,000)",
+        "rows": 1689
+      },
+      {
+        "source": "signal_rejections.rejection_reason",
+        "reason": "[EC_HALT] EC_HALT: dd=-58.0% ≤ -18% (equity=4,198,911 peak=10,000,000)",
+        "rows": 1449
+      },
+      {
+        "source": "signal_rejections.rejection_reason",
+        "reason": "[DD_HALT] DD_HALT: 당일 PnL=-5.08% drawdown=-5.08%",
+        "rows": 1388
+      },
+      {
+        "source": "signal_rejections.rejection_reason",
+        "reason": "[EC_HALT] EC_HALT: dd=-41.6% ≤ -18% (equity=4,988,840 peak=8,543,116)",
+        "rows": 1240
+      },
+      {
+        "source": "signal_rejections.rejection_reason",
+        "reason": "[EC_HALT] EC_HALT: dd=-58.7% ≤ -18% (equity=4,128,711 peak=10,000,000)",
+        "rows": 1220
+      },
+      {
+        "source": "signal_rejections.rejection_reason",
+        "reason": "[EC_HALT] EC_HALT: dd=-41.9% ≤ -18% (equity=4,967,450 peak=8,543,116)",
+        "rows": 1152
+      }
+    ]
+  },
+  "contribution": [
+    {
+      "factor": "유니버스 불일치",
+      "share_pct": 40,
+      "evidence": "Live 94종목 중 BT 유니버스와 겹치는 것 4종목 (4.3%)",
+      "measurable": true
+    },
+    {
+      "factor": "보유기간 불일치",
+      "share_pct": 30,
+      "evidence": "BT 8.6일 vs Live 197분 (17배)",
+      "measurable": true
+    },
+    {
+      "factor": "청산규칙 불일치",
+      "share_pct": 25,
+      "evidence": "공통 청산사유 0종 / Live 전용 9종. 장중청산 62.4%",
+      "measurable": true
+    },
+    {
+      "factor": "슬리피지·수수료",
+      "share_pct": 2,
+      "evidence": "0.20% 가산 시 PF 1.617 (실거래 0.102 와 무관)",
+      "measurable": true
+    },
+    {
+      "factor": "체결지연",
+      "share_pct": 0,
+      "evidence": "주문·체결 시각 컬럼 미기록 (holding_minutes 22/242)",
+      "measurable": false
+    },
+    {
+      "factor": "Unknown",
+      "share_pct": 3,
+      "evidence": "위 요인으로 설명되지 않는 잔여",
+      "measurable": false
+    }
+  ],
+  "verdict": {
+    "explained_pct": 97,
+    "unknown_pct": 3,
+    "pass": true,
+    "conclusion": "두 시스템은 같은 전략의 실행 편차가 아니라 서로 다른 전략이다. 유니버스 4.3% 중복, 보유기간 35배 차이, 청산규칙 공통항 거의 없음."
+  }
+}
