@@ -12536,6 +12536,10 @@ class IntegratedTradingSystem:
                 'stock_name': position['name'],
                 'trade_type': 'SELL',
                 'trade_time': partial_exit_time.isoformat(),
+                # 🔧 2026-08-02 (Iter 5-2): 부분청산도 주문번호를 전달한다.
+                #    L12519 에서 이미 뽑아 두고 버리고 있었다 —
+                #    전량청산과 같은 결함이다 (부분청산 23건 추적 불가였다).
+                'order_no': order_no,
                 'price': sell_price,  # 실제 체결 가격 사용
                 'quantity': partial_quantity,
                 'amount': sell_price * partial_quantity,  # 실제 체결 금액
@@ -12882,6 +12886,11 @@ class IntegratedTradingSystem:
             'stock_name': position['name'],
             'trade_type': 'SELL',
             'trade_time': exit_time_dt.isoformat(),
+            # 🔧 2026-08-02 (Iter 5-2): 매도 주문번호 전달.
+            #    L12871 에서 이미 뽑아 두고 여기 안 넣어 버려지고 있었다.
+            #    저장 계층(trading_db._fold_order_no)이 SELL 이면
+            #    entry_context.exit_order_no 로 접어 넣는다 — 컬럼 추가 없음.
+            'order_no': order_no,
             'price': float(price),
             'quantity': int(position['quantity']),
             'amount': float(price * position['quantity']),

@@ -113,3 +113,46 @@ def test_blocked_returns_zero_not_exception():
     body = SRC[i:i + 1500]
     assert 'return 0' in body
     assert 'raise' not in body.split('_is_duplicate_trade')[1][:400]
+
+
+# ── EXIT order trace (Iteration 5-2) ─────────────────────────────────────
+def test_sell_trade_carries_order_no():
+    """
+    ⚠️ execute_sell 은 L12871 에서 order_no 를 뽑아 두고 sell_trade 에
+       넣지 않아 버리고 있었다. 저장 계층은 준비돼 있었는데(Test 7)
+       보내주는 쪽이 없어 EXIT 추적이 0% 였다.
+    """
+    main = os.path.join(ROOT, 'main_auto_trading.py')
+    src = open(main, encoding='utf-8').read()
+    # ⚠️ 전량청산(sell_trade)과 부분청산(partial_sell_trade) 둘 다 봐야 한다.
+    #    처음엔 전량청산만 검사했는데, 부분청산에도 같은 누락이 있었다.
+    for anchor in ('partial_sell_trade = {', '\n        sell_trade = {'):
+        i = src.index(anchor)
+        block = src[i:i + 900]
+        assert "'order_no': order_no," in block, (
+            f'{anchor.strip()} 에 order_no 가 없다 — EXIT 주문 추적이 끊긴다'
+        )
+
+
+def test_sell_order_no_assigned_before_use():
+    """
+    ⚠️ order_no 가 sell_trade 보다 뒤에서 할당되면 NameError 로
+       청산 기록 자체가 실패한다.
+    """
+    main = os.path.join(ROOT, 'main_auto_trading.py')
+    src = open(main, encoding='utf-8').read()
+    assign = src.index("order_no = order_result.get('ord_no')")
+    use = src.index('sell_trade = {')
+    assert assign < use, 'order_no 할당이 sell_trade 생성보다 뒤에 있다'
+
+
+def test_fold_order_no_handles_none():
+    """
+    브로커 응답에 ord_no 가 없으면 order_no 는 None 이다.
+    그때 저장이 실패하면 안 된다.
+    """
+    from database.trading_db import TradingDatabase
+    d = {'trade_type': 'SELL', 'order_no': None,
+         'entry_context': {'keep': 1}}
+    TradingDatabase._fold_order_no(TradingDatabase.__new__(TradingDatabase), d)
+    assert d['entry_context'] == {'keep': 1}, '기존 값을 건드리면 안 된다'

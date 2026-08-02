@@ -1,20 +1,20 @@
 {
-  "created_at": "2026-08-02T21:06:07",
+  "created_at": "2026-08-02T21:22:13",
   "tests": [
     {
       "name": "Test 1  동일 EXIT 2회 → 1건 저장 · 1건 차단",
       "pass": true,
-      "detail": "1회차 trade_id=437, 2회차=0"
+      "detail": "1회차 trade_id=444, 2회차=0"
     },
     {
       "name": "Test 2  다른 가격 EXIT → 정상 저장",
       "pass": true,
-      "detail": "trade_id=438"
+      "detail": "trade_id=445"
     },
     {
       "name": "Test 3  다른 종목 EXIT → 정상 저장",
       "pass": true,
-      "detail": "trade_id=439"
+      "detail": "trade_id=446"
     },
     {
       "name": "Test 4  재시작 후 동일 EXIT → 차단",
@@ -24,28 +24,28 @@
     {
       "name": "Test 5  300초 밖 동일 거래 → 통과",
       "pass": true,
-      "detail": "trade_id=440 (정상거래 차단 방지)"
+      "detail": "trade_id=447 (정상거래 차단 방지)"
     },
     {
       "name": "Test 6  BUY order_no → entry_context 보존",
       "pass": true,
-      "detail": "{\"order_no\": \"0163513\", \"order_time\": \"2026-08-02T21:06:07.378796\"}"
+      "detail": "{\"order_no\": \"0163513\", \"order_time\": \"2026-08-02T21:22:13.117307\"}"
     },
     {
       "name": "Test 7  SELL order_no → exit_order_no 보존",
       "pass": true,
-      "detail": "{\"order_time\": \"2026-08-02T21:06:07.402093\", \"exit_order_no\": \"0163999\"}"
+      "detail": "{\"order_time\": \"2026-08-02T21:22:13.138049\", \"exit_order_no\": \"0163999\"}"
     },
     {
       "name": "Test 8  기존 entry_context 보존 + order_no 병합",
       "pass": true,
-      "detail": "{\"order_no\": \"0164000\", \"order_time\": \"2026-08-02T21:06:07.425166\", \"condition_sources\": [\"GreatMid\"]}"
+      "detail": "{\"order_no\": \"0164000\", \"order_time\": \"2026-08-02T21:22:13.158497\", \"condition_sources\": [\"GreatMid\"]}"
     }
   ],
   "blocked": 2,
   "latency_ms": {
-    "insert_ms": 7.408562116324902,
-    "dup_check_ms": 1.2024817988276482
+    "insert_ms": 6.395198404788971,
+    "dup_check_ms": 0.9516915306448936
   },
   "coverage": {
     "buy": 165,
