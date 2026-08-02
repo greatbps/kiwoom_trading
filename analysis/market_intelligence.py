@@ -23,13 +23,16 @@ import anthropic
 
 from datetime import date, datetime, timedelta
 from time import time
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logger = logging.getLogger('mie')
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
 # ── Config ────────────────────────────────────────────────────────────────────
 DB_CONF = dict(dbname='trading_system', user='postgres',
-               password='killer99!!', host='localhost')
+               password=os.getenv('POSTGRES_PASSWORD'), host='localhost')
 
 TELEGRAM_TOKEN   = os.getenv('TELEGRAM_BOT_TOKEN',
                               '8190858980:AAHeB7qNnop5yIYaeIiEG9HsREOrgBpiRxQ')

@@ -16,12 +16,15 @@ import psycopg2
 import anthropic
 
 from datetime import date, datetime
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logger = logging.getLogger('session_review')
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
 DB_CONF = dict(dbname='trading_system', user='postgres',
-               password='killer99!!', host='localhost')
+               password=os.getenv('POSTGRES_PASSWORD'), host='localhost')
 
 TELEGRAM_TOKEN   = os.getenv('TELEGRAM_BOT_TOKEN',
                               '8190858980:AAHeB7qNnop5yIYaeIiEG9HsREOrgBpiRxQ')

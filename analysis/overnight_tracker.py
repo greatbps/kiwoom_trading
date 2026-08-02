@@ -24,11 +24,15 @@ import yfinance as yf
 import datetime
 import yaml
 import logging
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logger = logging.getLogger('overnight_tracker')
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
-DB_CONF = dict(dbname='trading_system', user='postgres', password='killer99!!', host='localhost')
+DB_CONF = dict(dbname='trading_system', user='postgres', password=os.getenv('POSTGRES_PASSWORD'), host='localhost')
 YAML_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config', 'strategy_hybrid.yaml')
 
 

@@ -12,10 +12,13 @@ import sys
 import json
 import subprocess
 from datetime import date, datetime
+from dotenv import load_dotenv
+
+load_dotenv()
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-DB_CONFIG = dict(dbname='trading_system', user='postgres', password='killer99!!', host='localhost')
+DB_CONFIG = dict(dbname='trading_system', user='postgres', password=os.getenv('POSTGRES_PASSWORD'), host='localhost')
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 def conn():

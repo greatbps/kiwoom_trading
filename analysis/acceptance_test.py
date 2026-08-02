@@ -29,12 +29,15 @@ import os
 import json
 import subprocess
 from datetime import date, timedelta, datetime
+from dotenv import load_dotenv
+
+load_dotenv()
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 _verbose = '--verbose' in sys.argv or '-v' in sys.argv
 
-DB_CONFIG = dict(dbname='trading_system', user='postgres', password='killer99!!', host='localhost')
+DB_CONFIG = dict(dbname='trading_system', user='postgres', password=os.getenv('POSTGRES_PASSWORD'), host='localhost')
 
 REQUIRED_TABLES = [
     'market_context', 'trading_sessions', 'decision_log',

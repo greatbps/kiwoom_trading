@@ -35,3 +35,8 @@ ai/models/*.pkl
 coverage.xml
 htmlcov/
 *.pyc
+
+# API 토큰 캐시 — 유효 자격증명이 들어간다. 절대 커밋하지 않는다.
+.kis_token_cache.json
+*.token
+*_token_cache.json

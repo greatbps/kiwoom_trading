@@ -152,7 +152,7 @@ conn = psycopg2.connect(
     port=5432,
     database='trading_system',
     user='postgres',
-    password='killer99!!'
+    password=os.getenv('POSTGRES_PASSWORD')
 )
 
 cursor = conn.cursor()
@@ -197,7 +197,7 @@ conn = psycopg2.connect(
     port=5432,
     database='trading_system',
     user='postgres',
-    password='killer99!!'
+    password=os.getenv('POSTGRES_PASSWORD')
 )
 
 cursor = conn.cursor()
