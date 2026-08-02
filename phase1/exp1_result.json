@@ -1,0 +1,244 @@
+{
+  "created_at": "2026-08-02T11:39:46",
+  "quoted": {
+    "buy_pf": 3.362,
+    "sell_pf": 0.315,
+    "window": "최근 200일"
+  },
+  "legs": {
+    "BUY": {
+      "rows": 165,
+      "with_pnl": 7,
+      "first": "2025-11-24",
+      "last": "2026-07-01"
+    },
+    "SELL": {
+      "rows": 246,
+      "with_pnl": 242,
+      "first": "2025-11-10",
+      "last": "2026-07-01"
+    }
+  },
+  "reproduction_attempts": {
+    "realized_profit · 최근200일": {
+      "SELL": "0.089",
+      "BUY": "0.000"
+    },
+    "realized_profit · 전체": {
+      "SELL": "0.102",
+      "BUY": "0.000"
+    },
+    "profit_rate · 최근200일": {
+      "SELL": "0.238",
+      "BUY": "0.000"
+    },
+    "profit_rate · 전체": {
+      "SELL": "0.407",
+      "BUY": "0.000"
+    }
+  },
+  "live_actual": {
+    "closed_trades": 242,
+    "wins": 51,
+    "win_rate": 21.1,
+    "net_won": -1070576,
+    "gross_profit": 122223,
+    "gross_loss": 1192799,
+    "profit_factor": "0.102",
+    "expectancy_won": -4423
+  },
+  "breakdown": {
+    "exit_category": [
+      {
+        "value": "(null)",
+        "trades": 2,
+        "win_rate": 0.0,
+        "net_won": -477000,
+        "pf": "0.000"
+      },
+      {
+        "value": "RISK_EXIT",
+        "trades": 39,
+        "win_rate": 2.6,
+        "net_won": -437870,
+        "pf": "0.002"
+      },
+      {
+        "value": "SYSTEM_EXIT",
+        "trades": 101,
+        "win_rate": 15.8,
+        "net_won": -233360,
+        "pf": "0.028"
+      },
+      {
+        "value": "EXPERIMENT_EXIT",
+        "trades": 67,
+        "win_rate": 10.4,
+        "net_won": -30119,
+        "pf": "0.155"
+      },
+      {
+        "value": "ALPHA_EXIT",
+        "trades": 33,
+        "win_rate": 81.8,
+        "net_won": 107773,
+        "pf": "98.093"
+      }
+    ],
+    "overnight_held": [
+      {
+        "value": "false",
+        "trades": 241,
+        "win_rate": 21.2,
+        "net_won": -1063436,
+        "pf": "0.103"
+      },
+      {
+        "value": "true",
+        "trades": 1,
+        "win_rate": 0.0,
+        "net_won": -7140,
+        "pf": "0.000"
+      }
+    ]
+  },
+  "worst_10": [
+    {
+      "code": "006400",
+      "name": "삼성SDI",
+      "date": "2026-05-13",
+      "pnl": -376000.0,
+      "pct": -6.95,
+      "reason": "09:00 [HARD_STOP] -5.0% (-6.95%)"
+    },
+    {
+      "code": "000660",
+      "name": "SK하이닉스",
+      "date": "2026-06-11",
+      "pnl": -240000.0,
+      "pct": 0.0,
+      "reason": "MA5_EXIT"
+    },
+    {
+      "code": "005930",
+      "name": "삼성전자",
+      "date": "2026-06-24",
+      "pnl": -237000.0,
+      "pct": 0.0,
+      "reason": "DRAWDOWN_STOP"
+    },
+    {
+      "code": "035420",
+      "name": "NAVER",
+      "date": "2026-06-17",
+      "pnl": -143000.0,
+      "pct": -4.35,
+      "reason": "14:50 오버나이트 차단 (손실-4.35%<-3.0%)"
+    },
+    {
+      "code": "005930",
+      "name": "삼성전자",
+      "date": "2026-07-01",
+      "pnl": -93000.0,
+      "pct": -4.64,
+      "reason": "14:50 오버나이트 차단 (손실-4.64%<-3.0%, B급+손실-4.64%<-1.5%)"
+    },
+    {
+      "code": "140430",
+      "name": "카티스",
+      "date": "2025-11-11",
+      "pnl": -12710.0,
+      "pct": -10.41,
+      "reason": "손절 (-10.41%)"
+    },
+    {
+      "code": "396470",
+      "name": "워트",
+      "date": "2026-06-19",
+      "pnl": -7140.0,
+      "pct": -5.08,
+      "reason": "10:54 [HARD_STOP] -5.0% (-5.08%)"
+    },
+    {
+      "code": "101330",
+      "name": "모베이스",
+      "date": "2026-02-05",
+      "pnl": -3640.0,
+      "pct": -3.84,
+      "reason": "14:49 🚨 Early Failure v2 (-3.84%, 모든 조건 충족)"
+    },
+    {
+      "code": "047040",
+      "name": "대우건설",
+      "date": "2026-02-05",
+      "pnl": -2160.0,
+      "pct": -2.17,
+      "reason": "11:08 Hard Stop (-2.0%, -2.17%) [부분청산 0차]"
+    },
+    {
+      "code": "452160",
+      "name": "제이엔비",
+      "date": "2026-01-09",
+      "pnl": -1950.0,
+      "pct": -2.03,
+      "reason": "Hard Stop (-2.0%, -2.03%) [부분청산 0차]"
+    }
+  ],
+  "worst10_share_of_loss_pct": "93.6",
+  "size_quintiles": [
+    {
+      "quintile": 1,
+      "trades": 49,
+      "size_min": 5100.0,
+      "size_max": 36950.0,
+      "win_rate": 28.6,
+      "net_won": -7950,
+      "avg_return_pct": -0.461
+    },
+    {
+      "quintile": 2,
+      "trades": 49,
+      "size_min": 37970.0,
+      "size_max": 44000.0,
+      "win_rate": 0.0,
+      "net_won": -8860,
+      "avg_return_pct": -0.436
+    },
+    {
+      "quintile": 3,
+      "trades": 48,
+      "size_min": 44000.0,
+      "size_max": 54900.0,
+      "win_rate": 8.3,
+      "net_won": -17815,
+      "avg_return_pct": -0.703
+    },
+    {
+      "quintile": 4,
+      "trades": 48,
+      "size_min": 55300.0,
+      "size_max": 96330.0,
+      "win_rate": 22.9,
+      "net_won": -22245,
+      "avg_return_pct": -0.595
+    },
+    {
+      "quintile": 5,
+      "trades": 48,
+      "size_min": 97200.0,
+      "size_max": 5032000.0,
+      "win_rate": 45.8,
+      "net_won": -1013706,
+      "avg_return_pct": -0.423
+    }
+  ],
+  "top_quintile_share_of_net_loss_pct": 94.7,
+  "sizing_effect": {
+    "equal_weight_pf": "0.318",
+    "actual_weight_pf": "0.102",
+    "gap": "0.216",
+    "max_position": 5032000.0,
+    "median_position": 45000.0,
+    "max_over_median": 111.8
+  }
+}
