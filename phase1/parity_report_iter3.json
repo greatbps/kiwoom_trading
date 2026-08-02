@@ -1,0 +1,117 @@
+{
+  "run_id": "phase1-iter3-20260802-123952",
+  "created_at": "2026-08-02T12:39:52",
+  "git_commit": "2cb2cce1bac52179e5da49be29ba6ef925289a67",
+  "kpi2": {
+    "classification_rate": 98.8,
+    "pass": true,
+    "origins": [
+      {
+        "origin": "조건검색식 (VWAP+AI)",
+        "trades": 158,
+        "pct": 95.8,
+        "symbols": 93
+      },
+      {
+        "origin": "Swing Runner",
+        "trades": 5,
+        "pct": 3.0,
+        "symbols": 4
+      },
+      {
+        "origin": "UNKNOWN (기록 없음)",
+        "trades": 2,
+        "pct": 1.2,
+        "symbols": 2
+      }
+    ],
+    "symbols": 97,
+    "in_default_candidates": 4
+  },
+  "kpi345": {
+    "computable": false,
+    "column_fill": {
+      "trades.candidate_first_time": 0,
+      "trades.entry_signal_time": 0,
+      "trades.pre_candidate_first_time": 0,
+      "trades.entry_signal_id": 0,
+      "trades.entry_time": 27,
+      "signal_events.choch_raw_time": 0
+    },
+    "log_overlap_buys": 26,
+    "log_traced": 1,
+    "log_with_choch": 0,
+    "reason": "실거래 매수의 95.8%가 SMC 파이프라인을 거치지 않아 CHoCH 자체가 발생하지 않는다"
+  },
+  "completion_questions": [
+    {
+      "q": "실거래는 왜 다른 종목을 샀는가?",
+      "a": "매수 158/165건(95.8%)이 키움 조건검색식 VWAP+AI 에서 나왔다. 백테스트는 DEFAULT_CANDIDATES 78종목 하드코딩 리스트를 쓴다. 공급원이 다르므로 교집합 4종목(4.3%)은 우연의 수준이다."
+    },
+    {
+      "q": "실거래는 왜 평균 197분만 보유했는가?",
+      "a": "진입 근거가 VWAP 상향 돌파다 (96/165건). 장중 돌파를 노리는 진입이라 청산도 장중에 붙는다. 백테스트의 일봉 스윙 (평균 8.6일)과는 다른 전략이다."
+    },
+    {
+      "q": "실거래는 왜 장중청산이 62%인가?",
+      "a": "Iteration 2 실측: HARD_STOP 28건 · EARLY_FAILURE 35건 · OVERNIGHT_BLOCK 8건 등 장중 시각 기반 청산이 지배적이다. 이 사유들은 백테스트에 존재하지 않는다 (공통 청산사유 0종)."
+    },
+    {
+      "q": "매수는 CHoCH 이후 평균 몇 분 뒤에 발생했는가?",
+      "a": "측정 불가. 로그 구간과 겹치는 BUY 26건 중 CHoCH 기록이 있는 것은 0건이다. 대부분의 매수가 SMC 를 거치지 않으므로 CHoCH 가 선행하지 않는다."
+    },
+    {
+      "q": "그때 이미 몇 % 상승한 상태였는가?",
+      "a": "candidate_first_price · entry_signal_price 가 0/411 로 기록돼 있지 않아 측정 불가."
+    },
+    {
+      "q": "조금만 빨리 들어갔다면 얼마나 개선됐는가?",
+      "a": "반사실 계산 불가. 신호 시각·가격이 없어 \"빨리\" 의 기준점을 잡을 수 없다."
+    }
+  ],
+  "score_zero_entries": {
+    "trades": 89,
+    "pct": 53.9
+  },
+  "kpi1": {
+    "axes": [
+      {
+        "축": "Universe",
+        "Backtest": "backtest/scanner.py DEFAULT_CANDIDATES (78종목 하드코딩)",
+        "Live": "키움 조건검색식 'VWAP+AI' (93종목)",
+        "설명됨": true
+      },
+      {
+        "축": "Entry Trigger",
+        "Backtest": "backtest/adapter.py get_signal() — CHoCH + 거래량 + ATR + MA50 (일봉)",
+        "Live": "VWAP 상향 돌파 (장중)",
+        "설명됨": true
+      },
+      {
+        "축": "Entry 시점",
+        "Backtest": "신호 다음 봉 시가",
+        "Live": "장중 돌파 순간",
+        "설명됨": true
+      },
+      {
+        "축": "Holding",
+        "Backtest": "평균 8.6일",
+        "Live": "평균 197분 (52% 당일왕복)",
+        "설명됨": true
+      },
+      {
+        "축": "Exit",
+        "Backtest": "SL/TP/TRAIL/BE_STOP/MAX_HOLD (일봉)",
+        "Live": "HARD_STOP/EARLY_FAILURE/OVERNIGHT_BLOCK/MA5_EXIT (장중)",
+        "설명됨": true
+      },
+      {
+        "축": "Sizing",
+        "Backtest": "슬롯당 고정 2,000만원",
+        "Live": "최대/중앙값 112배 편차",
+        "설명됨": true
+      }
+    ],
+    "explained_pct": 100.0
+  }
+}
