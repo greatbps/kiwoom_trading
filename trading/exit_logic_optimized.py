@@ -493,6 +493,41 @@ class OptimizedExitLogic:
             console.print(f"[red]⚠️ 비정상 진입가: {position.get('entry_price')}[/red]")
             return False, "ERROR_INVALID_ENTRY_PRICE", None
 
+        # ── [POSITION_SCHEMA] 수신 측 기록 (Iter7-1) ──────────────────────
+        #
+        # ⚠️ 여기가 진짜 확인 지점이다. 생성 측이 무엇을 넣었든 **실행
+        #    엔진에 도착했는가**가 손절 집행을 가른다. 이 기록이 없어서
+        #    structure_stop_price 유실을 몇 달간 못 봤다.
+        #
+        # 60초마다 도는 경로라 매번 찍으면 로그가 넘친다.
+        # 종목·일자별 1회만 남기되, **누락이면 매번 ERROR** 를 남긴다.
+        try:
+            _sym = position.get('stock_code') or position.get('name') or '?'
+            _hz = position.get('strategy_horizon') or 'NONE'
+            _ssp = position.get('structure_stop_price')
+            _swing = (_hz == 'SWING'
+                      or str(position.get('strategy', '')).lower() == 'swing')
+
+            if not hasattr(self, '_schema_logged'):
+                self._schema_logged = set()
+            _key = (_sym, datetime.now().strftime('%Y-%m-%d'))
+            if _key not in self._schema_logged:
+                self._schema_logged.add(_key)
+                logger.info(
+                    f"[POSITION_SCHEMA] rx symbol={_sym} "
+                    f"strategy_horizon={_hz} entry_price={entry_price:.0f} "
+                    f"structure_stop_price={_ssp if _ssp else 'NONE'} "
+                    f"position_type={position.get('position_type') or 'NONE'}"
+                )
+            if _swing and not _ssp:
+                logger.error(
+                    f"[SWING_STOP_MISSING] rx {_sym} exit_logic 이 "
+                    f"structure_stop_price 없이 호출됨 → -12% fallback 위험"
+                )
+        except Exception as _sch_e:
+            # 로깅이 청산을 막으면 안 된다
+            logger.debug(f"[POSITION_SCHEMA] 기록 실패: {_sch_e}")
+
         profit_pct = ((current_price - entry_price) / entry_price) * 100
 
         entry_time = position.get('entry_time') or position.get('entry_date')

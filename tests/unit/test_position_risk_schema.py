@@ -121,7 +121,9 @@ def test_missing_stop_is_guarded_before_exit_logic():
     assert 'SWING_STOP_MISSING' in SRC, (
         'exit_logic 호출 전 SWING 손절 유실 방어가 없다.'
     )
-    i = SRC.index('SWING_STOP_MISSING')
+    # ⚠️ SWING_STOP_MISSING 은 _normalize_position 에도 있다. 첫 등장을
+    #    잡으면 엉뚱한 곳을 검사한다. 가드 고유 표식으로 앵커한다.
+    i = SRC.index('stop_recovered')
     j = SRC.index('self.exit_logic.check_exit_signal')
     assert i < j, '방어가 exit_logic 호출보다 뒤에 있으면 소용없다'
 
@@ -132,7 +134,7 @@ def test_guard_applies_safe_stop_not_quarantine():
 
     ⚠️ 포지션을 감시에서 빼면(quarantine) 무방비가 되어 더 위험하다.
     """
-    i = SRC.index('SWING_STOP_MISSING')
+    i = SRC.index('stop_recovered')
     block = SRC[i - 2000:i + 1500]
     assert 'max_stop_pct' in block, '안전 손절 기준값을 config 에서 읽지 않는다'
     assert 'stop_recovered' in block
@@ -223,3 +225,81 @@ def test_runtime_missing_swing_entry_is_safe():
     _Stub()._normalize_position('006400', pos, swing_entry=None)
     assert pos['strategy_horizon'] == 'SWING'
     assert not pos.get('structure_stop_price')   # 방어로직이 뒤에서 채운다
+
+
+# ── [POSITION_SCHEMA] 로그 계약 (Iter7-1) ────────────────────────────────
+#
+# ⚠️ 로그 형식과 파서가 어긋나면 10거래일 검증이 조용히 0건으로 끝난다.
+#    "위반 0건" 처럼 보이지만 실제로는 아무것도 못 읽은 것이다.
+#    형식을 테스트로 못박는다.
+def _emit(pos, swing_entry=None, source='test'):
+    """_normalize_position 이 뱉는 로그 라인을 잡아 온다."""
+    import logging
+    seg_ns = {}
+    stub = _build_stub()
+    records = []
+
+    class _Cap(logging.Handler):
+        def emit(self, r):
+            records.append(r.getMessage())
+
+    lg = logging.getLogger('test_stub')
+    lg.setLevel(logging.DEBUG)
+    h = _Cap()
+    lg.addHandler(h)
+    try:
+        stub._normalize_position('006400', pos, swing_entry=swing_entry,
+                                 source=source)
+    finally:
+        lg.removeHandler(h)
+    return records
+
+
+def test_position_schema_log_is_parseable():
+    from phase1.schema_monitor import SCHEMA_RE
+    lines = _emit({'strategy': 'swing', 'entry_price': 684000.0},
+                  swing_entry={'stop_price': 670658.0}, source='swing_attach')
+    sch = [x for x in lines if '[POSITION_SCHEMA]' in x]
+    assert sch, '[POSITION_SCHEMA] 로그가 나오지 않는다'
+    m = SCHEMA_RE.search(sch[0])
+    assert m, f'schema_monitor 파서가 못 읽는다: {sch[0]}'
+    assert m.group('symbol') == '006400'
+    assert m.group('hz') == 'SWING'
+    assert m.group('ssp') == '670658.0'
+    assert m.group('src') == 'swing_attach'
+
+
+def test_missing_stop_emits_error_tag():
+    """손절이 없으면 SWING_STOP_MISSING 이 나와야 모니터가 센다."""
+    from phase1.schema_monitor import MISSING_RE
+    lines = _emit({'strategy': 'swing', 'entry_price': 684000.0},
+                  swing_entry=None, source='broker_sync')
+    miss = [x for x in lines if '[SWING_STOP_MISSING]' in x]
+    assert miss, 'SWING_STOP_MISSING 이 나오지 않는다'
+    assert MISSING_RE.search(miss[0]), f'파서가 못 읽는다: {miss[0]}'
+
+
+def test_non_swing_does_not_raise_missing():
+    """비-SWING 은 손절이 없어도 정상이다 — 오탐을 만들면 안 된다."""
+    lines = _emit({'strategy': 'smc', 'entry_price': 10000.0})
+    assert not [x for x in lines if '[SWING_STOP_MISSING]' in x]
+
+
+def test_exit_logic_logs_received_schema():
+    """수신 측(exit_logic)에도 기록이 있어야 한다 — 도착 여부가 핵심이다."""
+    src = open(os.path.join(ROOT, 'trading', 'exit_logic_optimized.py'),
+               encoding='utf-8').read()
+    assert '[POSITION_SCHEMA] rx' in src
+    assert '[SWING_STOP_MISSING] rx' in src
+    # 로깅이 청산을 막으면 안 된다
+    i = src.index('[POSITION_SCHEMA] rx')
+    assert 'except Exception' in src[i:i + 1200]
+
+
+def test_exit_logic_schema_log_is_throttled():
+    """
+    60초마다 도는 경로다. 매번 찍으면 로그가 넘쳐 정작 볼 것을 못 본다.
+    """
+    src = open(os.path.join(ROOT, 'trading', 'exit_logic_optimized.py'),
+               encoding='utf-8').read()
+    assert '_schema_logged' in src, '수신 측 로그에 중복 억제가 없다'

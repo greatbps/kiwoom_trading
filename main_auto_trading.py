@@ -1979,7 +1979,8 @@ class IntegratedTradingSystem:
         return stop
 
     def _normalize_position(self, code: str, pos: dict,
-                            swing_entry: dict | None = None) -> dict:
+                            swing_entry: dict | None = None,
+                            source: str = 'unknown') -> dict:
         """
         포지션 딕셔너리에 리스크 필드를 채운다. **모든 생성 경로가 호출한다.**
 
@@ -2002,6 +2003,30 @@ class IntegratedTradingSystem:
                     f"[POS_RISK_SCHEMA] {code} structure_stop_price="
                     f"{stop:,.0f} ({(stop/ep-1)*100:+.2f}%) 보정"
                 )
+
+        # ── [POSITION_SCHEMA] 생성 시점 스냅샷 (Iter7-1) ──────────────────
+        #
+        # 포지션이 어떤 리스크 값을 들고 태어났는지 한 줄로 남긴다.
+        # 손절 유실이 몇 달간 안 보인 이유가 이 기록이 없어서였다.
+        # 파싱하기 쉬운 key=value 형식으로 고정한다 (schema_monitor 가 읽는다).
+        _ssp = pos.get('structure_stop_price')
+        logger.info(
+            f"[POSITION_SCHEMA] symbol={code} "
+            f"strategy_horizon={pos.get('strategy_horizon') or 'NONE'} "
+            f"entry_price={pos.get('entry_price') or pos.get('avg_price') or 0} "
+            f"structure_stop_price={_ssp if _ssp else 'NONE'} "
+            f"position_type={pos.get('position_type') or 'NONE'} "
+            f"source={source}"
+        )
+        if is_swing and not _ssp:
+            # ⚠️ 여기서 잡지 못하면 exit_logic 이 -12% fallback 으로 간다.
+            #    방어는 check_exit_signal 앞단에도 있지만, 원인 추적을 위해
+            #    생성 시점에도 남긴다.
+            logger.error(
+                f"[SWING_STOP_MISSING] {code} 생성 시점에 "
+                f"structure_stop_price 없음 (source={source}) — "
+                f"swing_positions.json 에 stop_price 가 있는지 확인 필요"
+            )
         return pos
 
     # ─── 포지션 상태 영속화 (재시작 복원용) ─────────────────────────────────
@@ -2137,7 +2162,8 @@ class IntegratedTradingSystem:
             # 리스크 스키마 보정 — 저장 당시 structure_stop_price 가 없었을 수 있다.
             # swing_positions.json 에서 다시 끌어와 채운다.
             self._normalize_position(code, entry,
-                                     swing_entry=_swing_state_restore.get(code))
+                                     swing_entry=_swing_state_restore.get(code),
+                                     source='restore')
             self.positions[code] = entry
             restored += 1
             logger.info(
@@ -2539,6 +2565,7 @@ class IntegratedTradingSystem:
                     self._normalize_position(
                         stock_code, self.positions[stock_code],
                         swing_entry=_swing_state.get(stock_code),
+                        source='broker_sync',
                     )
 
                     if _is_swing_pos:
@@ -8831,7 +8858,8 @@ class IntegratedTradingSystem:
                 }
                 # 4개 경로가 같은 함수를 거치게 한다 (스키마 단일화)
                 self._normalize_position(code, self.positions[code],
-                                         swing_entry=sp_entry)
+                                         swing_entry=sp_entry,
+                                         source='swing_attach')
 
                 logger.warning(
                     f"[SWING_RISK_ATTACH] {code} {stock_name} "
