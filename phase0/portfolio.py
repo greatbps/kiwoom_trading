@@ -69,6 +69,7 @@ SLOT_DIVISOR = 5          # 슬롯당 금액 = 초기자본 / 5 (전 케이스 �
 @dataclass
 class PTrade:
     symbol: str
+    signal_date: str   # 신호일 (진입일 전 거래일) — 신규/기존 후보 구분용
     entry_date: str
     exit_date: str
     entry_price: float
@@ -166,10 +167,10 @@ class PortfolioBacktest:
         for day in self.days:
             # ① 예약분 진입 (전일 신호 → 오늘 시가)
             still = []
-            for sym, score, rank, ncand in pending:
+            for sym, score, rank, ncand, sigday in pending:
                 i = self._pos_of[sym].get(day)
                 if i is None:
-                    still.append((sym, score, rank, ncand))   # 오늘 못 샀으면 다음날
+                    still.append((sym, score, rank, ncand, sigday))  # 오늘 못 샀으면 다음날
                     continue
                 df = self.data[sym]
                 ep = float(df.iloc[i]['open'])
@@ -179,6 +180,7 @@ class PortfolioBacktest:
                     'peak_price': ep, 'be_raised': False, 'trail_active': False,
                     'atr': self.engine._calc_atr(df, max(0, i - 1)),
                     'score': score, 'rank': rank, 'ncand': ncand,
+                    'sigday': sigday,
                 }
             pending = still
 
@@ -201,7 +203,8 @@ class PortfolioBacktest:
                     continue
                 pnl = (xp - ep) / ep - EXIT_PROFILE['commission'] * 2
                 res.trades.append(PTrade(
-                    symbol=sym, entry_date=p['entry_date'],
+                    symbol=sym, signal_date=p['sigday'],
+                    entry_date=p['entry_date'],
                     exit_date=str(day.date()), entry_price=ep,
                     exit_price=round(xp, 0), pnl_pct=round(pnl, 4),
                     pnl_won=round(pnl * slot_won, 0), exit_reason=reason,
@@ -231,7 +234,8 @@ class PortfolioBacktest:
                     rank_of = {s: n for n, (s, _) in enumerate(ranked, 1)}
                     sc_of = dict(ranked)
                     for s in picked:
-                        pending.append((s, sc_of[s], rank_of[s], len(ranked)))
+                        pending.append((s, sc_of[s], rank_of[s], len(ranked),
+                                        str(day.date())))
 
             # ④ 평가금 (미실현 포함)
             unreal = 0.0
@@ -259,6 +263,13 @@ def kpi(res: CaseResult) -> dict:
     wins, losses = r[r > 0], r[r <= 0]
     gp, gl = won[won > 0].sum(), -won[won <= 0].sum()
 
+    # 최대 연속 손실 — 청산 시각 순으로 센다. 진입 순이 아니다.
+    chrono = sorted(t, key=lambda x: (x.exit_date, x.symbol))
+    run = mcl = 0
+    for x in chrono:
+        run = run + 1 if x.pnl_pct <= 0 else 0
+        mcl = max(mcl, run)
+
     e = res.equity
     dd = (e - e.cummax()) / e.cummax()
     # 일수익률 — 거래가 드물어 0 이 많다. Sharpe 는 참고치로만 본다.
@@ -272,6 +283,10 @@ def kpi(res: CaseResult) -> dict:
         'avg_win_pct': round(wins.mean() * 100, 2) if len(wins) else 0.0,
         'avg_loss_pct': round(losses.mean() * 100, 2) if len(losses) else 0.0,
         'profit_factor': round(gp / gl, 3) if gl > 0 else None,
+        # 기대값 — 1거래당 평균 손익. 승률만으로는 알 수 없는 값이다.
+        'expectancy_pct': round(r.mean() * 100, 3),
+        'expectancy_won': int(won.mean()),
+        'max_consecutive_loss': mcl,
         'total_pnl_won': int(won.sum()),
         'total_return_pct': round(won.sum() / INITIAL_CAPITAL * 100, 2),
         'mdd_pct': round(dd.min() * 100, 2),

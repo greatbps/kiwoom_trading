@@ -1,0 +1,6 @@
+﻿name,candidates,trades,win_rate,profit_factor,total_return_pct,mdd_pct,expectancy_pct,expectancy_won,max_consecutive_loss,avg_return_pct,avg_win_pct,avg_loss_pct,total_pnl_won,avg_hold_bars,accept,preferred,old_trades,old_pf,new_trades,new_pf,new_avg_pct,new_total_won
+A. Baseline (현행),117,81,43.2,1.813,36.38,-11.27,2.246,449156,10,2.25,11.59,-4.86,36381684,8.6,False,False,81,1.813,0,,,0
+B. MA50 완화 (>=-2%),188,129,41.9,1.694,48.5,-15.92,1.88,375992,8,1.88,10.96,-4.66,48503086,9.4,False,False,78,1.843,51,1.463,1.25,12701402
+C. Volume 완화 (RVOL>=1.2),159,106,39.6,1.557,35.78,-13.8,1.688,337518,10,1.69,11.91,-5.02,35776944,8.0,False,False,79,1.755,27,1.108,0.39,2115260
+D. ATR 확대 (1.5~10%),126,85,43.5,1.892,41.97,-11.27,2.469,493748,11,2.47,12.03,-4.9,41968603,8.3,False,False,79,1.733,6,5.018,7.63,9160000
+E. 조합 (B+C+D),260,169,40.8,1.589,56.93,-16.31,1.685,336893,7,1.68,11.13,-4.83,56934983,8.8,False,False,73,1.7,96,1.504,1.43,27360593
