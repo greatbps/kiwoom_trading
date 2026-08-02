@@ -2029,6 +2029,23 @@ class IntegratedTradingSystem:
             )
         return pos
 
+    # ─── 조건검색 출처 (Iteration 8-1) ──────────────────────────────────────
+    def _condition_attribution(self, stock_code: str) -> dict:
+        """
+        이 종목이 **어느 조건검색식에서 왔는지**.
+
+        ⚠️ 추정하지 않는다. validated_stocks 에 기록이 없으면 UNKNOWN 이다.
+           과거 거래는 기록 자체가 없으므로 영원히 UNKNOWN 이다.
+        """
+        info = self.validated_stocks.get(stock_code) or {}
+        src = list(info.get('condition_sources') or [])
+        return {
+            'condition_sources': src or ['UNKNOWN'],
+            'primary_condition': info.get('primary_condition') or 'UNKNOWN',
+            'condition_match_time': info.get('condition_match_time'),
+            'source': info.get('source'),
+        }
+
     # ─── 포지션 상태 영속화 (재시작 복원용) ─────────────────────────────────
     _POSITIONS_STATE_PATH = 'data/positions_state.json'
     _positions_state_version: int = 0
@@ -3031,6 +3048,18 @@ class IntegratedTradingSystem:
             bottom_stocks = {}  # {stock_code: condition_idx} (backward compatibility)
             stock_to_condition_map = {}  # ✅ 모든 종목의 조건 인덱스 추적
 
+            # ── 조건검색 출처 추적 (Iteration 8-1) ───────────────────────
+            #
+            # ⚠️ stock_to_condition_map 은 `= idx` 로 **덮어쓴다**. 한 종목이
+            #    여러 조건식에 동시에 걸리면 마지막 것만 남아 출처가 유실된다.
+            #    실제로 원장에는 전부 'VWAP+AI' 로만 찍혀서, 어느 조건식이
+            #    이 종목을 물어왔는지 사후에 알 수 없었다.
+            #
+            #    기존 map 은 전략 태그 결정에 쓰이므로 그대로 두고,
+            #    출처는 **누적 리스트**로 따로 모은다.
+            _cond_sources: dict[str, list] = {}
+            _cond_first_seen: dict[str, str] = {}
+
             # DEBUG 로그
             with open('data/debug_log.txt', 'a', encoding='utf-8') as f:
                 f.write(f"[{datetime.now()}] 사용 조건식 인덱스: {self.condition_indices}\n")
@@ -3062,11 +3091,17 @@ class IntegratedTradingSystem:
                         for stock_code in stocks:
                             bottom_stocks[stock_code] = idx  # backward compatibility
                             stock_to_condition_map[stock_code] = idx  # ✅ 조건 인덱스 저장
+                            _cond_sources.setdefault(stock_code, []).append(name)
+                            _cond_first_seen.setdefault(
+                                stock_code, datetime.now().isoformat(timespec='seconds'))
                             all_stocks.add(stock_code)  # L2/L3 필터 적용 위해 추가
                     else:
                         # 기존 Momentum 전략: 즉시 매수 대상
                         for stock_code in stocks:
                             stock_to_condition_map[stock_code] = idx  # ✅ 조건 인덱스 저장
+                            _cond_sources.setdefault(stock_code, []).append(name)
+                            _cond_first_seen.setdefault(
+                                stock_code, datetime.now().isoformat(timespec='seconds'))
                         all_stocks.update(stocks)
 
                     await asyncio.sleep(0.5)
@@ -3227,7 +3262,11 @@ class IntegratedTradingSystem:
                                 'stats': stats,
                                 'data': df,
                                 'analysis': {'total_score': simplified_ai_score},
-                                'strategy': strategy_tag  # ✅ 동적 전략 태그
+                                'strategy': strategy_tag,  # ✅ 동적 전략 태그
+                                # 조건검색 출처 (Iteration 8-1)
+                                'condition_sources': list(_cond_sources.get(stock_code, [])),
+                                'primary_condition': (_cond_sources.get(stock_code) or [None])[0],
+                                'condition_match_time': _cond_first_seen.get(stock_code),
                             }
                     else:
                         # Momentum 전략: watchlist에 추가 (기존 로직)
@@ -3245,7 +3284,11 @@ class IntegratedTradingSystem:
                             'stats': stats,
                             'data': df,
                             'analysis': {'total_score': simplified_ai_score},  # AI점수 필드 추가
-                            'strategy': strategy_tag  # ✅ 동적 전략 태그
+                            'strategy': strategy_tag,  # ✅ 동적 전략 태그
+                            # 조건검색 출처 (Iteration 8-1)
+                            'condition_sources': list(_cond_sources.get(stock_code, [])),
+                            'primary_condition': (_cond_sources.get(stock_code) or [None])[0],
+                            'condition_match_time': _cond_first_seen.get(stock_code),
                         }
 
                     console.print(
@@ -10569,6 +10612,8 @@ class IntegratedTradingSystem:
                 'process_id': os.getpid(),
                 'order_no': order_no,
                 'condition_name': 'VWAP+AI',
+                # 조건검색 출처 — 신규 컬럼 없이 기존 JSONB 에 넣는다
+                'entry_context': self._condition_attribution(stock_code),
                 'strategy_config': 'hybrid',
                 'entry_reason': entry_reason or f"{entry_time.strftime('%H:%M')} 진입",
                 'vwap_validation_score': float(_es_stats.get('avg_profit_pct', 0)) if _es_stats.get('avg_profit_pct') is not None else 0,
@@ -10801,6 +10846,8 @@ class IntegratedTradingSystem:
             'process_id': os.getpid(),  # 🔧 프로세스 ID 추가
             'order_no': order_no,  # 🔧 주문번호 추가
             'condition_name': 'VWAP+AI',
+            # 조건검색 출처 — 신규 컬럼 없이 기존 JSONB 에 넣는다
+            'entry_context': self._condition_attribution(stock_code),
             'strategy_config': 'hybrid',
             'entry_reason': entry_reason or f"{entry_time.strftime('%H:%M')} 진입 (신뢰도: {entry_confidence:.0%})",
 
@@ -11001,6 +11048,19 @@ class IntegratedTradingSystem:
             f"[BUY_COMPLETE] {stock_code} {stock_name} | "
             f"price={price:,} qty={quantity} amount={amount:,.0f} | "
             f"reason={entry_reason or ''} | trade_id={trade_id}"
+        )
+        # ── [COND_ATTR] 조건검색 출처 (Iteration 8-1) ────────────────────
+        #
+        # 원장에는 전부 'VWAP+AI' 로만 찍혀서 어느 조건식이 이 종목을
+        # 물어왔는지 사후에 알 수 없었다. 조건식별 승률·PF 분석이
+        # 불가능한 상태였다.
+        _ca = self._condition_attribution(stock_code)
+        logger.info(
+            f"[COND_ATTR] symbol={stock_code} trade_id={trade_id} "
+            f"condition_sources={_ca['condition_sources']} "
+            f"primary_condition={_ca['primary_condition']} "
+            f"condition_match_time={_ca['condition_match_time']} "
+            f"entry_reason={entry_reason or 'VWAP+AI'}"
         )
         self._refresh_dashboard_cache()
 

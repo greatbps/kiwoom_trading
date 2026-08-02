@@ -1,0 +1,46 @@
+{
+  "created_at": "2026-08-02T20:25:28",
+  "tests": [
+    {
+      "name": "Test 1  조건검색 → 종목 저장 (다중 출처)",
+      "pass": true,
+      "detail": "005930=['GreatMid', 'Momentum 전략']"
+    },
+    {
+      "name": "Test 2  VWAP 통과 → 출처 유지",
+      "pass": true,
+      "detail": "primary=GreatMid"
+    },
+    {
+      "name": "Test 3  BUY → trade record 저장",
+      "pass": true,
+      "detail": "[\"GreatMid\", \"Momentum 전략\"]"
+    },
+    {
+      "name": "Test 4  EXIT → 원 거래 연결 (stock_code 기준)",
+      "pass": true,
+      "detail": "청산 행은 entry_context 미기록 — 조인으로 연결"
+    },
+    {
+      "name": "Test 5  기록 없음 → UNKNOWN (추정 금지)",
+      "pass": true,
+      "detail": "['UNKNOWN']"
+    }
+  ],
+  "migration": {
+    "buy_rows": 165,
+    "entry_context_null": 158,
+    "updated": 158,
+    "applied": true
+  },
+  "coverage": {
+    "buy": 165,
+    "with_context": 165,
+    "mapped": 0,
+    "unknown": 165,
+    "coverage_pct": 0.0
+  },
+  "perf": {
+    "attribution_lookup_us": 0.579
+  }
+}
