@@ -1948,6 +1948,62 @@ class IntegratedTradingSystem:
         except Exception:
             pass  # heartbeat 실패 시 무시 (주요 로직 방해 금지)
 
+    # ─── 포지션 리스크 스키마 ────────────────────────────────────────────────
+    #
+    # self.positions 에 쓰는 경로가 4개다. 경로마다 넣는 키가 달라서
+    # structure_stop_price 가 유실됐고, 그 결과 설계 손절(-1.4~-5.3%)이
+    # 집행되지 않고 SWING fallback(-12%)까지 방치됐다.
+    # (Phase1 Iter4~6 감식: 스윙 5건 중 4건, 초과손실 691,142원 = 손실의 63.5%)
+    #
+    # 모든 경로가 이 함수를 거치게 해서 같은 필드를 갖도록 강제한다.
+    POSITION_RISK_FIELDS = (
+        'strategy_horizon', 'structure_stop_price',
+        'entry_price', 'entry_reason', 'position_type',
+    )
+
+    @staticmethod
+    def _swing_stop_of(swing_entry: dict | None, entry_price: float):
+        """swing_positions.json 항목에서 손절가를 꺼낸다. 없거나 이상하면 None."""
+        if not swing_entry:
+            return None
+        raw = swing_entry.get('stop_price') or swing_entry.get('stop')
+        try:
+            stop = float(raw) if raw else None
+        except (TypeError, ValueError):
+            return None
+        if stop is None or stop <= 0:
+            return None
+        # ⚠️ 진입가 이상인 손절가를 넣으면 편입 즉시 전량청산된다.
+        if entry_price and stop >= entry_price:
+            return None
+        return stop
+
+    def _normalize_position(self, code: str, pos: dict,
+                            swing_entry: dict | None = None) -> dict:
+        """
+        포지션 딕셔너리에 리스크 필드를 채운다. **모든 생성 경로가 호출한다.**
+
+        기존 값은 덮어쓰지 않는다 — 이미 제대로 채워진 경로를 망치면 안 된다.
+        """
+        strat = str(pos.get('strategy', '') or '').lower()
+        if not pos.get('strategy_horizon'):
+            pos['strategy_horizon'] = 'SWING' if strat == 'swing' else 'INTRADAY'
+        if not pos.get('position_type'):
+            pos['position_type'] = pos['strategy_horizon']
+        pos.setdefault('entry_reason', pos.get('exit_reason') or '')
+
+        is_swing = (pos.get('strategy_horizon') == 'SWING' or strat == 'swing')
+        if is_swing and not pos.get('structure_stop_price'):
+            ep = float(pos.get('entry_price') or pos.get('avg_price') or 0)
+            stop = self._swing_stop_of(swing_entry, ep)
+            if stop is not None:
+                pos['structure_stop_price'] = stop
+                logger.info(
+                    f"[POS_RISK_SCHEMA] {code} structure_stop_price="
+                    f"{stop:,.0f} ({(stop/ep-1)*100:+.2f}%) 보정"
+                )
+        return pos
+
     # ─── 포지션 상태 영속화 (재시작 복원용) ─────────────────────────────────
     _POSITIONS_STATE_PATH = 'data/positions_state.json'
     _positions_state_version: int = 0
@@ -2033,6 +2089,17 @@ class IntegratedTradingSystem:
         if state is None:
             return
 
+        # swing_positions.json — 복원 시 손절가 보정용
+        _swing_state_restore: dict = {}
+        try:
+            import json as _json_sr
+            _sp_r = Path('data/swing_positions.json')
+            if _sp_r.exists():
+                _swing_state_restore = _json_sr.loads(
+                    _sp_r.read_text(encoding='utf-8'))
+        except Exception as _sr_e:
+            logger.warning(f"[POS_RESTORE] swing_positions.json 읽기 실패: {_sr_e}")
+
         restored = skipped_sanity = 0
         for code, entry in state.items():
             if code.startswith('_'):
@@ -2067,9 +2134,17 @@ class IntegratedTradingSystem:
             # 복원 포지션은 strategy_horizon 기본값 SWING 보장
             if 'strategy_horizon' not in entry:
                 entry['strategy_horizon'] = 'SWING'
+            # 리스크 스키마 보정 — 저장 당시 structure_stop_price 가 없었을 수 있다.
+            # swing_positions.json 에서 다시 끌어와 채운다.
+            self._normalize_position(code, entry,
+                                     swing_entry=_swing_state_restore.get(code))
             self.positions[code] = entry
             restored += 1
-            logger.info(f"[POS_RESTORE] {entry.get('stock_name', code)} 복원 (진입가={ep} high={high} trail={trail})")
+            logger.info(
+                f"[POS_RESTORE] {entry.get('stock_name', code)} 복원 "
+                f"(진입가={ep} high={high} trail={trail} "
+                f"stop={entry.get('structure_stop_price') or '없음'})"
+            )
 
         if restored > 0 or skipped_sanity > 0:
             logger.info(f"[POS_RESTORE] 복원={restored}건 sanity_skip={skipped_sanity}건")
@@ -2331,10 +2406,13 @@ class IntegratedTradingSystem:
                     f"청산전략 복원이 폴백 경로로 진행됨: {_psr_e}"
                 )
             _swing_codes: set = set()
+            _swing_state: dict = {}
             try:
                 _sp = Path('data/swing_positions.json')
                 if _sp.exists():
-                    _swing_codes = set(_json.loads(_sp.read_text(encoding='utf-8')).keys())
+                    # ⚠️ 키만 뽑으면 stop_price 가 버려진다. 그게 손절 유실의 시작이었다.
+                    _swing_state = _json.loads(_sp.read_text(encoding='utf-8'))
+                    _swing_codes = set(_swing_state.keys())
             except Exception:
                 pass
             # positions_state.json — trailing 상태 복원용 (highest_price, trailing_stop_price)
@@ -2455,6 +2533,14 @@ class IntegratedTradingSystem:
                                 f"[POS_RESTORE] {stock_name}({stock_code}) trailing 복원: "
                                 f"high={_restored_high:,} stop={_restored_trail:,}"
                             )
+                    # 리스크 스키마 보정 — 갱신·신규 두 분기가 여기서 합류한다.
+                    # ⚠️ 브로커 잔고에서 복원되는 이 경로가 structure_stop_price 를
+                    #    넣지 않아 스윙 손절이 유실됐다 (Iter6 규명).
+                    self._normalize_position(
+                        stock_code, self.positions[stock_code],
+                        swing_entry=_swing_state.get(stock_code),
+                    )
+
                     if _is_swing_pos:
                         console.print(f"  [cyan][SWING][/cyan] {stock_name}({stock_code}) — 일중 trailing 제외")
 
@@ -8278,6 +8364,44 @@ class IntegratedTradingSystem:
                 except Exception:
                     pass
 
+            # ── SWING 손절 유실 방어 (Iter6-1 Phase3) ──────────────────────
+            #
+            # ⚠️ SWING 인데 structure_stop_price 가 없으면 exit_logic 이
+            #    swing_hard_stop_pct(-12%) fallback 으로 빠진다. 설계 손절이
+            #    -1.4~-5.3% 인데 -12% 까지 방치되는 것이 실거래 손실의 63.5%
+            #    였다. 전달 경로를 4곳 다 고쳤지만, 새 경로가 생기거나
+            #    되돌아가면 조용히 재발한다 — 여기서 마지막으로 막는다.
+            #
+            #    격리(quarantine)하지 않고 **안전한 기본 손절을 적용**한다.
+            #    포지션을 감시에서 빼면 무방비가 되어 더 위험하다.
+            if (position.get('strategy_horizon') == 'SWING'
+                    or str(position.get('strategy', '')).lower() == 'swing'):
+                if not position.get('structure_stop_price'):
+                    _ep = float(position.get('entry_price')
+                                or position.get('avg_price') or 0)
+                    _cap = float(((self.config.get_section('risk_control') or {})
+                                  .get('structure_based_stop', {}) or {})
+                                 .get('max_stop_pct', 5.0))
+                    if _ep > 0:
+                        _safe = _ep * (1 - _cap / 100.0)
+                        position['structure_stop_price'] = _safe
+                        position['stop_recovered'] = True
+                        logger.error(
+                            f"[SWING_STOP_MISSING] {stock_code} "
+                            f"structure_stop_price 없음 → 안전 손절 "
+                            f"{_safe:,.0f}(-{_cap}%) 적용. "
+                            f"전달 경로 점검 필요 (-12% fallback 방지)"
+                        )
+                        console.print(
+                            f"[bold red]🛑 [SWING_STOP_MISSING] {stock_code} "
+                            f"손절값 유실 → -{_cap}% 안전손절 적용[/bold red]"
+                        )
+                    else:
+                        logger.error(
+                            f"[SWING_STOP_MISSING] {stock_code} entry_price 도 "
+                            f"없다 → 안전손절 산출 불가. 수동 확인 필요"
+                        )
+
             # 최적화된 청산 로직 호출
             should_exit, exit_reason, exit_info = self.exit_logic.check_exit_signal(
                 position=position,
@@ -8705,6 +8829,9 @@ class IntegratedTradingSystem:
                     'risk_only': True,
                     'allow_overnight': True,
                 }
+                # 4개 경로가 같은 함수를 거치게 한다 (스키마 단일화)
+                self._normalize_position(code, self.positions[code],
+                                         swing_entry=sp_entry)
 
                 logger.warning(
                     f"[SWING_RISK_ATTACH] {code} {stock_name} "
