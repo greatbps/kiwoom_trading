@@ -577,10 +577,10 @@ class SignalOrchestrator:
         position_multiplier = self.confidence_aggregator.calculate_position_multiplier(final_confidence)
         result['position_size_multiplier'] = position_multiplier
 
-        # ✅ 승인 로그 (프로세스 ID 포함)
+        # 🟡 후보 승인 로그 — 오케스트레이터(L0~L6) 통과. 실제 주문 전 단계.
         import os
-        msg = f"✅ ACCEPT {stock_code} @{current_price:.0f}원 | PID:{os.getpid()} | conf={final_confidence:.2f} alpha={aggregate_score:+.2f} pos_mult={position_multiplier:.2f}"
-        console.print(f"[green]{msg}[/green]")
+        msg = f"🟡 CANDIDATE_ACCEPT {stock_code} @{current_price:.0f}원 | PID:{os.getpid()} | conf={final_confidence:.2f} alpha={aggregate_score:+.2f} pos_mult={position_multiplier:.2f}"
+        console.print(f"[yellow]{msg}[/yellow]")
         signal_logger.info(msg)
 
         return result

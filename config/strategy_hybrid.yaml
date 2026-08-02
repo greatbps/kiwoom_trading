@@ -1,6 +1,12 @@
 # 하이브리드 전략 (권장)
 # 공격적 + 보수적 + 부분청산의 장점 결합
 
+# =============================================================================
+# Ruleset Version — 모든 진입 로그에 기록됨
+# 변경 시 이 값을 올리면 분석 시 규칙 변경 시점을 정확히 구분할 수 있음
+# =============================================================================
+ruleset_version: "v1.3.1-final"   # 2026-07-05: Profit Expansion — RAE + TED + G3 soft penalty + Finalization Patch
+
 # 🔧 2026-03-18: DRY_RUN 모드 (true = 주문 없이 신호만 로깅)
 dry_run: false
 
@@ -74,12 +80,34 @@ time_weight:
   afternoon_squeeze: 1.0  # 12:30~14:30 Squeeze/Defensive (횡보장 전략)
   late: 0.0            # 14:30~14:59 (global_gate가 먼저 차단 — 실질적 미사용)
 
+# ─────────────────────────────────────────────────────────────
+# Orchestrator 파라미터 (Fix1-C 2026-07-04 적용)
+# 백테스트 근거: backtest_early_entry_20260704.md
+#   Alpha 0.8→0.5: PF 0.239→1.223, 평균손익 -0.946→+0.133%
+#   L6 min_win_rate 40→30%: 병목 완화, 후보 선정 평균 20분 단축 추정
+# 롤백: alpha_threshold: 0.8, l6.min_win_rate: 40.0
+orchestrator:
+  alpha_threshold: 0.5       # Multi-Alpha 임계값 (원래 0.8, Fix1-C: 0.5)
+  # v1.2: Score는 진입 여부가 아닌 비중 결정용
+  # alpha_threshold 미달 시 차단 → size_mult 축소 (0.5배)
+  alpha_sizing_mode: true    # true = 점수 미달은 block 아닌 size 축소
+  alpha_sizing_min_mult: 0.5 # alpha 미달 시 최소 비중 배율
+  l6:
+    min_win_rate: 30.0       # L6 Validator 최소 승률 (원래 40.0, Fix1-C: 30.0)
+    min_avg_profit: 0.3      # L6 Validator 최소 평균수익 (유지)
+    min_profit_factor: 1.15  # L6 Validator 최소 PF (유지)
+# ─────────────────────────────────────────────────────────────
+
 time_filter:
   use_time_filter: true        # 🔧 FIX: 장 초반/마감 회피 활성화 (문서 명세)
   market_open: "09:00"
   market_close: "15:20"
-  smc_afternoon_cutoff: "13:00"    # 🔧 2026-04-01: A급 13:00까지 허용 (기존 12:30)
+  smc_afternoon_cutoff: "13:30"    # v1.4.1: 13:30 컷오프 (13:30~15:00 WR=15.8%, PF=0.135 → 차단)
   avoid_early_minutes: 30      # 🔧 FIX: 09:30까지 회피 (문서 명세) [복원: 10→30]
+  early_window_block:
+    enabled: true              # v1.3.2: 09:00~09:30 신규 진입 하드 차단 (ALPHA=0% 구간)
+    block_start: "09:00"       # 차단 시작 (포함)
+    block_end: "09:30"         # 차단 종료 (미포함, 09:29:59까지 차단)
   avoid_late_minutes: 21       # 🔧 FIX: 14:59까지만 진입 (15:20-21=14:59) [복원: 10→21]
 
   # 📊 시뮬레이션 결과 반영 (2026-01-17): 오전장이 가장 효과적
@@ -89,6 +117,67 @@ time_filter:
     # 📊 시뮬레이션 결과: 오후장 진입 시 손실 증가 → squeeze_2tf는 12시 이전만
     midday_penalty: 0.0        # 12:00~14:00 신호 완전 차단
     afternoon_penalty: 0.0     # 14:00~14:59 신호 완전 차단 (squeeze_2tf 기준)
+
+# ─── GD-008 Fix C v2: 10:30 이후 늦은 추격 진입 금지 (2026-07-04) ────────────
+# 근거: NB-008 오프라인 백테스트 + PM 방향 수정 (단순 시간 차단 → 조건부 추격 차단)
+# "10:30~11:30 금지" → "10:30 이후 늦은 추격이면 금지" (더 정밀한 필터)
+late_entry_control:
+  enabled: true
+
+  # Fix C v1: Phase3 진입 차단 (v1.2: 11:30 이후 활성화)
+  # 11:30~ 신규 진입 강력 제한 — 구조 살아있는 2차 진입만 허용
+  c_late_block:
+    enabled: true
+    start: "11:30"
+    end: "14:00"
+
+  # Fix C v2: 10:30 이후 추격 진입 필터 (v1.2: hard reject → size reduction)
+  # 핵심 변경: 차단 로직 → 비중 축소 로직 ("차단 → 참여 축소")
+  c_late_v2:
+    enabled: true
+    after_time: "10:30"           # 이 시간 이후에만 적용
+
+    # v1.2: hard reject 제거 → size reduction 모드
+    size_reduction_mode: true     # true = 차단 대신 비중 축소
+    size_reduction_mult: 0.4      # 10:30 이후 조건 충족 시 40% 비중으로 진입
+
+    # 조건 1: 후보(t0) 이후 현재가 상승률 (유지)
+    max_cand_rise_pct: 5.0
+
+    # 조건 2: 당일 고점 근처 (유지 — 핵심 유효 조건)
+    max_day_high_proximity_pct: 1.5   # 당일 고가 대비 -1.5% 이내
+
+    # 조건 3: 후보→진입 지연 (유지)
+    max_cand_to_entry_min: 180    # 3시간 이상 지연만 차단
+
+  # G3: delay=0 CHoCH 품질 게이트 (v1.2: phase별 임계값 분리)
+  # Phase1(09:30~10:00): delay≤3분 허용 / Phase2(10:00~11:30): delay≤2분 + SMC score 예외
+  # Phase3(11:30~): c_late_block으로 처리
+  g3_delay0_quality_gate:
+    enabled: true
+    delay_threshold_min: 2.0           # Phase2 기본 (10:00~11:30): delay≤2분
+    phase1_delay_threshold_min: 3.0    # Phase1 (09:30~10:00): delay≤3분 허용 (완화)
+    phase2_end_time: "11:30"           # Phase2 종료 시각
+    block_before_hour: 10              # Phase1 구간 종료 (10:00)
+    min_bdh_pct: 3.0                   # 당일 고점 대비 3% 미만이면 차단 (HIGH_PROX)
+    # Phase2 예외: SMC score ≥ 80 AND reclaim 발생 시 HIGH_PROX 우회
+    phase2_smc_score_exception: 80     # SMC CHoCH score 임계값
+    # v1.3: HIGH_PROX → soft penalty (size 축소) 전환
+    soft_penalty_mode: true            # true=size 축소, false=hard block (v1.2 이전 동작)
+    soft_penalty_mult: 0.6             # HIGH_PROX 시 position size × 0.6
+
+  # Stage A 추가 품질 게이트: G3 통과 후 delay=0 잔여 이상 거래 차단
+  # 근거: delay=0 EF 25%→18.2%, WIN 손상 0건, PF 0.325→0.330
+  # 위치: evaluate_signal() — G3 HIGH_PROX 이후 / ACCEPT 직전
+  stage_a_quality_gate:
+    enabled: true
+    # C2: 당일 고저범위 이상치 차단 (서킷브레이커/상장일 등 비정상 장)
+    # bdh > 15% → 비정상 변동성 → delay=0 차단
+    max_bdh_pct: 15.0
+    # C1 (미래 활성화 — E2+ 데이터 필요): 과열 모멘텀 진입 차단
+    # prior_5d_pct > 45% → 5일간 45%+ 급등 종목 delay=0 즉시진입 차단
+    overheated_prior5d_enabled: false
+    overheated_prior5d_pct: 45.0
 
 re_entry:
   use_cooldown: true           # 재진입 방지 ✅
@@ -233,6 +322,10 @@ risk_control:
   hard_stop_pct: 2.0           # 📊 ML 개선 (2025-12-16): -2.5% → -2.0% (실제 손실 -2.61%, -3.09% 방지)
   technical_stop_pct: 1.5      # 기술적 손절선 -1.5%
 
+  # 🔒 2026-07-06: 장기 보유 종목 — 봇 관리(포지션 동기화) 대상에서 완전 제외 (수동 관리)
+  longterm_hold_exclude:
+    - "0177R0"   # TIGER 반도체TOP10커버드콜액티브
+
   # 초기 실패 컷 (손익비 개선의 핵심)
   early_failure:
     enabled: true              # 활성화
@@ -310,6 +403,8 @@ risk_control:
     min_observe_minutes: 5             # 최소 관찰 시간 (분)
     observe_minutes: 15                # 최대 관찰 구간 (분)
     score_threshold: 3                 # 조기 청산 임계값
+    # v1.2: reclaim 감지 시 threshold +1 (구조가 살아있으면 더 관대하게)
+    reclaim_threshold_bonus: 1         # reclaim=True이면 threshold → 4
     atr_decay_ratio: 0.85             # ATR 감쇠 비율 (< 0.85 = 모멘텀 소실)
     volume_dry_ratio: 0.8             # 거래량 고갈 비율 (< 0.8 = 고갈)
     mfe_ratio: 0.25                   # MFE 실패 비율 (MFE < ATR × 0.25 = 방향성 부족)
@@ -405,6 +500,60 @@ risk_control:
     enabled: true                           # Draw 분류 활성화
     profit_threshold_pct: 0.2               # +0.2% 미만은 Draw (수수료 고려)
     min_hold_hours: 6                       # 6시간 이상 보유 시 적용
+
+  # ─────────────────────────────────────────────────────────────
+  # LOSS CONTROL LAYER v2 (2026-07-04)
+  # v1 → v2 변경: Early Cut 2.0 + Time Stop Dynamic + MFE/MAE Exit 추가
+  # (A) Early Cut 2.0: RSI slope 하락 확인 + VWAP 3봉 + 거래량 decay 추세
+  # (B) Time Stop Dynamic: bdh 기반 적응형 (고변동 → 빠른 컷) + MFE 정체 감지
+  # (C) Vol Tight Stop: 고변동성 날 tighter stop (비스윙)
+  # (D) MFE/MAE Stagnation Exit: 수익 한 번도 못 봄 + 현재 신저점 → 즉시 컷
+  # ─────────────────────────────────────────────────────────────
+  loss_control_layer:
+    enabled: true
+
+    # ── (A) Early Cut 2.0 ──────────────────────────────────────
+    early_cut:
+      enabled: true
+      min_loss_pct: 0.5          # -0.5% 이상 손실 시만 발동
+      # v1.2: reclaim 감지 시 트리거 완화 (구조 살아있는 되돌림은 더 기다림)
+      reclaim_relaxed_loss_pct: 0.8   # reclaim=True이면 -0.8%로 완화
+      rsi_threshold: 38          # RSI < 38 (과매도 급락 구간)
+      rsi_slope_check: true      # NEW v2: RSI 하락 추세 확인 (rsi[-1] < rsi[-2])
+      vwap_periods: 3            # v1=2 → v2=3봉 (더 강한 이탈 지속 요구)
+      volume_ratio: 0.7          # 거래량 < 직전5봉 평균 × 0.7 (수요 소멸)
+      volume_decay_check: true   # NEW v2: 현재봉 거래량 < 직전봉 (decay 추세)
+
+    # ── (B) Time Stop Dynamic ──────────────────────────────────
+    time_stop:
+      enabled: true
+      max_loss_minutes: 20       # v1=30 → v2=20 (기본 타이트)
+      min_loss_pct_trigger: 0.8  # 최소 손실 기준 (-0.8% 이하일 때만 발동)
+      # bdh 기반 적응형: 고변동성일수록 더 빠른 컷
+      high_vol_bdh_pct: 5.0      # NEW: bdh ≥ 5% 이면 15분으로 단축
+      high_vol_minutes: 15       # NEW: 고변동성 Time Stop 임계
+      very_high_vol_bdh_pct: 10.0  # NEW: bdh ≥ 10% 이면 12분
+      very_high_vol_minutes: 12    # NEW: 초고변동성 Time Stop 임계
+      # MFE 정체 감지: N분 경과 후 MFE가 낮으면 조기 종료
+      mfe_stagnation_enabled: true  # NEW: MFE 정체 시 조기 exit
+      mfe_stagnation_minutes: 20    # NEW: 20분 후 MFE 정체 확인
+      mfe_stagnation_pct: 0.3       # NEW: MFE < 0.3% = 정체 판단
+      mfe_stagnation_loss_pct: 0.3  # NEW: pnl < -0.3% 시만 발동
+
+    # ── (C) Vol Tight Stop ─────────────────────────────────────
+    vol_tight_stop:
+      enabled: true
+      bdh_threshold: 5.0         # 당일 bdh (고저폭 %) > 이 값이면 발동 (비스윙)
+      tight_stop_pct: 2.5        # bdh 고변동성 시 실효 hard stop = -2.5%
+
+    # ── (D) MFE/MAE Stagnation Exit ────────────────────────────
+    # 핵심: "수익을 한 번도 보지 못한 채 손실이 신저점" 패턴 조기 종료
+    mfe_mae_exit:
+      enabled: true
+      min_elapsed_minutes: 10    # 최소 10분 경과 후 발동
+      mfe_stagnation_pct: 0.3    # MFE < 0.3% = 거래가 한 번도 수익 구간 진입 못 함
+      min_loss_pct: 0.3          # pnl < -0.3% 시만 발동 (의미 있는 손실)
+      mae_worsening_ratio: 0.95  # |profit_pct| ≥ mae_pct × 0.95 = 신저점 접근
 
 # ─────────────────────────────────────────────────────────────
 # ✅ 2026-04-19: overnight_v2 — 명시적 오버나이트 허용 조건
@@ -690,6 +839,10 @@ exit_strategy:
 # ✅ ChatGPT 리뷰 반영: EOD 정책 추가
 # ========================================
 eod_policy:
+  # NOTE (2026-07-20): enabled=false인 동안 should_allow_overnight()의
+  # overnight_v2.require_a_grade 게이트를 포함한 오버나이트 평가 로직 전체가
+  # 비활성 상태(의도된 것, 버그 아님). eod_policy와 require_a_grade는 하나의
+  # 정책 묶음이니 E2 종료 후 오버나이트 정책 재검토 시 함께 판단할 것.
   enabled: false                         # ❌ 비활성화: 시간 기반 강제 청산 없음
   check_time: "14:55:00"                 # ✅ 수정: 14:55 (15:00에서 변경, API 지연 고려)
   force_exit_time: "15:05:00"            # ✅ 수정: 15:05 (15:10에서 변경)
@@ -853,6 +1006,22 @@ trend:
     max_per_day: 2         # 일일 최대 TREND 진입 횟수
 
 # ========================================
+# W Pattern Pullback Entry Filter (실험적, 2026-07 추가)
+# 기존 SMC 진입 신호를 더 정밀하게 거르는 추가 Entry Quality 필터
+# 진입 빈도 증가가 목적이 아니라 진입 품질 향상이 목적 — 기본 OFF
+# ========================================
+w_pattern:
+  enabled: true                     # 🔧 2026-07-27: E2 증거(30건+) 없이 실계좌 활성화 (사용자 명시적 승인)
+  timeframe: 3m
+  min_drop_pct: -3.0
+  max_bottom_diff_pct: 0.3
+  min_rebound_pct: 1.5
+  min_rvol: 2.0
+  require_volume_decline: true
+  require_vwap: true
+  require_ema20: true
+
+# ========================================
 # Squeeze Sub 전략 (2026-04-30 추가)
 # SMC 신호 없을 때 NEUTRAL 레짐에서만 발동
 # STRONG = squeeze_on + momentum_rising + BB(30,1) 돌파 + 거래량 급증 + 직전 고점 돌파
@@ -1013,7 +1182,7 @@ defensive_mode:
 # 3단계: explore_always=true → 구조 없어도 size×0.15
 # ========================================
 exploration:
-  enabled: true                # 2026-03-31 ON (2단계만, explore_always=false)
+  enabled: false               # v1.4.1: 비활성화 (DB 6건 WR=0%, PF=0.000 — E1 증거 불충분)
   ignore_no_trade_day: true    # NO_TRADE_DAY에도 탐색 허용 (RVOL+돌파 게이트 유지)
   bypass_time_filter: true     # SMC 12:30 컷오프 우회 (EXPLORATION 자체 시간필터 사용)
   max_per_day: 2               # 일일 최대 EXPLORATION 진입 횟수
@@ -1205,7 +1374,7 @@ smc:
   # 🔧 2026-01-23: CHoCH 등급 필터 (과진입 방지)
   choch_grade:
     enabled: true                      # 등급 필터 활성화
-    min_grade: "B"                     # 최소 허용 등급 (A/B/C) - C급 차단
+    min_grade: "A"                     # v1.3.2: B급 실전 진입 전면 차단 (B급 WR=0% 확인)
     grade_b_weight: 0.5                # B급 CHoCH 비중 배율 (50%)
     grade_b_cutoff: "11:00"            # 🔧 2026-04-01: B급 시간 제한 강화 (11:30→11:00)
     htf_b_block: true                  # 🔧 2026-05-03: 재활성화 — B급 + HTF 미정렬 진입 차단 (2026-03-23에 false로 완화했으나 ef_no_follow 누적으로 복원)
@@ -1286,9 +1455,12 @@ smc:
     require_reclaim: true              # 조건3: 되돌림 캔들 확인
     reclaim_lookback: 5                # CHoCH 후 몇 캔들 내 되돌림 확인
     reclaim_tolerance_pct: 0.15        # 🔧 2026-03-08: 0.3 → 0.15% (weak breakout 통과 차단)
-    rvol_min: 1.3                      # 🔧 2026-05-03: RVOL 하드 게이트 — NEUTRAL 레짐 기본값 (0.0=비활성)
-    rvol_min_trend: 1.4                # TREND 레짐 — 이미 유동성 충분, 소폭 강화
-    rvol_min_reversal: 1.5             # REVERSAL 레짐 — 가짜 반등 빈도 높아 가장 엄격
+    rvol_min: 1.3                      # RVOL 기준값 — NEUTRAL 레짐
+    rvol_min_trend: 1.4                # TREND 레짐
+    rvol_min_reversal: 1.5             # REVERSAL 레짐
+    # v1.2: RVOL 미달 시 하드컷 → score penalty 전환
+    rvol_penalty_mode: true            # true = 미달 시 차단 대신 size_mult 페널티
+    rvol_penalty_size_mult: 0.7        # RVOL 미달 시 비중 70% 적용 (30% 페널티)
 
     # 🔧 2026-05-06: 하락 초기 구간 필터 (Early Downtrend Gate)
     # "지지선 있어도 매수세 없으면 그냥 깨진다" — 조기 진입 방지 최우선 게이트
@@ -1349,7 +1521,7 @@ smc:
     # Gate 5: 현재가 ≥ choch.price → 구조 유지 (하드코드, 설정 불필요)
 
   r_tp:
-    tp1_r_mult: 2.0   # TP1 = entry + 2.0 × (entry - stop) → 25% 부분익절
+    tp1_r_mult: 1.0   # 🔧 2026-07-04: 2.0→1.0 (dead TP 활성화: WIN avg=+1.4%, TP1@2R≈+5% 미체결)
     tp2_r_mult: 4.0   # TP2 = entry + 4.0 × (entry - stop) → 25% 부분익절, 잔여 50% trailing
 
   # 🔧 2026-04-16: A급 포지션 TIME_EXIT 면제 + 구조기반 연장 보유
@@ -1372,6 +1544,49 @@ smc:
     no_progress_mfe_r: 2.0        # 이 R 미만이면 "진행 없음" 판단 (TP1=2R 대응)
     no_progress_bars: 30          # 30봉(150분) 경과 시 NO_PROGRESS_EXIT
                                   # 고변동 계열: 20~25 / 일반: 30
+
+  # ─────────────────────────────────────────────────────────────────
+  # [SCAFFOLD] Stage B — Trend Extension Layer (2026-07-04)
+  # 목적: TRAIL_STOP 진행 중 추세 지속 신호 감지 시 trailing 조건 완화
+  # 현재 상태: 데이터 분석 결과 적용 대상 exit 없음 → disabled
+  # 활성화 조건: E2(30건+) 달성 후 TRAIL_STOP 조기 이탈 건수 ≥5 확인 시
+  # 위치: exit_logic_optimized.py check_exit_signal() — A급 연장 이후
+  # ─────────────────────────────────────────────────────────────────
+  stage_b_trend_extension:
+    enabled: false                # E2+ 데이터 후 활성화
+    min_rsi: 50                   # 추세 지속 신호: RSI ≥ 50
+    require_above_vwap: true      # 현재가 VWAP 이상
+    require_hh: true              # 최근 3봉 내 신고가 갱신
+    min_profit_pct: 1.0           # 최소 수익 1% 이상 포지션에만 적용
+    # 효과: 조건 충족 시 TRAIL_STOP atr_multiplier × 1.2 (더 관대하게)
+    # 데이터 근거: E2+ 확보 후 TRAIL_STOP 조기이탈 건 MFE 분석 필요
+
+  # ─────────────────────────────────────────────────────────────────
+  # [SCAFFOLD] Profit Scaling / TP 재보정 (2026-07-04)
+  # 현재 r_tp: TP1=2R(≈+4~5%), TP2=4R(≈+8~10%) — WIN avg=+1.4%로 미체결
+  # 재보정 후보: tp1_r_mult: 1.0 / tp2_r_mult: 2.0
+  # 활성화 조건: E2(30건+) + MFE 데이터 수집 후 방향 확인
+  # 주의: TP 낮추면 빠른 익절로 upside 포기 가능 — MFE 없이 판단 불가
+  # ─────────────────────────────────────────────────────────────────
+  # r_tp (현재값 유지, 재보정 미실행):
+  #   tp1_r_mult: 2.0  → 후보: 1.0 (E2+ MFE 확인 후)
+  #   tp2_r_mult: 4.0  → 후보: 2.0 (E2+ MFE 확인 후)
+
+  # ─────────────────────────────────────────────────────────────────
+  # [ACTIVE] Layer 3 대안 — Momentum Boost (진입 시 position size 상향)
+  # 목적: 강한 모멘텀 확인 시 execute_buy 호출 없이 초기 포지션 크기 확대
+  # 구현: signal_orchestrator.py evaluate_signal()에서 position_size_multiplier 조정
+  # 비교: Breakout Add-on(execute_buy 금지) → 진입 시 배수 상향(허용)
+  # ─────────────────────────────────────────────────────────────────
+  momentum_boost:
+    enabled: false                # 초기 disabled — 10건 이상 확인 후 활성화
+    boost_mult: 1.2               # 모멘텀 강화 시 position_size × 1.2 (cap: 1.3)
+    max_mult: 1.3                 # 절대 상한 (기존 사이징 × 1.3 초과 금지)
+    conditions:
+      min_bdh_pct: 3.0            # bdh ≥ 3% — 당일 이미 모멘텀 형성됨
+      min_rsi: 55                 # RSI ≥ 55 — 추세 중간 이상
+      min_volume_ratio: 1.5       # 거래량 1.5배 이상
+      require_choch_a_plus: true  # CHoCH A+ 등급만 허용
 
 
 # =============================================================================
@@ -1500,3 +1715,168 @@ eq_ml_filter:
     high_threshold: 0.60      # P(win) >= 0.60 → high_mult 적용
     high_mult: 1.20           # 고확신 진입: +20%
     low_mult:  0.80           # threshold 미달이나 차단 안 된 경우: -20%
+
+# =============================================================================
+# Swing Runner 정책 (swing_runner.py / swing_executor.py)
+# =============================================================================
+swing:
+  enabled: false               # v1.4.1: 신규 진입 비활성화 (최근 6주 SWING만 실행, WR=0%)
+  min_score_to_enter: 5.0    # SignalEngine 최소 점수 (0-10 scale)
+  max_positions: 3
+  max_total_exposure: 0.80
+
+  # AI Gate: AnalysisEngine(0-100) 결과로 진입 전 차단
+  ai_gate:
+    enabled: true
+    min_score: 50            # < 50 → 무조건 차단
+    block_watch: false       # true = "관망" 추천도 차단 (지금은 점수만 사용)
+    timeout_seconds: 20      # AI 분석 최대 대기 시간
+    pass_on_error: true      # 분석 실패/타임아웃 시 true=통과, false=차단
+
+  # 재진입 쿨다운
+  cooldown:
+    by_reason:
+      stop_loss: 5           # 손절 후 5 거래일
+      trailing_stop: 3
+      time_exit: 2
+      default: 3
+    override_min_score: 9.0  # 쿨다운 중 고득점 예외 허용 기준
+
+  # 섹터 다각화
+  sector:
+    max_same_sector: 1
+
+  # 포지션 사이즈
+  size:
+    initial: 0.5
+
+  # 데이터 설정
+  data:
+    lookback_days: 60
+
+
+# D1: pre-candidate(L3 통과 조기 관심 등록) 설정
+# 목적: 정식 candidate 전에 L0~L3 통과 종목을 미리 관찰 목록에 올려놓음
+# 이번 버전: 직접 주문 트리거 아님 — 후보 선행 관측 및 분석 기반 강화
+pre_candidate:
+  enabled: true
+  stage: "L3"                      # L3 통과 시 등록
+  track_first_only: true           # 당일 최초 등록값만 보존 (덮어쓰기 금지)
+  persist_to_db: false             # 메모리 관리 (DB 저장은 signal_events로)
+  start_smc_watch_from_pre_candidate: true   # pre-cand 시점부터 SMC 관찰 시작 허용
+  max_age_minutes: 180             # 180분 초과 pre-candidate는 만료 처리
+
+# =============================================================================
+# v1.3: RAE (Re-Acceleration Entry) — 2nd wave 진입 전략
+# =============================================================================
+# 목적: CHoCH → impulse → pullback → 재가속 구간 포착
+# 진입 조건: 6개 (구조유지/pullback깊이/VWAP지지/거래량재확장/가격반등/TED)
+# 기대 효과: 초기 신호 놓쳤거나 OB 진입 실패 시 2nd chance 포착
+rae:
+  enabled: false                  # 초기 비활성 — auto_enable_guard 기준 충족 + 수동 승인 후 true
+  timeout_minutes: 60             # CHoCH 감지 후 RAE 후보 유효 시간 (60분)
+
+  # v1.3: RAE 활성화 자동 판정 기준 (backtests/rae_validation_runner.py 참조)
+  # 모든 기준 충족 시 RAE_GO_LIVE_READY 표시 → 운영자 수동 rae.enabled: true 전환
+  auto_enable_guard:
+    min_total_rae_trades: 20      # RAE 거래 최소 20건 필요
+    min_win_rate: 0.35            # RAE 단독 승률 ≥ 35%
+    min_pf: 1.10                  # RAE 단독 PF ≥ 1.10
+    min_avg_r: 0.25               # RAE avg R ≥ 0.25
+    max_mdd_degradation_pct: 15   # 전체 MDD 악화 ≤ 15%
+    require_ted: true             # TED 검증 필수
+
+  # Pullback 깊이 (R = impulse_high - choch_level)
+  pullback_min_r: 0.5             # 최소 0.5R 되돌림 후 진입 고려
+  pullback_max_r: 1.5             # 1.5R 초과 → 구조 위협 → RAE 무효 (spec: 0.5R~1.5R)
+
+  # 재가속 감지 조건
+  reaccel_bounce_pct: 0.3         # pullback 최저점 대비 +0.3% 반등 시 재가속 판단
+  reaccel_vol_ratio: 1.2          # 재가속 시 거래량 ≥ pullback 평균 × 1.2
+
+  # 진입 점수 (5개 조건 채점)
+  # 조건: 구조유지(2) + pullback깊이(2) + VWAP지지(2) + 거래량재확장(2) + 가격반등(1) = 9점
+  min_entry_score: 7              # 7점 이상 시 RAE 진입 허용
+
+  # RAE 진입 시 사이즈 설정
+  # 기본 size_mult는 원래 CHoCH 사이즈의 비율로 적용
+  rae_size_mult: 0.7              # RAE 진입은 원래 사이즈의 70%
+
+# =============================================================================
+# v1.3: Trend Expansion Detector (TED) — RAE/SMC 진입 검증 필터
+# =============================================================================
+# 목적: 진입 시점에 "진짜 추세 확장" 신호인지 optional 검증 (soft gate)
+# 실패 시: 진입 차단이 아닌 사이즈 감점 적용 (soft 판정)
+# 통과 기준: 5개 중 min_pass_count 이상 충족
+trend_expansion_detector:
+  enabled: true                   # SMC/RAE 진입 시 TED 검증 적용
+  apply_to_primary_entry: false   # 일반 SMC 진입에도 적용 여부 (초기: 비활성)
+  apply_to_rae_entry: true        # RAE 진입에 적용 (RAE가 활성화될 때 사용)
+  soft_fail_size_mult: 0.8        # TED 실패 시 size × 0.8 (차단 아님)
+
+  min_pass_count: 3               # 5개 조건 중 3개 이상 통과 시 PASS
+
+  # 조건 1: ATR 재확장
+  atr_expansion_ratio: 1.05       # 현재 ATR ≥ 최근 10봉 최저 ATR × 1.05
+
+  # 조건 2: RVOL 범위
+  rvol_min: 1.2                   # RVOL 하한 (너무 낮으면 관심 부족)
+  rvol_max: 3.0                   # RVOL 상한 (너무 높으면 급등 추격 위험)
+
+  # 조건 3: HH/HL 구조
+  hh_hl_lookback: 6               # 최근 6봉 기준 HH/HL 체크
+
+  # 조건 4: VWAP 위 여부
+  vwap_tolerance_pct: 0.2         # VWAP 대비 -0.2% 내 → 허용
+
+  # 조건 5: EMA20 slope
+  ema20_slope_min_pct: 0.0        # EMA20 slope ≥ 0% (상향 또는 평탄)
+
+# =============================================================================
+# v1.4: Market Regime Gate — 시장 레짐 판단 후 신규 진입 허용 여부 결정
+# =============================================================================
+# 목적: "거래하면 안 되는 장에서 신규 스윙 진입을 막는다"
+# 구조: KOSPI/KOSDAQ EMA + 일간수익률 + breadth → score → TREND_UP/NEUTRAL/RISK_OFF
+# 판정: 일 1회 또는 장중 30분 갱신
+market_regime:
+  enabled: true                  # v1.4: 레짐 게이트 활성화
+
+  # ── 레짐 정책 ──────────────────────────────────────────────────
+  block_new_entries_on_risk_off: true   # RISK_OFF 시 신규 진입 전면 차단
+  trend_up_size_mult: 1.0              # TREND_UP: 기본 사이즈 유지
+  neutral_size_mult: 0.2               # v1.4.1b: NEUTRAL 소량 재활성 (데이터 취득용, ×0.2 = 손실 ~1.3만원/거래)
+  risk_off_size_mult: 0.0              # RISK_OFF: 진입 금지 (size=0)
+
+  allow_rae_in_trend_up: true          # TREND_UP에서 RAE 허용
+  allow_rae_in_neutral: false          # NEUTRAL에서 RAE 차단
+  allow_rae_in_risk_off: false         # RISK_OFF에서 RAE 차단
+
+  # ── 레짐 Score 임계값 ──────────────────────────────────────────
+  score_thresholds:
+    trend_up_min: 3              # score >= 3 → TREND_UP
+    risk_off_max: -3             # score <= -3 → RISK_OFF
+    # -2 ~ +2 → NEUTRAL
+
+  # ── KOSPI / KOSDAQ EMA 피처 ────────────────────────────────────
+  index_tickers:
+    kospi: "069500"              # KODEX 200 (KOSPI 프록시)
+    kosdaq: "229200"             # KODEX 코스닥150 (KOSDAQ 프록시)
+
+  ema_period: 20                 # EMA20 기준
+
+  # ── Breadth (시장 확산도) ───────────────────────────────────────
+  breadth:
+    adv_ratio_strong: 0.55       # 상승 종목 비율 >= 55% → +1점
+    adv_ratio_weak: 0.40         # 상승 종목 비율 < 40% → -1점
+    above_ma20_strong: 0.55      # MA20 위 종목 비율 >= 55% → +1점
+    above_ma20_weak: 0.40        # MA20 위 종목 비율 < 40% → -1점
+
+  # ── 단기 리스크오프 조건 ────────────────────────────────────────
+  risk_off_rules:
+    kospi_day_drop: -0.015       # KOSPI 일간 -1.5% 이하 → -1점
+    kosdaq_day_drop: -0.020      # KOSDAQ 일간 -2.0% 이하 → -1점
+
+  # ── 캐싱 ────────────────────────────────────────────────────────
+  cache_minutes: 60              # 레짐 판정 캐시 유지 시간 (분), 0=매번 재계산
+  fallback_on_error: "NEUTRAL"   # API 오류 시 기본값 (NEUTRAL = 진입 허용, 사이즈 축소)
+

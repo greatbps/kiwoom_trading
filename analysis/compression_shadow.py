@@ -41,7 +41,7 @@ LOG_DIR = Path("logs")
 
 ACCEPT_RE = re.compile(
     r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}).*"
-    r"✅ ACCEPT (\w+) @([\d,]+)원 \| PID:\d+ \| conf=([\d.]+) alpha=([+-][\d.]+)"
+    r"(?:✅ ACCEPT|🟡 CANDIDATE_ACCEPT) (\w+) @([\d,]+)원 \| PID:\d+ \| conf=([\d.]+) alpha=([+-][\d.]+)"
 )
 MKT_CTX_RE = re.compile(
     r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}).*\[MKT_CTX_CHANGE\] \w+ → (\w+)"

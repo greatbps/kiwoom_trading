@@ -1,0 +1,65 @@
+# Research Layer 설정
+# strategy_hybrid.yaml(CODE FREEZE)과 분리하여 독립 관리.
+# DecisionService가 자가 로딩 — main_auto_trading.py 수정 불필요.
+
+research:
+  enabled: true
+
+  # 세부 레이어별 ON/OFF
+  decision_logging: true   # Candidate + Decision 기록
+  event_logging: true      # event_store 기록
+
+  # 운영 안전 설정
+  latency_warn_ms: 15      # 이 시간 초과 시 WARNING 로그
+  latency_error_ms: 50     # 이 시간 초과 시 ERROR 로그 (KPI 위반)
+
+  # 정책 버전 (phase4 통합 후 strategy_hybrid.yaml policy_version과 동기)
+  policy_version: "SMC_v2.3"
+
+  # Health Check (장 종료 후 자동 실행)
+  health_check:
+    enabled: true
+    run_after_market_close: true   # 15:40 cron 연결 시 사용
+    orphan_warn_threshold: 0       # orphan 건수 > 이 값이면 WARN
+
+# ──────────────────────────────────────────────────────────────────
+# Label Schema (버전 고정 — 변경 시 반드시 version 번호 올릴 것)
+# 버전이 바뀌면 이전 결과와 비교 불가. 과거 분석에 schema_version 기록됨.
+# ──────────────────────────────────────────────────────────────────
+label_schema:
+  version: "v1"
+  effective_from: "2026-07-01"
+
+  # 좋은 기회 = horizon 기준 수익률이 good_threshold_pct 초과
+  good_horizon: "+EOD"        # 기준 horizon (returns_collector의 horizon_label 과 일치)
+  good_threshold_pct: 3.0     # > 3% = GOOD
+
+  # 나쁜 기회 = 수익률이 bad_threshold_pct 이하 (NEUTRAL 구간 존재)
+  bad_threshold_pct: 0.0      # ≤ 0% = BAD
+
+  # NEUTRAL: 0% < return ≤ 3% — 판단 보류 (analysis에서 별도 표기)
+
+# ──────────────────────────────────────────────────────────────────
+# Step 2 진입 조건 (모두 충족해야 record_acceptance() 구현 시작)
+# ──────────────────────────────────────────────────────────────────
+# 1. 운영 기간 : 1~2주 실제 장중 데이터 축적 완료
+# 2. Trace Gap   = 0  : Candidate/Decision 누락 없음
+# 3. Latency P95 ≤ 20ms : Recording 지연이 거래 타이밍에 영향 없음
+# 4. Orphan      = 0  : FK 정합성 이상 없음
+# 5. Impossible  = 0  : 의미상 불가능한 상태 전이 없음
+# 6. Schema Drift= 0  : reason_code/column 추가가 더 이상 발생하지 않는 안정 상태
+#
+# Schema Drift 정의:
+#   운영 초기에는 새로운 reason_code 추가, feature 키 변경, 컬럼 추가가 빈번함.
+#   이런 변경이 멈추고 1주일 이상 스키마가 그대로 유지될 때 Drift=0으로 판단.
+#   Step 2에서 PASS Decision은 future_return_events, executed_at 등 추가 컬럼을
+#   사용하므로, 스키마가 안정된 뒤 연결해야 이후 Order/Fill/Exit 단계의 리스크가 줄어듦.
+step_2_entry_checklist:
+  ops_days_minimum: 7
+  trace_gap_target: 0           # ✅ Trace Gap = 0
+  impossible_target: 0          # ✅ Impossible Transition = 0
+  latency_p95_target_ms: 20     # ✅ P95 Latency ≤ 20ms
+  pool_usage_pct_max: 80        # ✅ DB Connection Pool 사용률 < 80% (300건/일은 부하 없음 — 확인만)
+  insert_failure_rate_target: 0 # ✅ INSERT 실패율 = 0 (CandidateCreated event 누락 건수 기준)
+  orphan_target: 0              # 보조 지표 (Trace Gap + Impossible 에 포함되지 않는 FK 이상)
+  schema_drift_stable_days: 7   # ✅ Schema Drift = 0 (수동 확인: reason_code/column 추가 없이 7일)

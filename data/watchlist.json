@@ -9,7 +9,7 @@
     "avg_profit_pct": 0,
     "total_trades": 0,
     "profit_factor": 0,
-    "last_check_time": "2026-06-27T08:50:10.715765"
+    "last_check_time": "2026-08-01T08:50:12.997744"
   },
   {
     "stock_code": "396470",
@@ -21,31 +21,31 @@
     "avg_profit_pct": 0,
     "total_trades": 0,
     "profit_factor": 0,
-    "last_check_time": "2026-06-27T08:50:10.715782"
+    "last_check_time": "2026-08-01T08:50:12.997759"
   },
   {
     "stock_code": "005930",
     "stock_name": "삼성전자",
     "market": "KOSPI",
-    "rs_rating": 91.66666666666666,
+    "rs_rating": 0,
     "ai_score": 0,
     "win_rate": 0,
     "avg_profit_pct": 0,
     "total_trades": 0,
     "profit_factor": 0,
-    "last_check_time": "2026-06-27T08:50:10.715788"
+    "last_check_time": "2026-08-01T08:50:12.997766"
   },
   {
     "stock_code": "000660",
     "stock_name": "SK하이닉스",
     "market": "KOSPI",
-    "rs_rating": 93.75,
+    "rs_rating": 0,
     "ai_score": 0,
     "win_rate": 0,
     "avg_profit_pct": 0,
     "total_trades": 0,
     "profit_factor": 0,
-    "last_check_time": "2026-06-27T08:50:10.715795"
+    "last_check_time": "2026-08-01T08:50:12.997770"
   },
   {
     "stock_code": "080220",
@@ -57,71 +57,107 @@
     "avg_profit_pct": 0,
     "total_trades": 0,
     "profit_factor": 0,
-    "last_check_time": "2026-06-27T08:50:10.715800"
+    "last_check_time": "2026-08-01T08:50:12.997773"
   },
   {
-    "stock_code": "402340",
-    "stock_name": "SK스퀘어",
-    "market": "KOSDAQ",
+    "stock_code": "138040",
+    "stock_name": "메리츠금융지주",
+    "market": "KOSPI",
     "rs_rating": 75.0,
     "ai_score": 0,
     "win_rate": 0,
     "avg_profit_pct": 0,
     "total_trades": 0,
     "profit_factor": 0,
-    "last_check_time": "2026-06-27T08:50:10.715806"
+    "last_check_time": "2026-08-01T08:50:12.997778"
   },
   {
-    "stock_code": "009150",
-    "stock_name": "삼성전기",
+    "stock_code": "236200",
+    "stock_name": "슈프리마",
     "market": "KOSPI",
-    "rs_rating": 93.33333333333333,
-    "ai_score": 0,
-    "win_rate": 0,
-    "avg_profit_pct": 0,
-    "total_trades": 0,
-    "profit_factor": 0,
-    "last_check_time": "2026-06-27T08:50:10.715810"
-  },
-  {
-    "stock_code": "420770",
-    "stock_name": "기가비스",
-    "market": "KOSDAQ",
-    "rs_rating": 87.5,
+    "rs_rating": 83.33333333333334,
     "ai_score": 0,
     "win_rate": 0.0,
-    "avg_profit_pct": -0.7102272727272727,
+    "avg_profit_pct": -1.7970401691331923,
     "total_trades": 1,
     "profit_factor": 0.0,
-    "last_check_time": "2026-06-27T08:50:10.715815"
+    "last_check_time": "2026-08-01T08:50:12.997782"
   },
   {
-    "stock_code": "095610",
-    "stock_name": "테스",
+    "stock_code": "099430",
+    "stock_name": "바이오플러스",
     "market": "KOSPI",
-    "rs_rating": 75.0,
+    "rs_rating": 71.42857142857143,
     "ai_score": 0,
     "win_rate": 0,
     "avg_profit_pct": 0,
     "total_trades": 0,
     "profit_factor": 0,
-    "last_check_time": "2026-06-27T08:50:10.715820"
+    "last_check_time": "2026-08-01T08:50:12.997787"
   },
   {
-    "stock_code": "319660",
-    "stock_name": "피에스케이",
+    "stock_code": "006220",
+    "stock_name": "제주은행",
+    "market": "KOSPI",
+    "rs_rating": 77.77777777777779,
+    "ai_score": 0,
+    "win_rate": 0.0,
+    "avg_profit_pct": -1.5739769150052465,
+    "total_trades": 1,
+    "profit_factor": 0.0,
+    "last_check_time": "2026-08-01T08:50:12.997794"
+  },
+  {
+    "stock_code": "119850",
+    "stock_name": "지엔씨에너지",
+    "market": "KOSPI",
+    "rs_rating": 76.92307692307693,
+    "ai_score": 0,
+    "win_rate": 100.0,
+    "avg_profit_pct": 4.681647940074907,
+    "total_trades": 3,
+    "profit_factor": 166550.0,
+    "last_check_time": "2026-08-01T08:50:12.997798"
+  },
+  {
+    "stock_code": "489460",
+    "stock_name": "바이오비쥬",
     "market": "KOSDAQ",
-    "rs_rating": 81.25,
+    "rs_rating": 71.42857142857143,
+    "ai_score": 0,
+    "win_rate": 71.42857142857143,
+    "avg_profit_pct": 1.3100874038617867,
+    "total_trades": 7,
+    "profit_factor": 1.743071161048689,
+    "last_check_time": "2026-08-01T08:50:12.997802"
+  },
+  {
+    "stock_code": "214150",
+    "stock_name": "클래시스",
+    "market": "KOSPI",
+    "rs_rating": 72.22222222222221,
     "ai_score": 0,
     "win_rate": 0,
     "avg_profit_pct": 0,
     "total_trades": 0,
     "profit_factor": 0,
-    "last_check_time": "2026-06-27T08:50:10.715825"
+    "last_check_time": "2026-08-01T08:50:12.997806"
   },
   {
-    "stock_code": "089970",
-    "stock_name": "브이엠",
+    "stock_code": "336570",
+    "stock_name": "원텍",
+    "market": "KOSDAQ",
+    "rs_rating": 81.81818181818183,
+    "ai_score": 0,
+    "win_rate": 0,
+    "avg_profit_pct": 0,
+    "total_trades": 0,
+    "profit_factor": 0,
+    "last_check_time": "2026-08-01T08:50:12.997810"
+  },
+  {
+    "stock_code": "267320",
+    "stock_name": "나인테크",
     "market": "KOSPI",
     "rs_rating": 88.88888888888889,
     "ai_score": 0,
@@ -129,42 +165,6 @@
     "avg_profit_pct": 0,
     "total_trades": 0,
     "profit_factor": 0,
-    "last_check_time": "2026-06-27T08:50:10.715830"
-  },
-  {
-    "stock_code": "214450",
-    "stock_name": "파마리서치",
-    "market": "KOSPI",
-    "rs_rating": 75.0,
-    "ai_score": 0,
-    "win_rate": 100.0,
-    "avg_profit_pct": 3.697284806470248,
-    "total_trades": 3,
-    "profit_factor": 1194500.0,
-    "last_check_time": "2026-06-27T08:50:10.715835"
-  },
-  {
-    "stock_code": "069960",
-    "stock_name": "현대백화점",
-    "market": "KOSPI",
-    "rs_rating": 77.77777777777779,
-    "ai_score": 0,
-    "win_rate": 0.0,
-    "avg_profit_pct": -1.8453865336658355,
-    "total_trades": 1,
-    "profit_factor": 0.0,
-    "last_check_time": "2026-06-27T08:50:10.715840"
-  },
-  {
-    "stock_code": "004170",
-    "stock_name": "신세계",
-    "market": "KOSPI",
-    "rs_rating": 73.33333333333333,
-    "ai_score": 0,
-    "win_rate": 0,
-    "avg_profit_pct": 0,
-    "total_trades": 0,
-    "profit_factor": 0,
-    "last_check_time": "2026-06-27T08:50:10.715845"
+    "last_check_time": "2026-08-01T08:50:12.997814"
   }
 ]

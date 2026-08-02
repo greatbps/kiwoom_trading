@@ -36,7 +36,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 LOG_DIR = Path("logs")
 ACCEPT_RE = re.compile(
     r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),\d+.*?"
-    r"✅ ACCEPT (\w+) @([\d,]+)원 \| PID:\d+ \| conf=([\d.]+) alpha=([+-][\d.]+)"
+    r"(?:✅ ACCEPT|🟡 CANDIDATE_ACCEPT) (\w+) @([\d,]+)원 \| PID:\d+ \| conf=([\d.]+) alpha=([+-][\d.]+)"
 )
 NTD_CHANGE_RE = re.compile(
     r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),\d+.*?"

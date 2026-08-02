@@ -81,7 +81,9 @@ class OptimizedExitLogic:
         self.market_regime: str = 'NEUTRAL'
 
         # 🔧 2026-01-20: 당일 매수 종목 강화 손절 설정
-        self.same_day_entry = self.risk_control.get('same_day_entry', {})
+        # [CBF-3 2026-07-20] 경로 수정: YAML 실제 위치는 risk_control이 아니라 trailing 하위
+        # (config/strategy_hybrid.yaml:43) — 잘못된 경로로 인해 이 기능이 한 번도 동작한 적 없었음.
+        self.same_day_entry = config.get('trailing', {}).get('same_day_entry', {})
         self.same_day_enabled = self.same_day_entry.get('enabled', False)
         self.same_day_stop_loss_pct = self.same_day_entry.get('stop_loss_pct', 1.5)  # 당일 매수: 타이트한 손절
         self.same_day_trailing_ratio = self.same_day_entry.get('trailing_ratio', 0.8)
@@ -283,6 +285,10 @@ class OptimizedExitLogic:
         threshold = (self.ef_threshold_override
                      if self.ef_threshold_override is not None
                      else config.get('score_threshold', 3))
+        # v1.2: reclaim 감지된 포지션은 threshold +1 (구조 살아있으면 더 관대하게)
+        if position.get('reclaim_detected', False):
+            _reclaim_bonus = int(config.get('reclaim_threshold_bonus', 1))
+            threshold = threshold + _reclaim_bonus
 
         # 관찰 구간 체크: min_observe ~ observe_minutes 사이만 판단
         if elapsed_minutes < min_observe_minutes or elapsed_minutes > observe_minutes:
@@ -594,15 +600,206 @@ class OptimizedExitLogic:
                         pass
                     if not _vol_surge:
                         logger.info(
-                            f"[OVERNIGHT_DEFER] {stock_code} 09:00~09:{_end_min:02d} HARD_STOP 유예 "
+                            f"[OVERNIGHT_DEFER] {position.get('stock_code','?')} 09:00~09:{_end_min:02d} HARD_STOP 유예 "
                             f"(pnl={profit_pct:.2f}%, vol_ratio={_vol_ratio:.2f}x<{_vol_surge_ratio}x)"
                         )
                         return False, f"오버나이트 개장 유예 ({profit_pct:.2f}%)", None
                     else:
                         logger.warning(
-                            f"[OVERNIGHT_DEFER_SKIP] {stock_code} 거래량 급증 "
+                            f"[OVERNIGHT_DEFER_SKIP] {position.get('stock_code','?')} 거래량 급증 "
                             f"({_vol_ratio:.2f}x≥{_vol_surge_ratio}x) → 유예 해제"
                         )
+
+        # ====================================================
+        # 1-d. LOSS CONTROL LAYER v2
+        #   (A) Early Cut 2.0: RSI slope+3봉VWAP+volume decay → 즉시 컷
+        #   (B) Time Stop Dynamic: bdh 적응형 + MFE 정체 감지
+        #   (C) Vol Tight Stop: 고변동성 날 tighter stop (비스윙)
+        #   (D) MFE/MAE Stagnation Exit: 수익 없이 신저점 → 컷
+        # ====================================================
+        _lcl = self.risk_control.get('loss_control_layer', {})
+        if _lcl.get('enabled', False) and profit_pct < 0 and df is not None and len(df) >= 6:
+
+            # ── (A) Early Cut 2.0 ──────────────────────────────────
+            # RSI < threshold AND RSI 하락추세 AND VWAP 3봉 이탈 AND 거래량 수축+decay
+            _ec = _lcl.get('early_cut', {})
+            if _ec.get('enabled', False):
+                # v1.2: reclaim 포지션은 min_loss 기준 완화 (구조 살아있는 되돌림 허용)
+                if position.get('reclaim_detected', False) and 'reclaim_relaxed_loss_pct' in _ec:
+                    _ec_min_loss = -abs(float(_ec.get('reclaim_relaxed_loss_pct', 0.8)))
+                else:
+                    _ec_min_loss = -abs(float(_ec.get('min_loss_pct', 0.5)))
+                if profit_pct <= _ec_min_loss:
+                    try:
+                        _ec_rsi_thr   = float(_ec.get('rsi_threshold', 38))
+                        _ec_vwap_n    = int(_ec.get('vwap_periods', 3))
+                        _ec_vol_r     = float(_ec.get('volume_ratio', 0.7))
+                        _ec_slope_chk = _ec.get('rsi_slope_check', True)
+                        _ec_decay_chk = _ec.get('volume_decay_check', True)
+
+                        _ec_rsi_v = _ec_slope_v = _ec_vwap_v = _ec_vol_v = _ec_decay_v = False
+
+                        if 'rsi' in df.columns and len(df) >= 3:
+                            _rsi_cur = float(df['rsi'].iloc[-1])
+                            _ec_rsi_v = _rsi_cur < _ec_rsi_thr
+                            if _ec_slope_chk:
+                                # RSI 하락 추세: 최근 2봉 연속 하락
+                                _ec_slope_v = (
+                                    float(df['rsi'].iloc[-1]) < float(df['rsi'].iloc[-2])
+                                )
+                            else:
+                                _ec_slope_v = True
+
+                        if 'vwap' in df.columns and len(df) >= _ec_vwap_n:
+                            _vc = df['close'].iloc[-_ec_vwap_n:]
+                            _vv = df['vwap'].iloc[-_ec_vwap_n:]
+                            _ec_vwap_v = all(float(c) < float(v) for c, v in zip(_vc, _vv))
+
+                        if 'volume' in df.columns and len(df) >= 6:
+                            _avg_v5 = float(df['volume'].iloc[-6:-1].mean())
+                            if _avg_v5 > 0:
+                                _ec_vol_v = float(df['volume'].iloc[-1]) < _avg_v5 * _ec_vol_r
+                            if _ec_decay_chk and len(df) >= 2:
+                                # 거래량 decay 추세: 현재봉 < 직전봉 (감소 중)
+                                _ec_decay_v = (
+                                    float(df['volume'].iloc[-1]) < float(df['volume'].iloc[-2])
+                                )
+                            else:
+                                _ec_decay_v = True
+
+                        if _ec_rsi_v and _ec_slope_v and _ec_vwap_v and _ec_vol_v and _ec_decay_v:
+                            _ec_reason = (
+                                f"[EARLY_CUT] RSI<{_ec_rsi_thr:.0f}↓ VWAP이탈{_ec_vwap_n}봉 "
+                                f"거래량수축↓ pnl={profit_pct:.2f}%"
+                            )
+                            logger.info(_ec_reason)
+                            console.print(f"[bold yellow]⚡ {_ec_reason}[/bold yellow]")
+                            return True, _ec_reason, {
+                                'profit_pct': profit_pct,
+                                'use_market_order': False,
+                                'emergency': False,
+                            }
+                    except Exception:
+                        pass
+
+            # ── (B) Time Stop Dynamic — 비스윙 전용 ──────────────────
+            # bdh 기반 적응형 임계 + MFE 정체 서브 조건
+            _ts = _lcl.get('time_stop', {})
+            if _ts.get('enabled', False) and not _is_swing:
+                _ts_base_min  = float(_ts.get('max_loss_minutes', 20))
+                _ts_min_loss  = -abs(float(_ts.get('min_loss_pct_trigger', 0.8)))
+                _ts_hv_bdh    = float(_ts.get('high_vol_bdh_pct', 5.0))
+                _ts_hv_min    = float(_ts.get('high_vol_minutes', 15))
+                _ts_vhv_bdh   = float(_ts.get('very_high_vol_bdh_pct', 10.0))
+                _ts_vhv_min   = float(_ts.get('very_high_vol_minutes', 12))
+
+                # bdh 계산 → 적응형 임계 결정
+                _ts_max_min = _ts_base_min
+                try:
+                    _dh_ts = float(df['high'].max())
+                    _dl_ts = float(df['low'].min())
+                    if _dl_ts > 0:
+                        _bdh_ts = (_dh_ts - _dl_ts) / _dl_ts * 100
+                        if _bdh_ts >= _ts_vhv_bdh:
+                            _ts_max_min = _ts_vhv_min
+                        elif _bdh_ts >= _ts_hv_bdh:
+                            _ts_max_min = _ts_hv_min
+                except Exception:
+                    pass
+
+                # 표준 Time Stop
+                if elapsed_minutes >= _ts_max_min and profit_pct <= _ts_min_loss:
+                    _ts_reason = (
+                        f"[TIME_STOP] {elapsed_minutes:.0f}분≥{_ts_max_min:.0f}분 "
+                        f"손실지속 pnl={profit_pct:.2f}%"
+                    )
+                    logger.info(_ts_reason)
+                    console.print(f"[bold yellow]⚡ {_ts_reason}[/bold yellow]")
+                    return True, _ts_reason, {
+                        'profit_pct': profit_pct,
+                        'use_market_order': False,
+                        'emergency': False,
+                    }
+
+                # MFE 정체 서브 조건: 포지션이 수익 구간 진입 못하고 시간만 흐를 때
+                if _ts.get('mfe_stagnation_enabled', True):
+                    _ts_mfe_min   = float(_ts.get('mfe_stagnation_minutes', 20))
+                    _ts_mfe_thr   = float(_ts.get('mfe_stagnation_pct', 0.3))
+                    _ts_mfe_loss  = -abs(float(_ts.get('mfe_stagnation_loss_pct', 0.3)))
+                    _live_mfe_ts  = position.get('mfe_pct')
+                    if (_live_mfe_ts is not None
+                            and elapsed_minutes >= _ts_mfe_min
+                            and profit_pct <= _ts_mfe_loss
+                            and float(_live_mfe_ts) < _ts_mfe_thr):
+                        _ts_mfe_reason = (
+                            f"[TIME_STOP_MFE] MFE={float(_live_mfe_ts):.2f}%<{_ts_mfe_thr}% "
+                            f"{elapsed_minutes:.0f}분 pnl={profit_pct:.2f}%"
+                        )
+                        logger.info(_ts_mfe_reason)
+                        console.print(f"[bold yellow]⚡ {_ts_mfe_reason}[/bold yellow]")
+                        return True, _ts_mfe_reason, {
+                            'profit_pct': profit_pct,
+                            'use_market_order': False,
+                            'emergency': False,
+                        }
+
+            # ── (C) Vol Tight Stop — 비스윙 전용 ────────────────────
+            _vt = _lcl.get('vol_tight_stop', {})
+            if _vt.get('enabled', False) and not _is_swing:
+                try:
+                    _bdh_thr   = float(_vt.get('bdh_threshold', 5.0))
+                    _tight_pct = float(_vt.get('tight_stop_pct', 2.5))
+                    _dh = float(df['high'].max())
+                    _dl = float(df['low'].min())
+                    if _dl > 0:
+                        _bdh = (_dh - _dl) / _dl * 100
+                        if _bdh >= _bdh_thr and profit_pct <= -_tight_pct:
+                            _vt_reason = (
+                                f"[VOL_TIGHT_STOP] bdh={_bdh:.1f}%≥{_bdh_thr}% "
+                                f"pnl={profit_pct:.2f}% ≤ -{_tight_pct}%"
+                            )
+                            logger.info(_vt_reason)
+                            console.print(f"[bold yellow]⚡ {_vt_reason}[/bold yellow]")
+                            return True, _vt_reason, {
+                                'profit_pct': profit_pct,
+                                'use_market_order': False,
+                                'emergency': False,
+                            }
+                except Exception:
+                    pass
+
+            # ── (D) MFE/MAE Stagnation Exit — 비스윙 전용 ──────────
+            # 핵심: 수익 한 번도 못 봄(MFE 정체) + 신저점 접근(MAE 악화) → 즉시 컷
+            _mfm = _lcl.get('mfe_mae_exit', {})
+            if _mfm.get('enabled', False) and not _is_swing:
+                _mfm_mfe_thr  = float(_mfm.get('mfe_stagnation_pct', 0.3))
+                _mfm_loss_thr = -abs(float(_mfm.get('min_loss_pct', 0.3)))
+                _mfm_min_el   = float(_mfm.get('min_elapsed_minutes', 10))
+                _mfm_mae_rat  = float(_mfm.get('mae_worsening_ratio', 0.95))
+                _live_mfe = position.get('mfe_pct')
+                _live_mae = position.get('mae_pct')
+                if (_live_mfe is not None
+                        and elapsed_minutes >= _mfm_min_el
+                        and profit_pct <= _mfm_loss_thr):
+                    _mfe_stag = float(_live_mfe) < _mfm_mfe_thr
+                    # MAE 악화: 현재 손실이 역대 최저점에 근접 (신저점 접근)
+                    _mae_worse = (
+                        _live_mae is not None
+                        and _live_mae > 0
+                        and abs(profit_pct) >= float(_live_mae) * _mfm_mae_rat
+                    )
+                    if _mfe_stag and _mae_worse:
+                        _mfm_reason = (
+                            f"[MAE_WORSENING] MFE={float(_live_mfe):.2f}%<{_mfm_mfe_thr}% "
+                            f"MAE신저점접근 pnl={profit_pct:.2f}%"
+                        )
+                        logger.info(_mfm_reason)
+                        console.print(f"[bold red]🚨 {_mfm_reason}[/bold red]")
+                        return True, _mfm_reason, {
+                            'profit_pct': profit_pct,
+                            'use_market_order': False,
+                            'emergency': False,
+                        }
 
         # ====================================================
         # 2. 구조 손절 / Hard Stop (가장 높은 우선순위)
@@ -666,7 +863,7 @@ class OptimizedExitLogic:
                 elif profit_pct <= -max_stop_pct:
                     # 구조 손절 없음 경고 (아직 -12% 미달이므로 청산 안 함, 로그만)
                     logger.warning(
-                        f"[SWING_NO_STRUCTURE_STOP] {stock_code} 구조손절 미설정 "
+                        f"[SWING_NO_STRUCTURE_STOP] {position.get('stock_code','?')} 구조손절 미설정 "
                         f"({profit_pct:.2f}%) — SWING_HARD_STOP_PCT={_swing_hard_stop}% 까지 허용"
                     )
             else:
@@ -800,6 +997,41 @@ class OptimizedExitLogic:
                 _af_reason = f"[A_FORCE_EXIT] {_bars_since}봉 ≥ {_a_max}봉, pnl={profit_pct:+.2f}%"
                 logger.info(_af_reason)
                 return True, _af_reason, {'a_force_exit': True, 'profit_pct': profit_pct}
+
+        # ====================================================
+        # 5-B. Stage B — Trend Extension (SCAFFOLD, enabled: false)
+        #   활성화 조건: E2(30건+) + TRAIL_STOP 조기이탈 MFE 분석 완료 후
+        #   효과: 추세 지속 신호 감지 시 TRAIL atr_multiplier 완화
+        #   현재 상태: disabled (데이터 분석 결과 적용 대상 exits=0건)
+        # ====================================================
+        _sb_cfg = self.config.get('smc.stage_b_trend_extension', {})
+        if _sb_cfg.get('enabled', False) and profit_pct >= _sb_cfg.get('min_profit_pct', 1.0):
+            try:
+                _sb_rsi_min = _sb_cfg.get('min_rsi', 50)
+                _sb_need_vwap = _sb_cfg.get('require_above_vwap', True)
+                _sb_need_hh = _sb_cfg.get('require_hh', True)
+                _sb_rsi_ok = False
+                _sb_vwap_ok = not _sb_need_vwap
+                _sb_hh_ok = not _sb_need_hh
+
+                if df is not None and len(df) >= 5:
+                    if 'rsi' in df.columns:
+                        _sb_rsi_ok = float(df['rsi'].iloc[-1]) >= _sb_rsi_min
+                    if _sb_need_vwap and 'vwap' in df.columns:
+                        _sb_vwap_ok = current_price >= float(df['vwap'].iloc[-1])
+                    if _sb_need_hh:
+                        _sb_hh_ok = float(df['high'].iloc[-1]) >= float(df['high'].iloc[-3:].max())
+
+                if _sb_rsi_ok and _sb_vwap_ok and _sb_hh_ok:
+                    logger.debug(
+                        f"[STAGE_B] 추세 지속 확인 — RSI={df['rsi'].iloc[-1]:.0f} "
+                        f"VWAP=OK HH=OK pnl={profit_pct:+.2f}% → TRAIL multiplier 완화 대기"
+                    )
+                    # 현재: TRAIL atr_multiplier 완화는 섹션 6에서 동적으로 적용됨
+                    # 향후: position에 'stage_b_active' 플래그 저장 후 섹션 6에서 읽기
+                    position['stage_b_active'] = True
+            except Exception:
+                pass
 
         # ====================================================
         # 6. ATR 트레일링 — 3단 tightening (수익 커질수록 타이트)

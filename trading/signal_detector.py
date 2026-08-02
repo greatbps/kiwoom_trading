@@ -371,46 +371,6 @@ class SignalDetector:
             console.print(f"[red]❌ {stock_code} 매도 신호 체크 실패: {e}[/red]")
             raise
 
-    def calculate_signal_confidence(
-        self,
-        df: pd.DataFrame,
-        stock_info: Optional[Dict] = None
-    ) -> float:
-        """
-        신호 신뢰도 계산
-
-        Args:
-            df: 신호가 생성된 데이터프레임
-            stock_info: 종목 정보 (백테스트 stats 포함)
-
-        Returns:
-            신뢰도 (0.0~1.0)
-        """
-        confidence = 0.5  # 기본값
-
-        # 1. VWAP 거리 (가까울수록 신뢰도 높음)
-        latest = df.iloc[-1]
-        price_vs_vwap_pct = abs((latest['close'] - latest['vwap']) / latest['vwap'] * 100)
-        vwap_score = max(0, 1.0 - price_vs_vwap_pct / 10)  # 10% 거리면 0점
-
-        # 2. 거래량 (평균 대비 높을수록 신뢰도 높음)
-        if 'volume_ma' in df.columns:
-            volume_ratio = latest['volume'] / latest['volume_ma'] if latest['volume_ma'] > 0 else 1.0
-            volume_score = min(1.0, volume_ratio / 2.0)  # 2배면 만점
-        else:
-            volume_score = 0.5
-
-        # 3. 백테스트 승률 (있으면 반영)
-        backtest_score = 0.5
-        if stock_info and 'stats' in stock_info:
-            win_rate = stock_info['stats'].get('win_rate', 0)
-            backtest_score = win_rate / 100.0  # 60% 승률 → 0.6
-
-        # 가중 평균
-        confidence = (vwap_score * 0.3 + volume_score * 0.3 + backtest_score * 0.4)
-
-        return max(0.0, min(1.0, confidence))
-
     def get_signal_strength(self, df: pd.DataFrame) -> str:
         """
         신호 강도 판정

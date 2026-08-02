@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import datetime, time as dtime
 from pathlib import Path
 from typing import Tuple
@@ -37,6 +38,9 @@ from typing import Tuple
 logger = logging.getLogger(__name__)
 
 _STATE_PATH   = Path(__file__).parent.parent / 'data' / 'equity_state.json'
+_BACKUP_PATH  = Path(__file__).parent.parent / 'data' / 'equity_state.json.bak'
+_STATE_TMP    = Path(__file__).parent.parent / 'data' / 'equity_state.json.tmp'
+_BACKUP_TMP   = Path(__file__).parent.parent / 'data' / 'equity_state.json.bak.tmp'
 _WEIGHTS_PATH = Path(__file__).parent.parent / 'data' / 'pattern_weights.json'
 
 _EOD_TIME = dtime(15, 20)   # 이 시각 이후에만 update_peak() 허용
@@ -48,28 +52,91 @@ class EquityController:
     def __init__(self, config: dict):
         self._cfg  = config.get('equity_control', {})
         self._peak: float = 0.0
+        self.state_integrity = 'OK'  # OK | BACKUP_USED | RECOVERED_FROM_DB | RECOVERY_FAILED
         self._load()
 
     # ── 상태 I/O ──────────────────────────────────────────────────────
 
-    def _load(self):
-        if not _STATE_PATH.exists():
-            return
+    @staticmethod
+    def _atomic_write(path: Path, tmp_path: Path, payload: str):
+        """임시파일 기록 → fsync → 원자적 rename (프로세스 강제종료 시 손상 파일 방지)."""
+        path.parent.mkdir(exist_ok=True)
+        with open(tmp_path, 'w', encoding='utf-8') as f:
+            f.write(payload)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)  # 동일 파일시스템 내 rename은 원자적
+
+    def _recover_peak_from_db(self):
+        """[T3] Primary/Backup 모두 손상 시 — account_snapshot 이력에서 peak 재구성 시도."""
         try:
-            data = json.loads(_STATE_PATH.read_text(encoding='utf-8'))
-            self._peak = float(data.get('peak', 0.0))
-            logger.info(f"[EQUITY_CTRL] peak 복원: {self._peak:,.0f}원")
+            import psycopg2
+            conn = psycopg2.connect(
+                host=os.getenv("POSTGRES_HOST", "localhost"),
+                dbname=os.getenv("POSTGRES_DB", "trading_system"),
+                user=os.getenv("POSTGRES_USER", "postgres"),
+                password=os.getenv("POSTGRES_PASSWORD", ""),
+            )
+            cur = conn.cursor()
+            cur.execute("SELECT MAX(total_assets) FROM account_snapshot")
+            row = cur.fetchone()
+            conn.close()
+            if row and row[0] and float(row[0]) > 0:
+                return float(row[0])
         except Exception as e:
-            logger.warning(f"[EQUITY_CTRL] 상태 로드 실패: {e}")
+            logger.debug(f"[EQUITY_CTRL] DB peak 복구 조회 실패: {e}")
+        return None
+
+    def _load(self):
+        # 1) Primary
+        if _STATE_PATH.exists():
+            try:
+                data = json.loads(_STATE_PATH.read_text(encoding='utf-8'))
+                self._peak = float(data.get('peak', 0.0))
+                self.state_integrity = 'OK'
+                logger.info(f"[EQUITY_CTRL] peak 복원(primary): {self._peak:,.0f}원")
+                return
+            except Exception as e:
+                logger.warning(f"[EQUITY_CTRL] Primary 상태 로드 실패: {e}")
+
+        # 2) Backup
+        if _BACKUP_PATH.exists():
+            try:
+                data = json.loads(_BACKUP_PATH.read_text(encoding='utf-8'))
+                self._peak = float(data.get('peak', 0.0))
+                self.state_integrity = 'BACKUP_USED'
+                logger.warning(f"[EQUITY_CTRL] Primary 손상 → Backup에서 peak 복원: {self._peak:,.0f}원")
+                return
+            except Exception as e:
+                logger.warning(f"[EQUITY_CTRL] Backup 상태 로드도 실패: {e}")
+
+        # 3) Recovery — DB(account_snapshot 이력 최고 자산)로 재구성 시도
+        recovered = self._recover_peak_from_db()
+        if recovered is not None:
+            self._peak = recovered
+            self.state_integrity = 'RECOVERED_FROM_DB'
+            logger.critical(
+                f"[EQUITY_CTRL] Primary/Backup 모두 손상 → DB 이력으로 peak 복구: {self._peak:,.0f}원. "
+                f"상태파일 손상 원인 점검 필요"
+            )
+            self._save()  # 복구된 값을 정상 상태로 즉시 재영속화
+            return
+
+        # 4) 완전 실패 — peak=0 유지, Health Check가 반드시 감지해야 함
+        self.state_integrity = 'RECOVERY_FAILED'
+        logger.critical(
+            "[EQUITY_CTRL] Primary/Backup/DB 복구 모두 실패 — peak=0 유지. "
+            "드로다운 서킷브레이커 무력화 가능 상태, System Health Check FAIL 확인 필요"
+        )
 
     def _save(self):
         try:
-            _STATE_PATH.parent.mkdir(exist_ok=True)
-            _STATE_PATH.write_text(
-                json.dumps({'peak': self._peak, 'updated_at': datetime.now().isoformat()},
-                           ensure_ascii=False, indent=2),
-                encoding='utf-8',
+            payload = json.dumps(
+                {'peak': self._peak, 'updated_at': datetime.now().isoformat()},
+                ensure_ascii=False, indent=2,
             )
+            self._atomic_write(_STATE_PATH, _STATE_TMP, payload)
+            self._atomic_write(_BACKUP_PATH, _BACKUP_TMP, payload)
         except Exception as e:
             logger.warning(f"[EQUITY_CTRL] 상태 저장 실패: {e}")
 
@@ -102,6 +169,10 @@ class EquityController:
         """DD ≤ max_dd_halt(-18%) → 신규 진입 전면 차단."""
         if not self._cfg.get('enabled', True):
             return True, 'disabled'
+        # [CBF-1 2026-07-20] Fail Closed: NaN은 예외 없이 비교식을 전부 False로 통과시켜
+        # 무음으로 EC_OK(허용) 처리되던 버그 — equity 계산 자체가 무효하므로 명시적 차단.
+        if equity != equity:  # NaN 검사 (math.isnan 대신 자기비교 — equity가 None일 수도 있어 안전)
+            return False, 'EC_HALT_EXCEPTION: equity=NaN (계산값 무효, Fail Closed)'
         if self._peak <= 0 or equity <= 0:
             return True, 'no_peak'
         halt_pct = self._cfg.get('max_dd_halt', -0.18)

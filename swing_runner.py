@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sys
 from datetime import datetime, date
 from pathlib import Path
@@ -117,6 +118,139 @@ def load_config() -> dict:
     return yaml.safe_load(CONFIG_PATH.read_text(encoding='utf-8'))
 
 
+_SWING_RUNNER_LOG_PATH = Path("logs/swing_runner.log")
+_TREND_GAP_LOG_RE = re.compile(r'trend_gap=([+-]?[\d.]+)%')
+_LOG_DATE_RE = re.compile(r'^(\d{4}-\d{2}-\d{2})')
+
+
+def _load_trend_gap_history(log_path: Path = _SWING_RUNNER_LOG_PATH, n: int = 4) -> list[tuple[str, float]]:
+    """logs/swing_runner.log에서 이전 최대 n거래일의 (날짜, trend_gap%) 이력을 읽는다.
+    관측성 전용 — 읽기만 하며 매매 로직에는 관여하지 않는다.
+    같은 날짜에 여러 줄이 있으면 그날의 마지막 값을 사용(재실행 대비)."""
+    if not log_path.exists():
+        return []
+    by_date: dict[str, float] = {}
+    try:
+        with open(log_path, encoding='utf-8', errors='replace') as f:
+            for line in f:
+                if '[SWING_REGIME]' not in line or 'trend_gap=' not in line:
+                    continue
+                dm = _LOG_DATE_RE.match(line)
+                gm = _TREND_GAP_LOG_RE.search(line)
+                if dm and gm:
+                    by_date[dm.group(1)] = float(gm.group(1))
+    except Exception:
+        return []
+    dates = sorted(by_date.keys())[-n:]
+    return [(d, by_date[d]) for d in dates]
+
+
+_MOMENTUM_ARROW = {'WIDENING': '↑', 'NARROWING': '↓', 'STABLE': '→'}
+
+
+def _classify_momentum(change: float) -> str:
+    """Daily Change 부호/크기로 방향성 분류. 로그 표시용 — Regime 판정에는 쓰지 않는다."""
+    if change > 0.30:
+        return 'WIDENING'
+    if change < -0.30:
+        return 'NARROWING'
+    return 'STABLE'
+
+
+def _log_trend_gap_report(regime: str, current_gap_pct: float, history: list[tuple[str, float]]) -> None:
+    """Trend Gap 변화율/전환거리 리포트 (로그 출력 전용, 매매 로직 영향 없음).
+
+    `history`는 호출자가 이번 실행에서 [SWING_REGIME] 라인을 기록하기 *전에*
+    미리 읽어 전달한다 — 그래야 방금 이번 실행이 직접 쓴 오늘자 로그를
+    History로 다시 읽어들이는 자기참조를 피할 수 있다 (Load History → Trend
+    Calculation → Summary → Write Log 순서).
+    """
+    try:
+        # ⚠️ History/Average/ETA는 로그 파일에 이미 기록된(=이전 실행에서 확정된) 값만 사용한다.
+        # 오늘 방금 계산한 값(current_gap_pct)은 실행 시점에 따라 장중 미확정치일 수 있어
+        # 통계 계산에 섞으면 "종가 4개 + 장중 1개"가 뒤섞여 Average/ETA가 왜곡된다.
+        # → 오늘 값은 별도로 (LIVE) 표시만 하고, History/Average/ETA에서는 제외한다.
+        gap_change: Optional[float] = None       # LIVE vs 직전 확정 종가
+        avg_change: Optional[float] = None       # 확정 종가 기준 최근 추세
+
+        logger.info(f"[SWING_REGIME_TREND] Regime              : {regime}")
+        logger.info(f"[SWING_REGIME_TREND] Trend Gap (LIVE)    : {current_gap_pct:+.2f}%")
+
+        if history:
+            last_confirmed_date, prev_gap = history[-1]
+            logger.info(f"[SWING_REGIME_TREND] Trend Gap (Last EOD, {last_confirmed_date}) : {prev_gap:+.2f}%")
+
+            gap_change = current_gap_pct - prev_gap
+            abs_change = abs(gap_change)
+            if abs_change < 0.3:
+                speed = 'STABLE'
+            elif abs_change < 0.8:
+                speed = 'NORMAL'
+            else:
+                speed = 'FAST'
+            daily_momentum = _classify_momentum(gap_change)
+            logger.info(f"[SWING_REGIME_TREND] Daily Change (vs Last EOD) : {gap_change:+.2f}%")
+            logger.info(f"[SWING_REGIME_TREND] Momentum            : {_MOMENTUM_ARROW[daily_momentum]} {daily_momentum}")
+            logger.info(f"[SWING_REGIME_TREND] Speed               : {speed}")
+        else:
+            logger.info("[SWING_REGIME_TREND] Daily Change        : N/A (이전 확정 이력 없음)")
+            logger.info("[SWING_REGIME_TREND] Momentum            : N/A")
+
+        distance_to_neutral = current_gap_pct - 0.50
+        logger.info(f"[SWING_REGIME_TREND] Distance to Neutral : {distance_to_neutral:+.2f}%")
+
+        if distance_to_neutral <= 1.0:
+            logger.info("[SWING_REGIME_TREND] *** REGIME TRANSITION WATCH *** — Regime transition likely soon")
+
+        # History/Average/ETA는 확정 종가만 사용 (오늘 LIVE값은 포함 안 함)
+        logger.info(f"[SWING_REGIME_TREND] Trend Gap History (최대 5거래일, 확정 종가 기준, 오늘 미포함):")
+        if history:
+            for d, g in history:
+                logger.info(f"[SWING_REGIME_TREND]   {d}  {g:+.2f}%")
+        else:
+            logger.info("[SWING_REGIME_TREND]   (확정 이력 없음)")
+
+        if len(history) >= 2:
+            deltas = [history[i][1] - history[i - 1][1] for i in range(1, len(history))]
+            avg_change = sum(deltas) / len(deltas)
+            logger.info(f"[SWING_REGIME_TREND] Average Daily Change (확정 종가 기준) : {avg_change:+.2f}%")
+
+            if avg_change < 0:
+                eta_days = distance_to_neutral / abs(avg_change)
+                if eta_days >= 0:
+                    logger.info(
+                        f"[SWING_REGIME_TREND] Estimated Days to Neutral (Reference Only, 참고용, 매매 로직 미사용) : "
+                        f"≈ {eta_days:.1f} trading days"
+                    )
+                else:
+                    logger.info("[SWING_REGIME_TREND] Estimated Days to Neutral (Reference Only) : N/A (이미 임계값 통과)")
+            else:
+                logger.info("[SWING_REGIME_TREND] Estimated Days to Neutral (Reference Only) : N/A (gap 감소 추세 아님)")
+        else:
+            logger.info("[SWING_REGIME_TREND] Average Daily Change : N/A (확정 이력 부족, 2일 이상 필요)")
+
+        # ── Summary: LIVE 방향 + 최근 확정 추세 방향을 합쳐 한 줄 요약 ──────────
+        logger.info("[SWING_REGIME_TREND] Summary:")
+        if gap_change is None or avg_change is None:
+            logger.info("[SWING_REGIME_TREND]   Trend Gap summary unavailable (확정 이력 부족).")
+        else:
+            live_dir = _classify_momentum(gap_change)
+            trend_dir = _classify_momentum(avg_change)
+            if live_dir == 'STABLE' and trend_dir == 'STABLE':
+                summary = "Trend Gap is stable with no meaningful regime momentum."
+            elif live_dir == trend_dir == 'NARROWING':
+                summary = "Trend Gap continues to narrow toward Neutral."
+            elif live_dir == trend_dir == 'WIDENING':
+                summary = "Trend Gap continues to widen, moving further from Neutral."
+            else:
+                summary = (
+                    f"Trend Gap is {live_dir.lower()} today but long-term trend remains {trend_dir.lower()}."
+                )
+            logger.info(f"[SWING_REGIME_TREND]   {summary}")
+    except Exception as e:
+        logger.warning(f"[SWING_REGIME_TREND] 계산 실패 (무시, 매매 영향 없음): {e}")
+
+
 def get_market_regime() -> str:
     """
     KOSPI 지수(^KS11) 2단 레짐 판단 (선행성 보완).
@@ -154,11 +288,16 @@ def get_market_regime() -> str:
         else:
             regime = 'NEUTRAL'
 
+        # Load History → Trend Calculation → Summary → Write Log 순서 보장을 위해
+        # 이번 실행이 [SWING_REGIME] 라인을 기록하기 전에 먼저 과거 이력을 읽는다.
+        trend_gap_history = _load_trend_gap_history(n=5)   # 이전 확정 거래일 최대 5개 (오늘 제외)
+
         logger.info(
             f"[SWING_REGIME] {regime} | close={cur_close:.0f} "
             f"EMA20={ema20:.0f} EMA60={ema60:.0f} "
             f"trend_gap={ema20/ema60-1:+.2%} mom={'↑' if mom_bull else '↓'}"
         )
+        _log_trend_gap_report(regime, (ema20 / ema60 - 1) * 100, trend_gap_history)
         return regime
     except Exception as e:
         logger.warning(f"[SWING_REGIME] 레짐 판단 실패: {e} → NEUTRAL")
@@ -468,17 +607,77 @@ def scan_new_signals(
                         )
                         continue
 
+        # ── AI Gate ──────────────────────────────────────────────────────────
+        # 정책: strategy_hybrid.yaml swing.ai_gate 섹션 참조
+        # AI score(0-100) < min_score → 차단 / pass_on_error=true → 오류 시 통과
+        _ai_sc = None   # AI Gate 비활성 시에도 all_signals에 포함시키기 위해 초기화
+        _ai_rc = None
+        _ai_gate_cfg = swing_cfg.get('ai_gate', {})
+        if _ai_gate_cfg.get('enabled', False):
+            _ai_min   = float(_ai_gate_cfg.get('min_score', 50))
+            _ai_bw    = bool(_ai_gate_cfg.get('block_watch', False))
+            _ai_to    = float(_ai_gate_cfg.get('timeout_seconds', 20))
+            _ai_pass  = bool(_ai_gate_cfg.get('pass_on_error', True))
+            _ai_block = False
+            _ai_det   = ''
+            try:
+                import concurrent.futures as _cf
+                from analyzers.analysis_engine import AnalysisEngine as _AE
+                _ae = _AE()
+                with _cf.ThreadPoolExecutor(max_workers=1) as _pool:
+                    _fut = _pool.submit(_ae.analyze, code, name)
+                    try:
+                        _ar    = _fut.result(timeout=_ai_to)
+                        _ai_sc = _ar.get('final_score', 100)
+                        _ai_rc = _ar.get('recommendation', '중립')
+                        if _ai_sc < _ai_min:
+                            _ai_block = True
+                            _ai_det   = f"ai={_ai_sc:.0f}<{_ai_min}"
+                            logger.info(
+                                f"[AI_GATE] {code} {name} 차단: score={_ai_sc:.0f}<{_ai_min}"
+                            )
+                        elif _ai_bw and _ai_rc == '관망':
+                            _ai_block = True
+                            _ai_det   = '추천=관망'
+                            logger.info(f"[AI_GATE] {code} {name} 차단: 추천=관망")
+                        else:
+                            logger.info(
+                                f"[AI_GATE] {code} {name} 통과: ai={_ai_sc:.0f} 추천={_ai_rc}"
+                            )
+                    except _cf.TimeoutError:
+                        _ai_block = not _ai_pass
+                        _ai_det   = f'timeout>{_ai_to:.0f}s'
+                        logger.warning(
+                            f"[AI_GATE] {code} {name} 타임아웃 → "
+                            f"{'차단' if _ai_block else '통과'}"
+                        )
+            except Exception as _ae_err:
+                _ai_block = not _ai_pass
+                _ai_det   = f'error'
+                logger.warning(
+                    f"[AI_GATE] {code} {name} 분석 오류: {_ae_err} → "
+                    f"{'차단' if _ai_block else '통과'}"
+                )
+            if _ai_block:
+                signal_status[code] = {
+                    'name': name, 'score': signal['final_score'],
+                    'status': 'AI_GATE', 'detail': _ai_det,
+                }
+                continue
+
         signal_status[code] = {'name': name, 'score': signal['final_score'], 'status': 'PENDING'}
         all_signals.append({
             'code': code,
             'name': name,
             'sector': stock.get('sector', '') or 'UNKNOWN',
             'action': 'BUY',
+            'ai_score': _ai_sc,   # AnalysisEngine 0-100 (None if gate disabled)
+            'ai_rec':   _ai_rc,
             **signal,
         })
         logger.info(
             f"[SWING_RUN] {code} {name} 신호: {signal['pattern']} "
-            f"score={signal['final_score']} entry={signal['entry']}"
+            f"score={signal['final_score']} ai={_ai_sc} entry={signal['entry']}"
         )
 
     # 최종 점수 내림차순 정렬

@@ -80,6 +80,14 @@ def _score(pair: TradePair = None, **kwargs) -> TradeScore:
     return score_pair(pair or _pair(**kwargs))
 
 
+# ⚠️ 날짜를 하드코딩하면 시간이 지나 조용히 깨진다.
+#    `_load_pairs(db, 90)` 은 `now - 90일` 이후만 읽는데, 픽스처가
+#    "2026-05-01" 로 박혀 있어 2026-07-31 부터 90일 창 밖으로 밀려났다
+#    (Manifest 동결일 07-28 에는 통과 → 그 뒤 자동으로 실패).
+#    코드가 아니라 테스트가 만료된 것이므로, 기준을 상대값으로 바꾼다.
+_DAY = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+
+
 def _make_db(tmp_path: Path) -> Path:
     """빈 trades.db를 tmp_path에 생성. 스키마만 있음."""
     db = tmp_path / "trades.db"
@@ -113,8 +121,8 @@ def _make_db(tmp_path: Path) -> Path:
 
 def _insert_trade(db: Path, **kwargs):
     defaults = dict(
-        trade_date="2026-05-01",
-        timestamp="2026-05-01T10:00:00",
+        trade_date=_DAY,
+        timestamp=f"{_DAY}T10:00:00",
         stock_code="000001",
         stock_name="테스트",
         trade_type="BUY",
@@ -627,8 +635,8 @@ class TestLoadPairs:
 
     def test_basic_fifo_pair(self, tmp_path):
         db = _make_db(tmp_path)
-        _insert_trade(db, trade_type="BUY",  timestamp="2026-05-01T10:00:00", price=10000)
-        _insert_trade(db, trade_type="SELL", timestamp="2026-05-01T14:00:00", price=10500,
+        _insert_trade(db, trade_type="BUY",  timestamp=f"{_DAY}T10:00:00", price=10000)
+        _insert_trade(db, trade_type="SELL", timestamp=f"{_DAY}T14:00:00", price=10500,
                       realized_pnl=5000, reason="Trailing Stop",
                       strategy="EXIT", mfe_pct=6.0)
         total, n, pairs = _load_pairs(db, 90)
@@ -641,16 +649,16 @@ class TestLoadPairs:
 
     def test_manual_excluded(self, tmp_path):
         db = _make_db(tmp_path)
-        _insert_trade(db, strategy="MANUAL", trade_type="BUY",  timestamp="2026-05-01T10:00:00")
-        _insert_trade(db, strategy="MANUAL", trade_type="SELL", timestamp="2026-05-01T14:00:00",
+        _insert_trade(db, strategy="MANUAL", trade_type="BUY",  timestamp=f"{_DAY}T10:00:00")
+        _insert_trade(db, strategy="MANUAL", trade_type="SELL", timestamp=f"{_DAY}T14:00:00",
                       realized_pnl=1000, reason="HTS_IMPORT")
         _, n, pairs = _load_pairs(db, 90)
         assert n == 0
 
     def test_kiwoom_excluded(self, tmp_path):
         db = _make_db(tmp_path)
-        _insert_trade(db, strategy="kiwoom", trade_type="BUY",  timestamp="2026-05-01T10:00:00")
-        _insert_trade(db, strategy="kiwoom", trade_type="SELL", timestamp="2026-05-01T14:00:00",
+        _insert_trade(db, strategy="kiwoom", trade_type="BUY",  timestamp=f"{_DAY}T10:00:00")
+        _insert_trade(db, strategy="kiwoom", trade_type="SELL", timestamp=f"{_DAY}T14:00:00",
                       realized_pnl=500, reason="수동")
         _, n, pairs = _load_pairs(db, 90)
         assert n == 0
@@ -658,17 +666,17 @@ class TestLoadPairs:
     def test_reversed_timestamp_skipped(self, tmp_path):
         db = _make_db(tmp_path)
         # SELL timestamp earlier than BUY → reversed → skip
-        _insert_trade(db, trade_type="BUY",  timestamp="2026-05-01T14:00:00")
-        _insert_trade(db, trade_type="SELL", timestamp="2026-05-01T10:00:00",
+        _insert_trade(db, trade_type="BUY",  timestamp=f"{_DAY}T14:00:00")
+        _insert_trade(db, trade_type="SELL", timestamp=f"{_DAY}T10:00:00",
                       realized_pnl=0, reason="익절")
         _, n, pairs = _load_pairs(db, 90)
         assert n == 0
 
     def test_fifo_order_multiple_same_stock(self, tmp_path):
         db = _make_db(tmp_path)
-        _insert_trade(db, trade_type="BUY",  timestamp="2026-05-01T10:00:00", price=10000)
-        _insert_trade(db, trade_type="BUY",  timestamp="2026-05-01T11:00:00", price=11000)
-        _insert_trade(db, trade_type="SELL", timestamp="2026-05-01T15:00:00", price=12000,
+        _insert_trade(db, trade_type="BUY",  timestamp=f"{_DAY}T10:00:00", price=10000)
+        _insert_trade(db, trade_type="BUY",  timestamp=f"{_DAY}T11:00:00", price=11000)
+        _insert_trade(db, trade_type="SELL", timestamp=f"{_DAY}T15:00:00", price=12000,
                       realized_pnl=2000, reason="Trailing Stop", strategy="EXIT")
         _, n, pairs = _load_pairs(db, 90)
         assert n == 1
@@ -677,9 +685,9 @@ class TestLoadPairs:
 
     def test_ml_features_propagated(self, tmp_path):
         db = _make_db(tmp_path)
-        _insert_trade(db, trade_type="BUY",  timestamp="2026-05-01T10:00:00",
+        _insert_trade(db, trade_type="BUY",  timestamp=f"{_DAY}T10:00:00",
                       choch_grade="A", market_regime="TREND", rvol_at_entry=2.5)
-        _insert_trade(db, trade_type="SELL", timestamp="2026-05-01T14:00:00",
+        _insert_trade(db, trade_type="SELL", timestamp=f"{_DAY}T14:00:00",
                       realized_pnl=3000, reason="Trailing Stop",
                       strategy="EXIT", mfe_pct=8.5, mae_pct=-1.2)
         _, _, pairs = _load_pairs(db, 90)
@@ -693,10 +701,10 @@ class TestLoadPairs:
         db = _make_db(tmp_path)
         # stock A: BUY only (no SELL)
         _insert_trade(db, stock_code="000001", trade_type="BUY",
-                      timestamp="2026-05-01T10:00:00")
+                      timestamp=f"{_DAY}T10:00:00")
         # stock B: SELL only (no BUY)
         _insert_trade(db, stock_code="000002", trade_type="SELL",
-                      timestamp="2026-05-01T14:00:00", realized_pnl=1000, reason="stop")
+                      timestamp=f"{_DAY}T14:00:00", realized_pnl=1000, reason="stop")
         _, n, pairs = _load_pairs(db, 90)
         assert n == 0
 
@@ -716,9 +724,9 @@ class TestTradeDecisionAudit:
 
     def test_run_with_pairs(self, tmp_path):
         db = _make_db(tmp_path)
-        _insert_trade(db, trade_type="BUY",  timestamp="2026-05-01T10:00:00", price=10000,
+        _insert_trade(db, trade_type="BUY",  timestamp=f"{_DAY}T10:00:00", price=10000,
                       choch_grade="A", market_regime="TREND", rvol_at_entry=2.0)
-        _insert_trade(db, trade_type="SELL", timestamp="2026-05-01T14:00:00", price=10500,
+        _insert_trade(db, trade_type="SELL", timestamp=f"{_DAY}T14:00:00", price=10500,
                       realized_pnl=5000, reason="Trailing Stop",
                       strategy="EXIT", mfe_pct=6.0)
         audit = TradeDecisionAudit(db_path=str(db), days=90)
@@ -729,12 +737,12 @@ class TestTradeDecisionAudit:
 
     def test_run_excludes_manual(self, tmp_path):
         db = _make_db(tmp_path)
-        _insert_trade(db, strategy="MANUAL", trade_type="BUY",  timestamp="2026-05-01T10:00:00")
-        _insert_trade(db, strategy="MANUAL", trade_type="SELL", timestamp="2026-05-01T14:00:00",
+        _insert_trade(db, strategy="MANUAL", trade_type="BUY",  timestamp=f"{_DAY}T10:00:00")
+        _insert_trade(db, strategy="MANUAL", trade_type="SELL", timestamp=f"{_DAY}T14:00:00",
                       realized_pnl=1000, reason="HTS_IMPORT")
-        _insert_trade(db, strategy="SMC",    trade_type="BUY",  timestamp="2026-05-01T10:30:00",
+        _insert_trade(db, strategy="SMC",    trade_type="BUY",  timestamp=f"{_DAY}T10:30:00",
                       stock_code="000002", stock_name="테스트2", price=9000)
-        _insert_trade(db, strategy="EXIT",   trade_type="SELL", timestamp="2026-05-01T15:00:00",
+        _insert_trade(db, strategy="EXIT",   trade_type="SELL", timestamp=f"{_DAY}T15:00:00",
                       stock_code="000002", stock_name="테스트2", price=9500,
                       realized_pnl=5000, reason="Trailing Stop")
         audit = TradeDecisionAudit(db_path=str(db), days=90)
@@ -743,8 +751,8 @@ class TestTradeDecisionAudit:
 
     def test_report_total_pairs_set(self, tmp_path):
         db = _make_db(tmp_path)
-        _insert_trade(db, trade_type="BUY",  timestamp="2026-05-01T10:00:00")
-        _insert_trade(db, trade_type="SELL", timestamp="2026-05-01T14:00:00",
+        _insert_trade(db, trade_type="BUY",  timestamp=f"{_DAY}T10:00:00")
+        _insert_trade(db, trade_type="SELL", timestamp=f"{_DAY}T14:00:00",
                       realized_pnl=0, reason="stop", strategy="EXIT")
         audit = TradeDecisionAudit(db_path=str(db), days=90)
         r = audit.run()

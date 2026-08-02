@@ -58,6 +58,10 @@ class SwingPosition:
     trough_price: float = 0.0              # 보유 중 일봉 최저가
     entry_market_regime: str = ''           # 진입 시 레짐
 
+    # Research Layer 연동 필드 (Decision Lifecycle 추적)
+    decision_id: Optional[str] = None       # research.decision_ledger PK
+    trace_id: Optional[str] = None         # TR-YYYYMMDD-NNNNNN 전구간 추적용
+
     def to_dict(self) -> dict:
         d = asdict(self)
         d['state'] = int(self.state)
@@ -81,6 +85,8 @@ class SwingPosition:
         d.setdefault('peak_price', 0.0)
         d.setdefault('trough_price', 0.0)
         d.setdefault('entry_market_regime', '')
+        d.setdefault('decision_id', None)
+        d.setdefault('trace_id', None)
         return cls(**d)
 
 

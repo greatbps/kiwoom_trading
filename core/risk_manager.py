@@ -11,7 +11,10 @@ from dataclasses import dataclass
 from datetime import datetime, date
 from typing import List, Optional
 import json
+import logging
 import os
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -400,7 +403,8 @@ class RiskManager:
             from core.trade_db import TradeDB
             TradeDB().insert(trade)
         except Exception as _tdb_err:
-            pass  # DB 실패해도 거래는 계속
+            # [T4 FIX] 완전 무음 실패 → 전체 트레이스백 로깅 (거래 흐름은 기존과 동일하게 계속)
+            logger.exception(f"[RISK_MGR_DB_FAIL] TradeDB 영구저장 실패, 거래는 계속 진행: {_tdb_err}")
 
         # 실현 손익 업데이트 (매도시)
         if trade_type == 'SELL':
@@ -601,8 +605,18 @@ class RiskManager:
                     self._new_week()
 
                 # 🔧 FIX: 연속 손실 데이터 로드 (문서 명세)
-                self.consecutive_losses = data.get('consecutive_losses', 0)
-                self.cooldown_until = data.get('cooldown_until', None)
+                # 🔧 2026-07-27: cooldown_until 만료된 경우 consecutive_losses까지 함께 리셋
+                # (기존엔 날짜/만료 체크 없이 무기한 복원되어, 프로세스 재시작마다
+                #  이미 끝난 쿨다운의 consecutive_losses가 되살아나 trade_cooldown이
+                #  근거 없이 재발동하는 버그가 있었음 — can_open_position()의
+                #  파일기반 cooldown.lock 만료 처리와 동일한 정책으로 통일)
+                _loaded_cooldown_until = data.get('cooldown_until', None)
+                if _loaded_cooldown_until and datetime.now().date() > datetime.fromisoformat(_loaded_cooldown_until).date():
+                    self.consecutive_losses = 0
+                    self.cooldown_until = None
+                else:
+                    self.consecutive_losses = data.get('consecutive_losses', 0)
+                    self.cooldown_until = _loaded_cooldown_until
                 self.lsg_activated_date = data.get('lsg_activated_date', None)  # 🔧 2026-04-02
 
         except FileNotFoundError:

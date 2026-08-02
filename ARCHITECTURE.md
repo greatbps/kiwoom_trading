@@ -419,5 +419,150 @@ active → deprecated → retired → archived
 | Platform v2.8.0-beta | 구현 완료, 운영 검증 전 | 현재 |
 | Platform v2.8.0 | 운영 5개 조건 충족 후 릴리스 | ⏳ |
 
+---
+
+## Principle 7 — AI Agents Are Organized by Time Cycle, Not Role Alone
+
+> **"AI의 역할은 시간(When)이 결정한다."**
+
+Role 분리만으로는 부족하다. 각 AI가 *언제* 동작하는지를 명시해야  
+운영 사이클과 정확히 맞아떨어지는 조직이 된다.
+
+```
+─────────────────────────────────────────────
+     BEFORE MARKET          07:32
+─────────────────────────────────────────────
+  ① Observer AI
+     질문: 오늘 시장은 어떤 상태인가?
+     입력: 해외시장, 환율, 선물, VIX, 뉴스, 섹터, 경제일정
+     출력: Market Context (regime / sector_rotation / watch_items)
+     저장: market_context, knowledge_base
+     KPI:  Coverage — 필수 지표 수집률
+           Freshness — 데이터 최신성 (latency_ms)
+           Latency   — 브리핑 발송까지 소요 시간
+
+─────────────────────────────────────────────
+     DURING MARKET         09:00 ~ 15:30
+─────────────────────────────────────────────
+  ② Analyst AI
+     질문: 지금 무슨 일이 일어나고 있는가?
+     입력: decision_log (실시간), positions, 체결, 거래량, 뉴스
+     출력: Decision Explanation, Session Insight
+     저장: decision_log.analyst_score, decision_log.filter_results
+     KPI:  Explain Accuracy — 사후 검증 시 설명이 맞았는가? (n ≥ 30)
+           Decision Consistency — 동일 regime에서 일관된 해석
+
+─────────────────────────────────────────────
+     AFTER MARKET          16:40 / 22:00
+─────────────────────────────────────────────
+  ③ Scientist AI
+     질문: 무엇을 배울 수 있는가?
+     입력: trades, decision_log, knowledge_base, research_notebook, experiments
+     출력: Hypothesis (초안), Prediction, Confidence, Evaluation Date
+     저장: scientist_predictions, hypotheses, research_notebook
+     스케줄: 16:40 (장 마감 직후 — 당일 데이터)
+             22:00 (야간 — 해외시장 반영 심화 분석)
+     KPI:  Calibration Error         — |confidence - actual_outcome%| 평균
+           Prediction Accuracy       — 평가일 기준 예측 정확도
+           Unknown Declaration Rate  — "아직 모른다" 선언 비율 (목표: 15~30%)
+
+─────────────────────────────────────────────
+     BEFORE DEPLOYMENT     (on-demand)
+─────────────────────────────────────────────
+  ④ Governance AI
+     질문: 운영에 반영해도 되는가?
+     입력: hypothesis, experiment 결과, walk-forward, paper-trading, acceptance
+     출력: Approved / Rejected / Need More Evidence
+     저장: strategy_versions, experiments, system_events
+     KPI:  False Approval  — 승인 후 실패한 실험 비율
+           False Rejection — 거절된 실험 중 사후 유효로 밝혀진 비율
+           Review Time     — 가설 제출 → 결정까지 소요일
+```
+
+**이 구조가 의미하는 것:**
+
+AI는 단순한 기능 모듈이 아니라 운영 조직이다.
+
+```
+Observer  — 시장을 기록하는 관측자
+Analyst   — 현재를 해석하는 분석가
+Scientist — 미래를 탐구하는 연구원
+Governance — 운영 반영 여부를 결정하는 심사위원
+```
+
+이 네 개의 역할이 시간 순서대로 배열될 때,  
+하루의 운영 흐름과 AI의 역할이 자연스럽게 일치한다.
+
+---
+
+## Principle 8 — Memory Manager: Knowledge Continuity Engine
+
+> **"3년 후 Knowledge가 2만 건이 되면, Scientist는 읽을 수 없다."**
+
+Observer, Analyst, Scientist, Governance가 생산하는 지식은 누적된다.  
+이 지식이 검색·참조 가능한 상태로 유지되지 않으면,  
+결국 과거를 무시하고 처음부터 다시 시작하는 패턴이 반복된다.
+
+**Memory Manager**는 이 문제를 방지하는 지식 관리 전담 에이전트다.
+
+```
+역할:  판단 × / 가설 × / 분석 ×
+       오직 지식의 건강 상태 유지
+
+담당:
+  Knowledge Merge    — KB-001 + KB-017 + KB-039가 동일 패턴이면 병합
+  Embedding          — 의미 기반 검색 가능한 벡터 인덱스 구축
+  Duplicate Detection — 중복 knowledge_base 항목 감지
+  Expired Knowledge  — valid_until 경과 항목 자동 비활성화 (is_active=FALSE)
+  Research Index     — research_notebook 분류 및 검색성 향상
+  Context Compression — Scientist가 읽는 컨텍스트를 의미 손실 없이 압축
+  Long-term Memory   — 수년간 운영 데이터에서 일관된 패턴 보존
+
+스케줄: 주 1회 (일요일 새벽)
+저장:  system_events (작업 이력), knowledge_base (병합 결과)
+       research_notebook (인덱스 갱신)
+KPI:   Knowledge Decay Rate — 만료 미처리 건수
+       Merge Precision       — 병합 후 Scientist가 검색 정확도 변화
+       Index Coverage        — 전체 KB 대비 임베딩 완료율
+```
+
+**Memory Manager의 위치:**
+
+```
+Observer → Analyst → Scientist → Governance
+                ↑
+          Memory Manager
+```
+
+Memory Manager는 다른 AI 아래에 있지 않다.  
+다른 AI들이 생산하는 지식 전체를 가로로 관리하는 수평 역할이다.
+
+**구현 우선순위:**
+
+Memory Manager는 Phase 4 이후 구현한다.  
+이유: 지식이 최소 1,000건 이상 쌓이지 않은 상태에서는 관리가 필요없기 때문이다.  
+KB가 100건일 때 Memory Manager를 만드는 것은 과설계(over-engineering)다.
+
+---
+
+## Updated Phase Roadmap
+
+| Phase | Name | Status | Key Output |
+|-------|------|--------|-----------|
+| 2 | Strategy Freeze | ✅ Complete | v2_weak_trend locked |
+| 3a | Market Intelligence | ✅ Complete | MIE + Session + Context |
+| 3b | Decision Traceability | ✅ Complete | decision_log + session linkage |
+| 3b-2 | Execution → decision_log 연결 | ✅ Complete | swing_executor._log_decision_swing |
+| 3c-0 | Scientist AI L0 (주간 패턴 설명) | ⏳ Next | research_notebook 축적 시작 |
+| 3c-1 | Analyst AI v2 (장중 결정 설명) | 🔜 | decision_log.analyst_score 기록 |
+| 3c-2 | Scientist AI L1 (가설 자동 생성) | 🔜 | hypotheses, predictions 자동화 |
+| 3d | Governance AI (가설 심사) | 🔜 | strategy_versions, GD 자동화 |
+| 3e | Scientist Scorecard (월간 Calibration) | 🔜 | RE scorecard 갱신 |
+| 4 | Digital Twin | 🔮 Future | Shadow execution engine |
+| 5 | Memory Manager | 🔮 Future | KB 1,000건 이후 활성화 |
+
+---
+
 *Architecture v1.0 — 2026-06-27*  
+*Architecture Addendum v1.1 — 2026-06-29 (Principle 7, 8 추가: AI Time-Cycle + Memory Manager)*  
 *Architecture 문서는 새 Principle 추가 시에만 개정한다. 전술적 변경에는 개정하지 않는다.*

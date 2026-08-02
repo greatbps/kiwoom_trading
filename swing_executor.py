@@ -22,11 +22,16 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 import time
 from datetime import date, timedelta
 from math import floor
 from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from kiwoom_api import KiwoomAPI
 from analyzers.swing.state_machine import (
@@ -142,6 +147,137 @@ def _record_sell_db(code: str, name: str, quantity: int, price: float,
         )
     except Exception as e:
         logger.warning(f"[SWING_SELL_DB] PostgreSQL 기록 실패 {code}: {e}")
+
+def _log_decision_swing(
+    code: str, name: str, decision_type: str,
+    signals: dict, reason: str = '',
+    confidence: int = None, trade_id: int = None,
+    outcome_pnl_pct: float = None,
+) -> None:
+    """Trading OS decision_log 기록 — swing_executor 전용 헬퍼.
+    실패해도 매매 흐름에 영향 없음 (try/except 완전 격리).
+    """
+    import json as _json
+    from datetime import datetime as _dt
+    try:
+        import psycopg2
+        conn = psycopg2.connect(
+            dbname='trading_system', user='postgres',
+            password=os.getenv('POSTGRES_PASSWORD'), host='localhost'
+        )
+        cur = conn.cursor()
+
+        # 오늘 market_context_id / session_id (없으면 NULL — MIE 미실행일 허용)
+        cur.execute(
+            "SELECT id FROM market_context WHERE context_date = CURRENT_DATE"
+        )
+        row = cur.fetchone()
+        ctx_id = row[0] if row else None
+
+        cur.execute(
+            "SELECT id FROM trading_sessions WHERE session_date = CURRENT_DATE"
+        )
+        row = cur.fetchone()
+        session_id = row[0] if row else None
+
+        cur.execute(
+            "SELECT id FROM research_environment WHERE status='active' LIMIT 1"
+        )
+        row = cur.fetchone()
+        re_id = row[0] if row else None
+
+        cur.execute(
+            """INSERT INTO decision_log
+                 (decision_time, trade_id, stock_code, stock_name, decision_type,
+                  strategy_version, signals, decision_reason, confidence,
+                  outcome_pnl_pct, outcome_filled_at,
+                  market_context_id, session_id, research_environment_id,
+                  model_version, prompt_version)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+            (
+                _dt.now(), trade_id, code, name, decision_type,
+                'swing-v2.0',
+                _json.dumps(signals, ensure_ascii=False, default=str),
+                reason, confidence,
+                outcome_pnl_pct,
+                _dt.now() if outcome_pnl_pct is not None else None,
+                ctx_id, session_id, re_id,
+                'rule-engine-swing', 'swing-v2.0',
+            )
+        )
+        conn.commit()
+        conn.close()
+        logger.debug(f"[DECISION_LOG] {decision_type} {code} 기록 완료")
+    except Exception as _e:
+        logger.debug(f"[DECISION_LOG] 기록 실패 {code}: {_e}")
+
+
+def _ds_record_swing_entry(
+    code: str, name: str,
+    pos: 'SwingPosition', order: dict,
+    buy_price: int, trade_id: int,
+    pattern: str, score: float, market_regime: str,
+) -> None:
+    """Research Layer: SWING 진입 → begin_evaluation → record_acceptance → record_order."""
+    try:
+        from database.trading_db import TradingDatabase
+        from services.decision_service import DecisionService
+        _ds = DecisionService(TradingDatabase())
+        confidence = float(order.get('confidence') or 0)
+        ctx = _ds.begin_evaluation(
+            symbol=code,
+            price=float(buy_price),
+            features={
+                'pattern': pattern, 'score': score,
+                'market_regime': market_regime,
+                'confidence': confidence,
+                'stop_price': float(order.get('stop') or 0) or None,
+                'target_price': float(order.get('target') or 0) or None,
+                'phase': order.get('phase'),
+                'trigger': order.get('trigger'),
+            },
+            stock_name=name,
+            market='KOSPI',
+            strategy_type='SWING',
+        )
+        decision_id = _ds.record_acceptance(ctx, confidence=confidence)
+        if decision_id:
+            _ds.record_order(
+                decision_id=decision_id,
+                trade_id=trade_id,
+                executed_price=float(buy_price),
+                trace_id=ctx.trace_id if ctx else None,
+            )
+            # decision_id / trace_id 포지션에 저장 → 청산 시 record_exit에 사용
+            pos.decision_id = decision_id
+            pos.trace_id    = ctx.trace_id if ctx else None
+            logger.debug(f"[RESEARCH] SWING PASS recorded {code} trace={pos.trace_id}")
+    except Exception as _e:
+        logger.debug(f"[RESEARCH] swing entry record 실패 {code}: {_e}")
+
+
+def _ds_record_swing_exit(
+    pos: 'SwingPosition', sell_price: float, reason: str, pnl_pct: float | None,
+) -> None:
+    """Research Layer: SWING 청산 → record_exit."""
+    try:
+        decision_id = getattr(pos, 'decision_id', None)
+        if not decision_id:
+            return
+        from database.trading_db import TradingDatabase
+        from services.decision_service import DecisionService
+        _ds = DecisionService(TradingDatabase())
+        _ds.record_exit(
+            decision_id=decision_id,
+            exit_price=sell_price,
+            exit_reason=reason,
+            pnl_pct=float(pnl_pct or 0.0),
+            trace_id=getattr(pos, 'trace_id', None),
+        )
+        logger.debug(f"[RESEARCH] SWING EXIT recorded {pos.stock_code} pnl={pnl_pct}")
+    except Exception as _e:
+        logger.debug(f"[RESEARCH] swing exit record 실패: {_e}")
+
 
 def _update_exit_history(code: str, sell_price: float, reason: str, entry_price: float) -> None:
     """실제 체결가로 exit_history 갱신 — runner 추정값(exit_price=0.0)을 정확한 값으로 교체."""
@@ -266,11 +402,13 @@ def _execute_entry(
     market_regime: str = '',
 ) -> tuple[bool, float]:
     """신규 진입. (성공여부, 사용한 현금) 반환."""
-    code    = order.get('code', '')
-    name    = order.get('name', code)
-    size    = float(order.get('size', 0.5))
-    pattern = order.get('pattern', '')
-    score   = float(order.get('final_score', 0))
+    code      = order.get('code', '')
+    name      = order.get('name', code)
+    size      = float(order.get('size', 0.5))
+    pattern   = order.get('pattern', '')
+    score     = float(order.get('final_score', 0))
+    ai_score  = order.get('ai_score')   # AnalysisEngine 0-100 (None if gate disabled)
+    ai_rec    = order.get('ai_rec')
 
     current_price = _get_price(api, code)
     if not current_price:
@@ -295,8 +433,19 @@ def _execute_entry(
     buy_price = _tick(current_price)
     used_cash = quantity * buy_price
 
+    try:
+        import yaml as _yaml
+        _cfg_path = Path(__file__).parent / 'config' / 'strategy_hybrid.yaml'
+        _ruleset_v = _yaml.safe_load(_cfg_path.read_text(encoding='utf-8')).get(
+            'ruleset_version', 'unknown'
+        )
+    except Exception:
+        _ruleset_v = 'unknown'
+    _ai_str = f" ai={ai_score:.0f}({ai_rec})" if ai_score is not None else ""
     logger.info(
-        f"[EXEC_ENTRY] {code} {name} | {pattern} score={score} | "
+        f"[ENTRY_SNAPSHOT] {code} {name} | "
+        f"ruleset={_ruleset_v} horizon=SWING pattern={pattern} score={score}{_ai_str} | "
+        f"regime_long={market_regime} | "
         f"현재가={current_price:,} 수량={quantity} 투자금={used_cash:,.0f}원 (size={size*100:.0f}%)"
     )
 
@@ -326,6 +475,30 @@ def _execute_entry(
                 pos.trade_id = trade_id
                 state_mgr.set(pos)
                 state_mgr.save(state_mgr.all)
+                # Trading OS: decision_log 기록
+                _log_decision_swing(
+                    code=code, name=name, decision_type='BUY',
+                    signals={
+                        'pattern':       pattern,
+                        'score':         score,
+                        'market_regime': market_regime,
+                        'size':          size,
+                        'buy_price':     buy_price,
+                        'phase':         order.get('phase'),
+                        'trigger':       order.get('trigger'),
+                        'confidence':    order.get('confidence'),
+                    },
+                    reason=f"SWING:{pattern}",
+                    confidence=int(float(order.get('confidence') or 0) * 100) or None,
+                    trade_id=trade_id,
+                )
+                # Research Layer: Decision Lifecycle PASS → ORDER
+                _ds_record_swing_entry(
+                    code=code, name=name,
+                    pos=pos, order=order,
+                    buy_price=buy_price, trade_id=trade_id,
+                    pattern=pattern, score=score, market_regime=market_regime,
+                )
                 # SignalEngine 스냅샷 저장 (분석 파이프라인용)
                 try:
                     from database.trading_db import TradingDatabase
@@ -344,7 +517,8 @@ def _execute_entry(
                         'target_price': float(order.get('target') or 0) or None,
                         'size':         size,
                         'market_regime': market_regime,
-                        'meta':         order.get('meta') or {},
+                        'meta':         {**(order.get('meta') or {}),
+                                     'ai_score': ai_score, 'ai_rec': ai_rec},
                     })
                 except Exception as _fe:
                     logger.debug(f"[SWING_FEAT] feature snapshot 실패 {code}: {_fe}")
@@ -535,6 +709,10 @@ def _execute_exit(
 
     logger.info(f"[EXEC_EXIT] {code} {name} | 사유={reason} | 수량={quantity} | 시장가 매도")
 
+    # 매도 API 호출 전에 pos를 미리 확보 — 호출 후 state가 비어있을 수 있음
+    positions_pre = state_mgr.load()
+    pos_pre = positions_pre.get(code)
+
     if dry_run:
         logger.info(f"[EXEC_EXIT][DRY] 주문 생략")
         return True
@@ -543,14 +721,82 @@ def _execute_exit(
         result = api.order_sell(stock_code=code, quantity=quantity, price=0, trade_type="3")
         if result and result.get('return_code') == 0:
             logger.info(f"[EXEC_EXIT] ✅ 매도 성공 {code} | 주문번호={result.get('ord_no','?')}")
-            # 매도 가격은 시장가이므로 현재가 조회 후 기록
-            positions = state_mgr.load()
-            pos = positions.get(code)
-            if pos:
-                sell_price = _get_price(api, code) or pos.entry_price
-                _record_sell_db(code, name, quantity, sell_price, reason, pos)
-                # exit_history 실제 체결가로 갱신 (runner가 저장한 추정값 덮어쓰기)
-                _update_exit_history(code, sell_price, reason, pos.entry_price)
+            sell_price = _get_price(api, code)
+
+            if pos_pre:
+                sell_price = sell_price or pos_pre.entry_price
+                _record_sell_db(code, name, quantity, sell_price, reason, pos_pre)
+                _update_exit_history(code, sell_price, reason, pos_pre.entry_price)
+                # Trading OS: decision_log SELL 기록
+                _ep = pos_pre.entry_price
+                _pnl = round((sell_price - _ep) / _ep * 100, 3) if _ep > 0 else None
+                _log_decision_swing(
+                    code=code, name=name, decision_type='SELL',
+                    signals={
+                        'exit_reason':   reason,
+                        'sell_price':    sell_price,
+                        'entry_price':   _ep,
+                        'quantity':      quantity,
+                        'holding_days':  getattr(pos_pre, 'holding_days', None),
+                        'pattern':       getattr(pos_pre, 'pattern', None),
+                    },
+                    reason=reason,
+                    trade_id=getattr(pos_pre, 'trade_id', None),
+                    outcome_pnl_pct=_pnl,
+                )
+                # Research Layer: Decision Lifecycle EXIT 기록
+                _ds_record_swing_exit(pos=pos_pre, sell_price=sell_price, reason=reason, pnl_pct=_pnl)
+            else:
+                # state에 포지션 없음 — order dict의 entry_price로 최소 기록
+                entry_price = float(order.get('entry_price', 0))
+                sell_price  = sell_price or entry_price
+                if entry_price > 0 and sell_price > 0:
+                    realized   = round((sell_price - entry_price) * quantity, 0)
+                    pnl_pct    = round((sell_price - entry_price) / entry_price * 100, 3)
+                    _get_db().insert_swing_sell({
+                        'stock_code':       code,
+                        'stock_name':       name,
+                        'trade_time':       __import__('datetime').datetime.now().isoformat(),
+                        'price':            float(sell_price),
+                        'quantity':         quantity,
+                        'amount':           float(sell_price * quantity),
+                        'exit_reason':      reason,
+                        'entry_time':       None,
+                        'holding_minutes':  int(order.get('holding_days', 0)) * 390,
+                        'realized_profit':  float(realized),
+                        'profit_rate':      float(pnl_pct),
+                        'mfe_pct':          float(order.get('max_profit_pct', 0)),
+                        'mae_pct':          abs(float(order.get('drawdown_pct', 0))),
+                        'peak_price':       float(sell_price),
+                        'trough_price':     float(sell_price),
+                        'exit_context': {
+                            'entry_price':  float(entry_price),
+                            'exit_reason':  reason,
+                            'holding_days': order.get('holding_days', 0),
+                            'source':       'order_fallback',
+                        },
+                    })
+                    logger.info(
+                        f"[SWING_SELL_DB] {code} {name} SELL {quantity}주 @ {sell_price:,.0f} "
+                        f"pnl={pnl_pct:+.2f}% [order_fallback]"
+                    )
+                    _update_exit_history(code, sell_price, reason, entry_price)
+                    # Trading OS: decision_log SELL 기록 (fallback)
+                    _log_decision_swing(
+                        code=code, name=name, decision_type='SELL',
+                        signals={
+                            'exit_reason':  reason,
+                            'sell_price':   sell_price,
+                            'entry_price':  entry_price,
+                            'quantity':     quantity,
+                            'source':       'order_fallback',
+                        },
+                        reason=reason,
+                        outcome_pnl_pct=pnl_pct,
+                    )
+                else:
+                    logger.warning(f"[SWING_SELL_DB] {code} pos 없음 + entry_price 불명 → DB 기록 스킵")
+
             state_mgr.remove(code)
             state_mgr.save(state_mgr.all)
             return True
@@ -657,18 +903,36 @@ def main():
         time.sleep(0.5)
 
     # ── 4. ENTRY (신규 진입) ──────────────────────────────────────────────────
-    for o in entry_orders:
-        positions = state_mgr.load()
-        existing = positions.get(o.get('code'))
-        if existing and existing.quantity > 0:
-            logger.info(f"[EXEC_ENTRY] {o['code']} 이미 보유(qty={existing.quantity}) → 스킵")
-            continue
-        ok, used = _execute_entry(api, o, avail_cash, total_capital, state_mgr, dry_run,
-                                   market_regime=order_file_regime)
-        if ok:
-            counters['entry'] += 1
-            avail_cash = max(0.0, avail_cash - used)
-        time.sleep(0.5)
+    _sw_entry_enabled = True
+    try:
+        import yaml as _yaml_sw
+        _sw_cfg_path = Path(__file__).parent / 'config' / 'strategy_hybrid.yaml'
+        _sw_entry_enabled = _yaml_sw.safe_load(
+            _sw_cfg_path.read_text(encoding='utf-8')
+        ).get('swing', {}).get('enabled', True)
+    except Exception:
+        pass
+
+    if not _sw_entry_enabled:
+        logger.info(
+            f"[STRATEGY_DISABLED] strategy=SWING enabled=false "
+            f"— ENTRY {len(entry_orders)}건 건너뜀"
+        )
+        for o in entry_orders:
+            logger.info(f"[STRATEGY_DISABLED] {o.get('code', '?')} strategy=SWING → skip")
+    else:
+        for o in entry_orders:
+            positions = state_mgr.load()
+            existing = positions.get(o.get('code'))
+            if existing and existing.quantity > 0:
+                logger.info(f"[EXEC_ENTRY] {o['code']} 이미 보유(qty={existing.quantity}) → 스킵")
+                continue
+            ok, used = _execute_entry(api, o, avail_cash, total_capital, state_mgr, dry_run,
+                                       market_regime=order_file_regime)
+            if ok:
+                counters['entry'] += 1
+                avail_cash = max(0.0, avail_cash - used)
+            time.sleep(0.5)
 
     # ── 5. TRAIL (상태 업데이트만, 주문 없음) ────────────────────────────────
     for o in trail_orders:

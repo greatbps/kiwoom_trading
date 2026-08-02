@@ -34,6 +34,11 @@ HEARTBEAT_FILE = Path('/tmp/kiwoom_heartbeat.json')
 MAIN_SCRIPT   = PROJECT_DIR / 'main_auto_trading.py'
 LOG_DIR       = PROJECT_DIR / 'logs'
 
+# venv python 우선 사용 (run.py와 동일 패턴) — sys.executable은 크론 환경에서
+# 시스템 python3가 될 수 있어, venv에만 있는 패키지가 있으면 재시작이 조용히 실패함
+_VENV_PYTHON = PROJECT_DIR / 'venv' / 'bin' / 'python'
+PYTHON_BIN   = str(_VENV_PYTHON) if _VENV_PYTHON.exists() else sys.executable
+
 HEARTBEAT_MAX_AGE_SEC = 600   # 10분: 이 이상 갱신 없으면 좀비
 STARTUP_GRACE_SEC     = 3600  # 1시간: PID 파일만 있고 하트비트 없을 때 초기화 중으로 허용
                                # (08:45 시작 → 09:00 장 시작 후 첫 heartbeat, 09:15 watchdog 오검지 방지)
@@ -123,7 +128,7 @@ def kill_process(pid: int):
 def start_trading():
     """메인 트레이딩 스크립트 백그라운드 실행."""
     log_file = LOG_DIR / f"auto_trading_{datetime.today().strftime('%Y%m%d')}.log"
-    cmd = [sys.executable, str(MAIN_SCRIPT)]
+    cmd = [PYTHON_BIN, str(MAIN_SCRIPT)]
     logger.info(f"트레이딩 재시작: {' '.join(cmd)}")
 
     try:

@@ -434,7 +434,12 @@ YAML 우선 접근
      → "No Architecture Changes Without Evidence" (CONSTITUTION.md) 기준 적용
 
 Phase A (2026 Q3) 금지 사항:
-  - 새로운 AI Agent / LLM / Dashboard / Strategy / Prompt / DB 테이블
+  - 새로운 AI Agent / LLM / Dashboard / Strategy / Prompt
+  - 운영 스키마(public schema) 신규 DB 테이블
+
+  ※ GD-007 (2026-06-30) 예외: research 스키마 신규 테이블은 허용
+     (decision_ledger, candidates, future_returns 등 Canonical Data Model)
+     조건: DATA_CONTRACT.md 계약 사전 확정 + PM 명시적 승인
 
   아이디어가 생기면 research_notebook에 제목과 근거만 기록한다.
   데이터가 그 아이디어를 지지하면 그때 가설로 격상한다.

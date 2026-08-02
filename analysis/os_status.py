@@ -116,6 +116,110 @@ dl_buy_week  = q("""
 # System Events: 최근
 last_event = q("SELECT event_type, emitted_at FROM system_events ORDER BY id DESC LIMIT 1")
 
+# ── AI Research Layer ─────────────────────────────────────────────────────────
+
+# research_notebook: 타입별 카운트
+with conn() as c:
+    cur = c.cursor()
+    cur.execute("""
+        SELECT
+            COUNT(*)                                                        AS total,
+            COUNT(*) FILTER (WHERE tags @> ARRAY['scientist_review'])      AS scientist,
+            COUNT(*) FILTER (WHERE tags @> ARRAY['analyst_review'])        AS analyst,
+            COUNT(*) FILTER (WHERE tags @> ARRAY['governance_review'])     AS governance,
+            COUNT(*) FILTER (WHERE tags @> ARRAY['scientist_scorecard'])   AS scorecard,
+            MAX(notebook_no)                                                AS last_no,
+            MAX(created_at)::date                                           AS last_date
+        FROM research_notebook
+    """)
+    nb = cur.fetchone()
+    nb_total, nb_sci, nb_ana, nb_gov, nb_score, nb_last_no, nb_last_date = nb
+
+    # Scientist: L1 readiness + 마지막 confidence
+    cur.execute("""
+        SELECT confidence, data_scope->>'unknown_declaration', created_at::date
+        FROM research_notebook
+        WHERE tags @> ARRAY['scientist_review']
+        ORDER BY created_at DESC LIMIT 1
+    """)
+    sci_row = cur.fetchone()
+    sci_last_conf = sci_row[0] if sci_row else None
+    sci_last_unk  = sci_row[1] if sci_row else None
+    sci_last_date = sci_row[2] if sci_row else None
+
+    # Analyst: 마지막 quality / alignment
+    cur.execute("""
+        SELECT
+            data_scope->>'session_quality'    AS quality,
+            (data_scope->>'overall_score')::int AS score,
+            data_scope->>'source'             AS source,
+            created_at::date
+        FROM research_notebook
+        WHERE tags @> ARRAY['analyst_review']
+        ORDER BY created_at DESC LIMIT 1
+    """)
+    ana_row = cur.fetchone()
+    ana_quality = ana_row[0] if ana_row else None
+    ana_score   = ana_row[1] if ana_row else None
+    ana_source  = ana_row[2] if ana_row else None
+    ana_date    = ana_row[3] if ana_row else None
+
+    # Governance: 판정 분포
+    cur.execute("""
+        SELECT
+            COUNT(*)                                                         AS total,
+            COUNT(*) FILTER (WHERE tags @> ARRAY['verdict_approved'])       AS approved,
+            COUNT(*) FILTER (WHERE tags @> ARRAY['verdict_conditional'])    AS conditional,
+            COUNT(*) FILTER (WHERE tags @> ARRAY['verdict_rejected'])       AS rejected,
+            COUNT(*) FILTER (WHERE tags @> ARRAY['hard_block'])             AS hard_blocked
+        FROM research_notebook
+        WHERE tags @> ARRAY['governance_review']
+    """)
+    gov = cur.fetchone()
+    gov_total, gov_ok, gov_cond, gov_rej, gov_hard = gov
+
+    # Scorecard: 최신 KPI
+    cur.execute("""
+        SELECT data_scope
+        FROM research_notebook
+        WHERE tags @> ARRAY['scientist_scorecard']
+        ORDER BY created_at DESC LIMIT 1
+    """)
+    sc_row = cur.fetchone()
+    sc_data = sc_row[0] if sc_row else {}
+    if isinstance(sc_data, str):
+        sc_data = json.loads(sc_data)
+    sc_kpis    = sc_data.get('kpi_status', {})
+    sc_unk_pct = sc_data.get('unknown_rate', {}).get('rate_pct')
+    sc_cov     = sc_data.get('coverage', {}).get('nb_per_week')
+
+# L1 Readiness
+L1_TARGET = 10
+l1_pct = min(int((nb_sci or 0) / L1_TARGET * 100), 100)
+l1_ok  = (nb_sci or 0) >= L1_TARGET
+
+# Analyst last run status
+ana_q_icon = {'good': '🟢', 'neutral': '🟡', 'poor': '🔴'}.get(ana_quality or '', '⚪')
+src_label  = '(DL)' if ana_source == 'decision_log' else '(폴백)'
+
+# Scorecard KPI icons
+def kpi_icon(status): return {'OK': '🟢', 'WARN': '🟡', 'N/A': '⚪'}.get(status or 'N/A', '⚪')
+
+# Analyst AI 마지막 실행 (decision_log 크론 상태)
+last_analyst_run = q("""
+    SELECT MAX(created_at)::date FROM research_notebook
+    WHERE tags @> ARRAY['analyst_review']
+""")
+last_analyst_date = str(last_analyst_run[0]) if last_analyst_run and last_analyst_run[0] else 'None'
+
+# MIE 마지막 실행 (market_context 기준으로 이미 수집됨 → last_mie 재사용)
+# Scientist AI 마지막 실행
+last_sci_run = q("""
+    SELECT MAX(created_at)::date FROM research_notebook
+    WHERE tags @> ARRAY['scientist_review']
+""")
+last_sci_date = str(last_sci_run[0]) if last_sci_run and last_sci_run[0] else 'None'
+
 # Architecture Stability Index (ASI) — logs/asi.jsonl 수동 추적
 asi_path = os.path.join(BASE, 'logs', 'asi.jsonl')
 asi_history = []
@@ -138,15 +242,36 @@ print(f"""
 ║  LAYERS                                                  ║
 ║                                                          ║
 ║  Execution    {ok(exec_running)} {'Running' if exec_running else 'Stopped — check watchdog'}
-║  Research     {ok(ctx_today > 0)} MIE last: {last_mie}
-║  Governance   {ok(active_strat > 0)} {active_strat} active strategy
+║  Observer     {ok(ctx_today > 0)} MIE last: {last_mie}  (07:32 크론)
+║  Analyst      {ok(ana_date is not None)} last: {last_analyst_date}  (15:30 크론){f'  {ana_q_icon} {ana_quality}' if ana_quality else ''}
+║  Scientist    {ok(sci_last_date is not None)} last: {last_sci_date}  (금 16:40 크론)
+║  Governance   {ok(active_strat > 0)} {active_strat} active strategy  reviews: {gov_total}건
 ║  Session      {ok(session_status == 'reviewed')} today: {session_status}
+║                                                          ║
+╠══════════════════════════════════════════════════════════╣
+║  AI RESEARCH LAYER                                       ║
+║                                                          ║
+║  Notebook     {nb_total}건  ({nb_last_no})  last: {nb_last_date}
+║    Scientist: {nb_sci}건  Analyst: {nb_ana}건  Governance: {nb_gov}건  Scorecard: {nb_score}건
+║  L1 Readiness {ok(l1_ok)} {nb_sci}/{L1_TARGET}건 ({l1_pct}%){'  ← Governance AI 검토 필요' if l1_ok and not l1_pct < 100 else ''}
+║                                                          ║
+║  Scorecard KPI                                           ║
+║    Unknown Rate   {kpi_icon(sc_kpis.get('unknown_rate'))} {f"{sc_unk_pct}%" if sc_unk_pct is not None else "N/A"}  (목표 15~30%)
+║    Coverage       {kpi_icon(sc_kpis.get('coverage'))} {f"{sc_cov}건/주" if sc_cov is not None else "N/A"}  (목표 ≥1.0)
+║    Calibration    {kpi_icon(sc_kpis.get('calibration'))} N/A (L1 이후)
+║                                                          ║
+║  Governance Reviews   총 {gov_total}건
+║    APPROVED: {gov_ok}  CONDITIONAL: {gov_cond}  REJECTED: {gov_rej}  HardBlock: {gov_hard}
+║                                                          ║
+║  Analyst              last: {last_analyst_date} {ana_q_icon} {ana_quality or 'N/A'}  score: {ana_score or 'N/A'} {src_label}
+║  decision_log → NB    BUY {dl_buy_total}건 → 분석 대기  (다음 거래 후 자동 기록)
 ║                                                          ║
 ╠══════════════════════════════════════════════════════════╣
 ║  SCIENTIST                                               ║
 ║                                                          ║
 ║  Level        {scientist_level}
 ║  Calibration  {calibration}
+║  Last NB      conf={sci_last_conf}  unknown={sci_last_unk}  ({sci_last_date})
 ║                                                          ║
 ╠══════════════════════════════════════════════════════════╣
 ║  RESEARCH                                                ║

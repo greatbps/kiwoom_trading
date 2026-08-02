@@ -848,28 +848,42 @@ class SMCStrategy:
 
         # 최소 조건 충족 확인 (HTF / Sweep / Reclaim + volume 가산점)
         if conditions_met >= self.prefilter_min_conditions:
-            # ─── 🔧 2026-05-03: RVOL 단일 하드 게이트 ────────────────────────
-            # 레짐별 임계값 (가짜 신호 빈도 순서):
-            #   REVERSAL(가장 엄격) ≥ TREND(중간) ≥ NEUTRAL(기본)
+            # ─── v1.2: RVOL — 하드컷 → penalty 전환 ──────────────────────────
             _pf_cfg        = (self._raw_config or {}).get('smc', {}).get('entry_prefilter', {})
             _rvol_neutral  = _pf_cfg.get('rvol_min', 0.0)
             _rvol_trend    = _pf_cfg.get('rvol_min_trend',    _rvol_neutral)
             _rvol_reversal = _pf_cfg.get('rvol_min_reversal', _pf_cfg.get('rvol_min_strong', _rvol_neutral))
+            _rvol_penalty_mode = _pf_cfg.get('rvol_penalty_mode', False)
+            _rvol_penalty_mult = float(_pf_cfg.get('rvol_penalty_size_mult', 0.7))
 
             if   _regime == 'REVERSAL': _rvol_thr = _rvol_reversal
             elif _regime == 'TREND':    _rvol_thr = _rvol_trend
             else:                       _rvol_thr = _rvol_neutral
 
-            if _rvol_thr > 0 and _cur_rvol_pf < _rvol_thr:
-                self.stats['prefilter_rejected'] += 1
-                _rvol_msg = (
-                    f"RVOL={_cur_rvol_pf:.2f}x < {_rvol_thr}x "
-                    f"(regime={_regime})"
-                )
-                logger.info(f"[PREFILTER_RVOL_BLOCK] {_rvol_msg}")
-                if debug:
-                    console.print(f"[yellow]  ❌ [RVOL_BLOCK] {_rvol_msg}[/yellow]")
-                return False, f"프리필터 RVOL 차단: {_rvol_msg}", details
+            _rvol_below_threshold = _rvol_thr > 0 and _cur_rvol_pf < _rvol_thr
+            if _rvol_below_threshold:
+                if _rvol_penalty_mode:
+                    # penalty: size_mult 축소, 진입 허용
+                    details['rvol_penalty'] = True
+                    details['rvol_penalty_mult'] = _rvol_penalty_mult
+                    _rvol_tag = f"⚠️RVOL페널티×{_rvol_penalty_mult}"
+                    logger.info(
+                        f"[PREFILTER_RVOL_PENALTY] RVOL={_cur_rvol_pf:.2f}x<{_rvol_thr}x "
+                        f"(regime={_regime}) → size×{_rvol_penalty_mult}"
+                    )
+                    if debug:
+                        console.print(f"[yellow]  ⚠️ [RVOL_PENALTY] ×{_rvol_penalty_mult} (RVOL={_cur_rvol_pf:.2f}x)[/yellow]")
+                else:
+                    # 기존: 하드컷
+                    self.stats['prefilter_rejected'] += 1
+                    _rvol_msg = f"RVOL={_cur_rvol_pf:.2f}x < {_rvol_thr}x (regime={_regime})"
+                    logger.info(f"[PREFILTER_RVOL_BLOCK] {_rvol_msg}")
+                    if debug:
+                        console.print(f"[yellow]  ❌ [RVOL_BLOCK] {_rvol_msg}[/yellow]")
+                    return False, f"프리필터 RVOL 차단: {_rvol_msg}", details
+            else:
+                details['rvol_penalty'] = False
+                _rvol_tag = f"RVOL={_cur_rvol_pf:.2f}x✅"
             # ──────────────────────────────────────────────────────────────────
 
             self.stats['prefilter_passed'] += 1
@@ -879,7 +893,7 @@ class SMCStrategy:
                 f"Sweep={'✅' if details['liquidity_swept'] else '❌'} "
                 f"Reclaim={'✅' if details['reclaim_detected'] else '❌'} "
                 f"Vol={'✅' if details.get('volume_confirmed') else '❌'} "
-                f"RVOL={_cur_rvol_pf:.2f}x✅ regime={_regime}"
+                f"{_rvol_tag} regime={_regime}"
             )
             if debug:
                 console.print(f"[green]  ✅ {reason}[/green]")
@@ -1272,8 +1286,11 @@ class SMCStrategy:
                     details['displacement'] = {'passed': False, 'reasons': disp_fail}
                     return False, f"SMC: CHoCH 발생, Displacement 미충족 ({', '.join(disp_fail)})", details
                 details['displacement'] = {'passed': True, 'range_ok': range_ok, 'body_ok': body_ok, 'vol_ok': vol_ok}
-        except Exception:
-            pass
+        except Exception as _disp_exc:
+            # [CBF-2 2026-07-20] Fail Closed: displacement 필터 평가 실패 시 무음통과 대신 차단
+            logger.exception(f"[FILTER_EXCEPTION] displacement 필터 평가 실패 — Fail Closed 차단: {_disp_exc}")
+            details['displacement'] = {'passed': False, 'reasons': ['FILTER_EXCEPTION']}
+            return False, f"SMC: CHoCH 발생, Displacement 평가 오류 — Fail Closed 차단: {_disp_exc}", details
 
         # 4. Order Block 미리 확인 (등급 평가용)
         ob = self.find_order_block(df, choch)

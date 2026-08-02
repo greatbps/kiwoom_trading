@@ -249,6 +249,7 @@ Architecture를 자주 바꾸는 프로젝트는 아무것도 쌓이지 않는�
 | GD-002 | Release는 Acceptance Test 결과를 Evidence로 제출 | Article 6, 7 | 2026-06-28 |
 | GD-003 | Q3 운영자 모드 전환 — Architecture 변경 0회 목표 | 전문 4번째 철학 | 2026-06-28 |
 | GD-004 | AUDIT_PROMPT_v1.0 승인 및 동결 — Phase A 동안 프롬프트 수정 금지 | Article 2, 7 | 2026-06-28 |
+| GD-005 | AI Agent 설계를 Time-Cycle 기준으로 재정의 — ADR-006 채택 | Article 8 | 2026-06-29 |
 
 새 거버넌스 결정이 내려질 때마다 이 목록에 추가한다.
 

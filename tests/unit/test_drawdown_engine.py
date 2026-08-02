@@ -15,9 +15,17 @@ DrawdownEngine 드로우다운 리스크 컨트롤 테스트
 
 import sys
 import os
+import tempfile
+from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from core.drawdown_engine import DrawdownEngine, LEVEL_NORMAL, LEVEL_CAUTION, LEVEL_DANGER, LEVEL_HALT
+
+
+def _isolated_engine(cfg):
+    """🔧 2026-07-27: 재시작 영속화 추가로 상태파일이 생겼음 — 테스트 간 격리를 위해
+    매번 새 임시 경로를 준다(운영 경로 data/drawdown_state.json을 절대 건드리지 않음)."""
+    return DrawdownEngine(cfg, state_path=Path(tempfile.mktemp(suffix='.json')))
 
 
 _CFG = {
@@ -38,7 +46,7 @@ class TestDrawdownLevels:
     """드로우다운 레벨 분류 + size_mult 테스트."""
 
     def _engine(self):
-        return DrawdownEngine(_CFG)
+        return _isolated_engine(_CFG)
 
     def test_case1_no_loss_normal_level(self):
         """Case 1: 손실 없음 → NORMAL, size=1.0, can_enter=True."""
@@ -129,7 +137,7 @@ class TestStrategyLevelDrawdown:
     """전략별 독립 drawdown 테스트."""
 
     def _engine(self):
-        return DrawdownEngine(_CFG)
+        return _isolated_engine(_CFG)
 
     def test_strategy_halt_blocks_only_that_strategy(self):
         """RS drawdown -4% → RS만 차단, DEF는 통과."""
@@ -183,7 +191,7 @@ class TestDrawdownStatus:
     """get_status() 반환값 테스트."""
 
     def test_status_fields(self):
-        eng = DrawdownEngine(_CFG)
+        eng = _isolated_engine(_CFG)
         eng.record_pnl(+1.5)
         eng.record_pnl(-2.0)   # daily=-0.5, peak=1.5, dd=-2.0
 

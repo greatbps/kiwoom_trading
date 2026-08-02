@@ -5,6 +5,7 @@
 
 import os
 import json
+from datetime import date
 from dotenv import load_dotenv
 from kiwoom_api import KiwoomAPI
 from rich.console import Console
@@ -160,16 +161,22 @@ def check_account_pnl():
             with open('data/risk_log.json', 'r', encoding='utf-8') as f:
                 risk_log = json.load(f)
 
-            logged_pnl = risk_log.get('daily_realized_pnl', 0.0)
-
-            console.print(f"시스템 기록 손익: {logged_pnl:+,}원")
-            console.print(f"실제 당일 손익: {net_pnl:+,}원")
-            console.print()
-
-            if abs(logged_pnl - net_pnl) > 0.01:
-                console.print(f"[red]❌ 불일치! 차이: {net_pnl - logged_pnl:+,}원[/red]")
+            # 🔧 2026-07-27: today 불일치 시 daily_realized_pnl은 지난 거래일의
+            # 스탈 값이므로 "오늘 손익"으로 비교하지 않는다 (freshness 미검증 버그)
+            if risk_log.get('today') != date.today().isoformat():
+                console.print(f"[yellow]⚠️  risk_log.json 이 오늘자가 아님 (기록일: {risk_log.get('today')}) "
+                              f"— 스탈 데이터라 비교 생략[/yellow]")
             else:
-                console.print(f"[green]✅ 일치[/green]")
+                logged_pnl = risk_log.get('daily_realized_pnl', 0.0)
+
+                console.print(f"시스템 기록 손익: {logged_pnl:+,}원")
+                console.print(f"실제 당일 손익: {net_pnl:+,}원")
+                console.print()
+
+                if abs(logged_pnl - net_pnl) > 0.01:
+                    console.print(f"[red]❌ 불일치! 차이: {net_pnl - logged_pnl:+,}원[/red]")
+                else:
+                    console.print(f"[green]✅ 일치[/green]")
 
         except Exception as e:
             console.print(f"[yellow]⚠️  risk_log.json 비교 실패: {e}[/yellow]")

@@ -24,7 +24,7 @@ LOG_DIR = os.path.join(os.path.dirname(__file__), '..', 'logs')
 # ─── 정규식 패턴 ──────────────────────────────────────────────────────────────
 
 _RE_ACCEPT = re.compile(
-    r'✅ ACCEPT (\d{6}) @(\d+)원 \| PID:(\d+) \| conf=([\d.]+) alpha=([+-][\d.]+) pos_mult=([\d.]+)'
+    r'(?:✅ ACCEPT|🟡 CANDIDATE_ACCEPT) (\d{6}) @(\d+)원 \| PID:(\d+) \| conf=([\d.]+) alpha=([+-][\d.]+) pos_mult=([\d.]+)'
 )
 _RE_REJECT = re.compile(
     r'❌ REJECT (\d{6}) \| PID:\d+ \| (\S+) \| (.+)'

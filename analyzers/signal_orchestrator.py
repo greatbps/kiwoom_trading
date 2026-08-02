@@ -46,6 +46,9 @@ log_file.parent.mkdir(exist_ok=True)
 file_handler = logging.FileHandler(log_file, mode='a', encoding='utf-8')
 file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
 signal_logger.addHandler(file_handler)
+# [T13 FIX] propagate 미설정 → root logger(auto_trading_*.log/stderr)로도 중복 전파되어
+# REGIME_BLOCK 등 로그 grep count가 약 2배로 부풀려지던 문제. 전용 FileHandler만 사용.
+signal_logger.propagate = False
 
 
 class SignalTier:
@@ -59,14 +62,16 @@ class SignalTier:
 class SignalOrchestrator:
     """L0-L6 시그널 파이프라인 통합 오케스트레이터"""
 
-    def __init__(self, config: Dict, api=None):
+    def __init__(self, config: Dict, api=None, db=None):
         """
         Args:
             config: 전략 설정
             api: 키움 API (L4 수급 데이터용)
+            db: TradingDatabase 인스턴스 (G3 signal_events 기록용, None이면 로그만)
         """
         self.config = config
         self.api = api
+        self.db = db
 
         # L1: 장세 필터
         self.regime_detector = VolatilityRegimeDetector(
@@ -105,13 +110,14 @@ class SignalOrchestrator:
         )
 
         # L6: Pre-Trade Validator V2 (Confidence-based)
+        _l6_cfg = config.get('orchestrator', {}).get('l6', {})
         self.validator = PreTradeValidatorV2(
             config=config,
             lookback_days=5,         # 🔧 FIX: 문서 명세 복원 (10 → 5)
             min_trades=2,            # 🔧 FIX: 문서 명세 복원 (6 → 2)
-            min_win_rate=40.0,
-            min_avg_profit=0.3,
-            min_profit_factor=1.15
+            min_win_rate=_l6_cfg.get('min_win_rate', 40.0),
+            min_avg_profit=_l6_cfg.get('min_avg_profit', 0.3),
+            min_profit_factor=_l6_cfg.get('min_profit_factor', 1.15),
         )
 
         # Confidence Aggregator
@@ -145,9 +151,27 @@ class SignalOrchestrator:
             'alpha_rejected': 0  # Phase 2: Multi-Alpha 차단
         }
 
-        # [DIAG_MODE] ACCEPT 이벤트 추적 — {symbol: timestamp}
+        # ACCEPT 이벤트 추적 — {symbol: (timestamp, price)}
         # diagnostic_mode=True 시 main loop이 이 종목을 watchlist 강제 포함
+        # recent_accepts: 최신 accept (window 체크용, 매 accept마다 갱신)
         self.recent_accepts: dict = {}
+        # recent_accepts_first: 당일 최초 accept (t0 관측용, 하루 1회만 기록)
+        self.recent_accepts_first: dict = {}  # {symbol: (timestamp, price)}
+
+        # D1: pre-candidate 추적 — {symbol: (timestamp, price, date)}
+        # L3 통과 시 등록, 당일 최초값만 보존 (덮어쓰기 금지)
+        self.pre_candidates: dict = {}  # {symbol: (datetime, int_price, date)}
+
+        # G3 평가 시각 추적 — {symbol: datetime}
+        self._g3_eval_times: dict = {}
+        # v1.2: Phase2 SMC score 예외용 힌트 캐시 (main에서 설정)
+        self._last_smc_score_hint: dict = {}   # {symbol: float}
+        self._last_reclaim_hint: dict = {}     # {symbol: bool}
+
+    def set_smc_hints(self, stock_code: str, smc_score: float, reclaim_detected: bool) -> None:
+        """v1.2: G3 Phase2 예외를 위한 SMC 힌트 설정 (main에서 CHoCH 평가 후 호출)"""
+        self._last_smc_score_hint[stock_code] = smc_score
+        self._last_reclaim_hint[stock_code] = reclaim_detected
 
     def check_l0_system_filter(self, current_cash: float = 0, daily_pnl: float = 0) -> Tuple[bool, str]:
         """
@@ -482,6 +506,11 @@ class SignalOrchestrator:
             logger.debug(f"[REJECT_L3] {stock_code} | {l3_result.reason[:60]}")
             return result
 
+        # D1: L3 통과 → pre-candidate 등록 (YAML pre_candidate.enabled=true 시)
+        _d1_cfg = self.config.get('pre_candidate', {})
+        if _d1_cfg.get('enabled', False):
+            self._register_pre_candidate(stock_code, current_price)
+
         # L4: Liquidity Shift
         l4_result = self.liquidity_detector.check_with_confidence(stock_code)
         result['details']['l4_liquidity'] = l4_result.reason
@@ -553,30 +582,280 @@ class SignalOrchestrator:
         result['aggregate_score'] = aggregate_score
         result['alpha_breakdown'] = alpha_result["alphas"]
 
-        # Multi-Alpha 임계값 체크 (임시 완화: 1.0 → 0.8)
-        ALPHA_THRESHOLD = 0.8
+        # Multi-Alpha 임계값 체크 — v1.2: alpha_sizing_mode 시 block → size 축소
+        _orch_cfg = self.config.get('orchestrator', {})
+        ALPHA_THRESHOLD = _orch_cfg.get('alpha_threshold', 0.8)
+        _alpha_sizing_mode = _orch_cfg.get('alpha_sizing_mode', False)
         if aggregate_score <= ALPHA_THRESHOLD:
-            # aggregate_score가 임계값 이하면 매수 조건 미달
-            self.stats['alpha_rejected'] += 1
-            result['rejection_level'] = 'ALPHA'
-            result['rejection_reason'] = f"Multi-Alpha 점수 부족 ({aggregate_score:+.2f} <= {ALPHA_THRESHOLD})"
-            logger.debug(f"[REJECT_ALPHA] {stock_code} | score={aggregate_score:+.2f}")
-            return result
+            if _alpha_sizing_mode:
+                # score 미달 → 차단 대신 size 축소
+                _alpha_min_mult = _orch_cfg.get('alpha_sizing_min_mult', 0.5)
+                result['position_size_multiplier'] = min(result.get('position_size_multiplier', 1.0), _alpha_min_mult)
+                logger.debug(f"[ALPHA_SIZING] {stock_code} | score={aggregate_score:+.2f} → size×{_alpha_min_mult}")
+            else:
+                self.stats['alpha_rejected'] += 1
+                result['rejection_level'] = 'ALPHA'
+                result['rejection_reason'] = f"Multi-Alpha 점수 부족 ({aggregate_score:+.2f} <= {ALPHA_THRESHOLD})"
+                logger.debug(f"[REJECT_ALPHA] {stock_code} | score={aggregate_score:+.2f}")
+                return result
+
+        # G3: 사전 진입 필터 (L6 통과 직후 / ACCEPT 기록 직전)
+        # v1.2: Phase별 delay threshold 분리
+        #   Phase1 (09:30~10:00): delay≤3분 허용
+        #   Phase2 (10:00~11:30): delay≤2분, SMC score≥80+reclaim 예외
+        #   Phase3 (11:30~ ):     c_late_block이 처리
+        if self.config.get('late_entry_control', {}).get('g3_delay0_quality_gate', {}).get('enabled', False):
+            _g3_cfg = self.config.get('late_entry_control', {}).get('g3_delay0_quality_gate', {})
+            _g3_now = datetime.now()
+            _g3_hour = _g3_now.hour
+            _g3_minute = _g3_now.minute
+
+            # Phase별 delay threshold 결정
+            _block_before_hour = _g3_cfg.get('block_before_hour', 10)
+            _phase2_end_str = _g3_cfg.get('phase2_end_time', '11:30')
+            _phase2_end_h, _phase2_end_m = map(int, _phase2_end_str.split(':'))
+            _in_phase1 = _g3_hour < _block_before_hour
+            _in_phase2 = (not _in_phase1) and (
+                _g3_hour < _phase2_end_h or (_g3_hour == _phase2_end_h and _g3_minute < _phase2_end_m)
+            )
+
+            if _in_phase1:
+                _g3_threshold = float(_g3_cfg.get('phase1_delay_threshold_min', 3.0))
+            else:
+                _g3_threshold = float(_g3_cfg.get('delay_threshold_min', 2.0))
+
+            # first_signal_time: pre_candidate 있으면 그 시각, 없으면 현재(=첫 신호)
+            _pre_ts, _ = self.get_pre_candidate_info(stock_code)
+            if _pre_ts is not None:
+                _g3_first_signal_time = _pre_ts
+                _g3_delay_min = (_g3_now - _pre_ts).total_seconds() / 60.0
+            else:
+                _g3_first_signal_time = _g3_now
+                _g3_delay_min = 0.0
+
+            _g3_is_delay0 = _g3_delay_min <= _g3_threshold
+            self._g3_eval_times[stock_code] = _g3_now
+
+            if _g3_is_delay0 and self._is_early_open():
+                result['rejection_level'] = 'G3'
+                result['rejection_reason'] = (f"G3_EARLY_OPEN: 장초반({_g3_now.strftime('%H:%M')}) "
+                                              f"delay={_g3_delay_min:.0f}m 즉시진입 차단")
+                _msg = (f"[G3_REJECT][EARLY_OPEN] {stock_code} "
+                        f"first_signal={_g3_first_signal_time.strftime('%H:%M')} "
+                        f"g3_eval={_g3_now.strftime('%H:%M')} "
+                        f"delay={_g3_delay_min:.0f}m price={current_price:,.0f}")
+                logger.info(_msg)
+                signal_logger.info(_msg)
+                if self.db:
+                    try:
+                        self.db.log_signal_event(
+                            event_type="G3_REJECT", stock_code=stock_code,
+                            g3_stage="EARLY_OPEN", reject_reason=result['rejection_reason'],
+                            first_signal_time=_g3_first_signal_time,
+                            g3_eval_time=_g3_now,
+                            event_data={"price": int(current_price), "delay_min": round(_g3_delay_min, 1),
+                                        "time": _g3_now.isoformat()}
+                        )
+                    except Exception:
+                        pass
+                return result
+
+            _is_hp, _bdh_pct = self._is_high_proximity(df)
+            if _g3_is_delay0 and _is_hp:
+                # Phase2 예외: SMC score ≥ 80 AND reclaim 발생 시 HIGH_PROX 우회
+                _p2_score_thr = _g3_cfg.get('phase2_smc_score_exception', 80)
+                _smc_score_hint = getattr(self, '_last_smc_score_hint', {}).get(stock_code, 0.0)
+                _reclaim_hint = getattr(self, '_last_reclaim_hint', {}).get(stock_code, False)
+                _p2_exception = (
+                    _in_phase2
+                    and _smc_score_hint >= _p2_score_thr
+                    and _reclaim_hint
+                )
+                if _p2_exception:
+                    logger.info(
+                        f"[G3_P2_EXCEPT] {stock_code} HIGH_PROX 우회 "
+                        f"smc_score={_smc_score_hint:.0f}≥{_p2_score_thr} reclaim=True"
+                    )
+                else:
+                    # v1.3: soft_penalty_mode → size 축소 (hard block 대신)
+                    _g3_soft_mode = _g3_cfg.get('soft_penalty_mode', False)
+                    _g3_soft_mult = float(_g3_cfg.get('soft_penalty_mult', 0.6))
+                    _min_bdh_cfg = _g3_cfg.get('min_bdh_pct', 3.0)
+                    if _g3_soft_mode:
+                        result['position_size_multiplier'] = min(
+                            result.get('position_size_multiplier', 1.0), _g3_soft_mult
+                        )
+                        _msg = (f"[G3_SOFT_PENALTY][HIGH_PROX] {stock_code} "
+                                f"bdh={_bdh_pct:.1f}%<{_min_bdh_cfg}% "
+                                f"→ size×{_g3_soft_mult} delay={_g3_delay_min:.0f}m")
+                        logger.info(_msg)
+                        signal_logger.info(_msg)
+                    else:
+                        result['rejection_level'] = 'G3'
+                        result['rejection_reason'] = (f"G3_HIGH_PROX: 당일 고저범위 {_bdh_pct:.1f}% "
+                                                      f"< {_min_bdh_cfg}% delay={_g3_delay_min:.0f}m 차단")
+                        _msg = (f"[G3_REJECT][HIGH_PROX] {stock_code} "
+                                f"bdh={_bdh_pct:.1f}% "
+                                f"first_signal={_g3_first_signal_time.strftime('%H:%M')} "
+                                f"g3_eval={_g3_now.strftime('%H:%M')} "
+                                f"delay={_g3_delay_min:.0f}m")
+                        logger.info(_msg)
+                        signal_logger.info(_msg)
+                        if self.db:
+                            try:
+                                self.db.log_signal_event(
+                                    event_type="G3_REJECT", stock_code=stock_code,
+                                    g3_stage="HIGH_PROX", reject_reason=result['rejection_reason'],
+                                    first_signal_time=_g3_first_signal_time,
+                                    g3_eval_time=_g3_now,
+                                    event_data={"price": int(current_price), "bdh_pct": round(_bdh_pct, 2),
+                                                "delay_min": round(_g3_delay_min, 1), "time": _g3_now.isoformat()}
+                                )
+                            except Exception:
+                                pass
+                        return result
+
+            # Stage A 추가 품질 게이트 (G3 통과 delay=0 잔여 이상 거래 차단)
+            # G3가 활성화된 경우에만 실행 (_g3_is_delay0 / _bdh_pct 의존)
+            # C2: bdh > max_bdh_pct → 비정상 변동성 (서킷브레이커/상장일) delay=0 차단
+            _sa_cfg = self.config.get('late_entry_control', {}).get('stage_a_quality_gate', {})
+            if _sa_cfg.get('enabled', False) and _g3_is_delay0:
+                _sa_max_bdh = _sa_cfg.get('max_bdh_pct', 15.0)
+                if _bdh_pct is not None and float(_bdh_pct) > _sa_max_bdh:
+                    result['rejection_level'] = 'STAGE_A'
+                    result['rejection_reason'] = (
+                        f"STAGE_A_ANOMALY: 당일 고저범위 {_bdh_pct:.1f}% > {_sa_max_bdh}% "
+                        f"(비정상 변동성) delay={_g3_delay_min:.0f}m 차단"
+                    )
+                    _sa_msg = (f"[STAGE_A_REJECT][ANOMALY] {stock_code} "
+                               f"bdh={_bdh_pct:.1f}% > {_sa_max_bdh}% "
+                               f"first_signal={_g3_first_signal_time.strftime('%H:%M')} "
+                               f"g3_eval={_g3_now.strftime('%H:%M')} "
+                               f"delay={_g3_delay_min:.0f}m")
+                    logger.info(_sa_msg)
+                    signal_logger.info(_sa_msg)
+                    if self.db:
+                        try:
+                            self.db.log_signal_event(
+                                event_type="STAGE_A_REJECT", stock_code=stock_code,
+                                g3_stage="ANOMALY", reject_reason=result['rejection_reason'],
+                                first_signal_time=_g3_first_signal_time,
+                                g3_eval_time=_g3_now,
+                                event_data={"price": int(current_price), "bdh_pct": round(_bdh_pct, 2),
+                                            "max_bdh": _sa_max_bdh, "delay_min": round(_g3_delay_min, 1),
+                                            "time": _g3_now.isoformat()}
+                            )
+                        except Exception:
+                            pass
+                    return result
 
         # 모든 레벨 통과!
         self.stats['total_accepted'] += 1
         result['allowed'] = True
-        # [DIAG_MODE] ACCEPT 시각 기록
-        self.recent_accepts[stock_code] = datetime.now().timestamp()
+
+        # ACCEPT 이벤트를 단일 튜플 (timestamp, price)로 기록.
+        # time과 price는 반드시 같은 이벤트 시점이어야 H-003 gap 계산이 유효함.
+        _now_ts = datetime.now()
+        _entry = (_now_ts.timestamp(), int(current_price))  # 동일 이벤트, 동시 캡처
+
+        # recent_accepts: 항상 최신 accept로 갱신 (get_recent_accepts window 체크용)
+        self.recent_accepts[stock_code] = _entry
+
+        # recent_accepts_first: 당일 최초 ACCEPT만 보존 (덮어쓰기 금지 — t0 오염 방지)
+        # 정의: candidate_first_time = candidate_first_price 와 같은 이벤트 시각
+        #       즉, 당일 이 종목이 처음으로 L0~L6 ACCEPT된 그 단일 순간
+        _existing = self.recent_accepts_first.get(stock_code)
+        if _existing is None:
+            self.recent_accepts_first[stock_code] = _entry
+        else:
+            # 날짜가 바뀐 경우만 리셋 (자정 경계)
+            from datetime import date
+            if date.fromtimestamp(_existing[0]) < _now_ts.date():
+                self.recent_accepts_first[stock_code] = _entry
+
+        # D1: pre-candidate → candidate 승격 감지 및 로그
+        _pre_ts, _pre_p = self.get_pre_candidate_info(stock_code)
+        if _pre_ts is not None:
+            _gap_min = (_now_ts - _pre_ts).total_seconds() / 60.0
+            _promo_msg = (f"[PRE_TO_CAND] 종목={stock_code} "
+                          f"pre={_pre_ts.strftime('%H:%M')} "
+                          f"cand={_now_ts.strftime('%H:%M')} "
+                          f"gap={_gap_min:.0f}m pre_price={_pre_p:,} cand_price={int(current_price):,}")
+            logger.info(_promo_msg)
+            signal_logger.info(_promo_msg)
+
+        # [SIGNAL_PIPELINE] 통합 타임스탬프 로그 (orchestrator 레벨 — CHOCH_RAW/ENTRY는 SMC 단에서 기록)
+        _spipe_pre_ts, _ = self.get_pre_candidate_info(stock_code)
+        _spipe_g3_ts = self._g3_eval_times.get(stock_code)
+        _spipe_first = _spipe_pre_ts or _now_ts   # first_signal = pre_cand 없으면 현재 ACCEPT 시각
+        _spipe_msg = (
+            f"[SIGNAL_PIPELINE] {stock_code} "
+            f"L3={_spipe_pre_ts.strftime('%H:%M') if _spipe_pre_ts else 'N/A'} "
+            f"G3_EVAL={_spipe_g3_ts.strftime('%H:%M') if _spipe_g3_ts else 'N/A'} "
+            f"FIRST_SIGNAL={_spipe_first.strftime('%H:%M')} "
+            f"ACCEPT={_now_ts.strftime('%H:%M')} "
+            f"(CHOCH_RAW/ENTRY=pending)"
+        )
+        logger.info(_spipe_msg)
+        signal_logger.info(_spipe_msg)
+        if self.db:
+            try:
+                self.db.log_signal_event(
+                    event_type="SIGNAL_PIPELINE", stock_code=stock_code,
+                    first_signal_time=_spipe_first,
+                    g3_eval_time=_spipe_g3_ts,
+                    event_data={"price": int(current_price), "accept_time": _now_ts.isoformat(),
+                                "has_pre_candidate": _spipe_pre_ts is not None}
+                )
+            except Exception:
+                pass
 
         # Confidence 기반 포지션 크기 결정 (0.6 ~ 1.0)
         position_multiplier = self.confidence_aggregator.calculate_position_multiplier(final_confidence)
         result['position_size_multiplier'] = position_multiplier
 
-        # ✅ 승인 로그 (프로세스 ID 포함)
+        # ─────────────────────────────────────────────────────────────────
+        # Layer 3 대안: Momentum Boost — 강한 모멘텀 시 진입 포지션 확대
+        # Breakout Add-on(execute_buy 금지) 대신 초기 position_size_multiplier 상향
+        # 현재: enabled=false (YAML smc.momentum_boost)
+        # ─────────────────────────────────────────────────────────────────
+        _mb_cfg = self.config.get('smc.momentum_boost', {})
+        if _mb_cfg.get('enabled', False) and df is not None and len(df) >= 5:
+            try:
+                _mb_cond = _mb_cfg.get('conditions', {})
+                _mb_bdh = float(df.get('below_day_high_pct', pd.Series([0])).iloc[-1]
+                                if 'below_day_high_pct' in df.columns else 0)
+                _mb_rsi = float(df['rsi'].iloc[-1]) if 'rsi' in df.columns else 0
+                _mb_vol_r = 0.0
+                if 'volume' in df.columns and len(df) >= 6:
+                    _avg_v = float(df['volume'].iloc[-6:-1].mean())
+                    if _avg_v > 0:
+                        _mb_vol_r = float(df['volume'].iloc[-1]) / _avg_v
+
+                _mb_bdh_ok  = _mb_bdh >= _mb_cond.get('min_bdh_pct', 3.0)
+                _mb_rsi_ok  = _mb_rsi >= _mb_cond.get('min_rsi', 55)
+                _mb_vol_ok  = _mb_vol_r >= _mb_cond.get('min_volume_ratio', 1.5)
+
+                if _mb_bdh_ok and _mb_rsi_ok and _mb_vol_ok:
+                    _boost = _mb_cfg.get('boost_mult', 1.2)
+                    _cap   = _mb_cfg.get('max_mult', 1.3)
+                    _boosted = min(position_multiplier * _boost, _cap)
+                    result['position_size_multiplier'] = _boosted
+                    _boost_msg = (
+                        f"[MOMENTUM_BOOST] {stock_code} "
+                        f"bdh={_mb_bdh:.1f}% rsi={_mb_rsi:.0f} vol={_mb_vol_r:.1f}x "
+                        f"→ pos_mult {position_multiplier:.2f} → {_boosted:.2f}"
+                    )
+                    logger.info(_boost_msg)
+                    signal_logger.info(_boost_msg)
+                    position_multiplier = _boosted
+            except Exception:
+                pass
+
+        # 🟡 후보 승인 로그 — 오케스트레이터(L0~L6) 통과. 실제 주문 전 단계.
         import os
-        msg = f"✅ ACCEPT {stock_code} @{current_price:.0f}원 | PID:{os.getpid()} | conf={final_confidence:.2f} alpha={aggregate_score:+.2f} pos_mult={position_multiplier:.2f}"
-        console.print(f"[green]{msg}[/green]")
+        msg = f"🟡 CANDIDATE_ACCEPT {stock_code} @{current_price:.0f}원 | PID:{os.getpid()} | conf={final_confidence:.2f} alpha={aggregate_score:+.2f} pos_mult={position_multiplier:.2f}"
+        console.print(f"[yellow]{msg}[/yellow]")
         signal_logger.info(msg)
 
         return result
@@ -584,7 +863,100 @@ class SignalOrchestrator:
     def get_recent_accepts(self, window_minutes: int = 35) -> set:
         """최근 window_minutes 내 ACCEPT된 종목 코드 집합 반환."""
         cutoff = datetime.now().timestamp() - window_minutes * 60
-        return {s for s, ts in self.recent_accepts.items() if ts >= cutoff}
+        return {s for s, v in self.recent_accepts.items() if (v[0] if isinstance(v, tuple) else v) >= cutoff}
+
+    def get_candidate_info(self, stock_code: str) -> tuple:
+        """
+        t0 = (candidate_first_time, candidate_first_price) 반환.
+
+        정의:
+          candidate_first_time  = 당일 이 종목이 처음으로 L0~L6 ACCEPT된 시각
+          candidate_first_price = 그 동일한 시각의 현재가
+          → 두 값은 반드시 같은 ACCEPT 이벤트 시점 (동일 튜플에서 추출)
+
+        다회 accept 시: 당일 첫 번째 accept 값만 유지 (덮어쓰기 금지)
+        없으면: (None, None) — 주문 없는 swing 매수, 당일 orchestrator 미통과 등
+        """
+        v = self.recent_accepts_first.get(stock_code)
+        if v is None:
+            return None, None
+        ts, price = v
+        return datetime.fromtimestamp(ts), price
+
+    # ── G3 사전 진입 필터 (evaluate_signal 내부 전용) ───────────────────────────
+
+    def _is_early_open(self) -> bool:
+        """EARLY_OPEN 조건: 장 초반(hour < block_before_hour) 진입 차단
+        v1.2: Phase1(09:30~10:00)은 delay threshold를 3분으로 완화 — block은 동일하게 유지
+        """
+        g3_cfg = self.config.get('late_entry_control', {}).get('g3_delay0_quality_gate', {})
+        if not g3_cfg.get('enabled', False):
+            return False
+        block_before_hour = g3_cfg.get('block_before_hour', 10)
+        return datetime.now().hour < block_before_hour
+
+    def _is_high_proximity(self, df) -> tuple:
+        """HIGH_PROX 조건: 당일 고저 범위 < min_bdh_pct% → 진입 여유 없음.
+        bdh = (day_high - day_low) / day_low * 100
+        Returns: (is_high_prox: bool, bdh_pct: float)
+        """
+        g3_cfg = self.config.get('late_entry_control', {}).get('g3_delay0_quality_gate', {})
+        if not g3_cfg.get('enabled', False):
+            return False, None
+        min_bdh = g3_cfg.get('min_bdh_pct', 3.0)
+        try:
+            if df is None or df.empty:
+                return False, None
+            high_col = 'high' if 'high' in df.columns else ('High' if 'High' in df.columns else None)
+            low_col  = 'low'  if 'low'  in df.columns else ('Low'  if 'Low'  in df.columns else None)
+            if high_col is None or low_col is None:
+                return False, None
+            day_high = float(df[high_col].max())
+            day_low  = float(df[low_col].min())
+            if day_low <= 0:
+                return False, None
+            bdh_pct = (day_high - day_low) / day_low * 100
+            return bdh_pct < min_bdh, bdh_pct
+        except Exception:
+            return False, None
+
+    # ── D1 pre-candidate 공개 API ───────────────────────────────────────────────
+
+    def _register_pre_candidate(self, stock_code: str, price: float) -> bool:
+        """D1: L3 통과 시 pre-candidate 등록 (당일 최초값만, 덮어쓰기 금지)"""
+        from datetime import datetime as _dt, date as _date
+        now = _dt.now()
+        today = now.date()
+        existing = self.pre_candidates.get(stock_code)
+        if existing is not None and existing[2] == today:
+            return False  # 당일 이미 등록됨
+
+        self.pre_candidates[stock_code] = (now, int(price), today)
+        _msg = (f"[PRE_CANDIDATE] 종목={stock_code} time={now.strftime('%H:%M')} "
+                f"price={price:,.0f} stage=L3")
+        logger.info(_msg)
+        signal_logger.info(_msg)
+        return True
+
+    def get_pre_candidate_info(self, stock_code: str):
+        """D1: pre-candidate 등록 정보 반환 — (datetime, price) 또는 (None, None)"""
+        from datetime import date as _date
+        v = self.pre_candidates.get(stock_code)
+        if v is None:
+            return None, None
+        ts, price, dt = v
+        if dt != _date.today():
+            return None, None  # 당일이 아니면 만료
+        return ts, price
+
+    def get_g3_eval_time(self, stock_code: str):
+        """G3 평가 시각 반환 — evaluate_signal 내 G3 블록이 실행된 시각 (없으면 None)"""
+        return self._g3_eval_times.get(stock_code)
+
+    def get_first_signal_time(self, stock_code: str):
+        """first_signal_time 반환: pre_candidate_first_time 또는 None (pipeline 분석용)"""
+        ts, _ = self.get_pre_candidate_info(stock_code)
+        return ts
 
     def _get_institutional_flow(self, stock_code: str) -> Optional[Dict]:
         """

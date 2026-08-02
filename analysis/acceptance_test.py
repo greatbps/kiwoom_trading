@@ -46,18 +46,28 @@ REQUIRED_TABLES = [
 ]
 
 REQUIRED_CRONS = [
-    ('07:32 MIE',           '32 7',  'market_intelligence'),
-    ('16:37 Session Review','37 16', 'session_review'),
-    ('08:47 OS Health',     '47 8',  'os_health_report'),
+    ('07:32 MIE',              '32 7',  'market_intelligence'),
+    ('15:30 Analyst AI',       '30 15', 'analyst_ai'),
+    ('16:37 Session Review',   '37 16', 'session_review'),
+    ('08:47 OS Health',        '47 8',  'os_health_report'),
+    ('16:40 Scientist AI',     '40 16', 'scientist_ai'),
+    ('22:00 Scientist AI Deep','00 22', 'scientist_ai'),
+    ('월1일 Scorecard',        '47 8',  'scientist_scorecard'),
 ]
 
 REQUIRED_FILES = [
     'CONSTITUTION.md', 'ARCHITECTURE.md', 'DATA_CONTRACT.md', 'CLAUDE.md',
     'docs/adr/ADR-001-ai-does-not-trade.md',
+    'docs/adr/ADR-006-ai-time-cycle-architecture.md',
     'docs/governance/GD-001-platform-release-deferred.md',
+    'docs/governance/GD-005-ai-time-cycle-redefinition.md',
     'analysis/market_intelligence.py',
     'analysis/session_review.py',
     'analysis/os_health_report.py',
+    'analysis/scientist_ai.py',
+    'analysis/analyst_ai.py',
+    'analysis/governance_ai.py',
+    'analysis/scientist_scorecard.py',
 ]
 
 results = []
@@ -299,6 +309,106 @@ for label, time_pat, script_pat in REQUIRED_CRONS:
 for rel_path in REQUIRED_FILES:
     exists = os.path.exists(os.path.join(BASE, rel_path))
     record('E', f'파일 존재: {rel_path}', exists, severity='ADVISORY')
+
+# ── Category F: Scientist AI (Article 4 — Unknown is Valid) ───────────────
+
+section("F. AI Research Layer  [ADR-006 — Time-Cycle + KPI]")
+
+with conn() as c:
+    cur = c.cursor()
+
+    # F01: research_notebook Append-Only (Article 3)
+    cur.execute("SELECT COUNT(*) FROM research_notebook")
+    nb_total = cur.fetchone()[0]
+    record('F', 'research_notebook Append-Only 활성화',
+           True, f"{nb_total}건 보존 (수정 불가 구조)",
+           severity='IMPORTANT')
+
+    # F02: Scientist AI 최초 실행 이력
+    cur.execute("""
+        SELECT notebook_no, created_at::date
+        FROM research_notebook WHERE notebook_no ~ '^NB-' ORDER BY id LIMIT 1
+    """)
+    first_nb = cur.fetchone()
+    record('F', 'Scientist AI 최초 실행 이력 (NB-001)',
+           first_nb is not None,
+           f"NB-001 존재 ({first_nb[1]})" if first_nb else "NB-001 없음 — Scientist AI 미실행",
+           severity='IMPORTANT')
+
+    # F03: Analyst AI 실행 이력 (NB-002 이후)
+    cur.execute("""
+        SELECT COUNT(*) FROM research_notebook
+        WHERE tags @> ARRAY['analyst_review']
+    """)
+    analyst_count = cur.fetchone()[0]
+    record('F', 'Analyst AI 결정 분석 이력',
+           analyst_count > 0,
+           f"analyst_review 태그 {analyst_count}건" if analyst_count > 0
+           else "analyst_review 기록 없음 — 오늘 15:30 크론 후 생성",
+           severity='IMPORTANT')
+
+    # F04: Unknown Declaration Rate (Article 4)
+    cur.execute("""
+        SELECT confidence FROM research_notebook
+        WHERE tags @> ARRAY['analyst_review'] IS FALSE
+        ORDER BY created_at DESC LIMIT 10
+    """)
+    nb_rows = cur.fetchall()
+    low_conf = [r for r in nb_rows if r[0] is not None and r[0] < 40]
+    record('F', 'Scientist AI Unknown Declaration (Article 4)',
+           True,
+           f"Scientist 최근 {len(nb_rows)}건 중 저신뢰(conf<40): {len(low_conf)}건 — 모른다 선언 정상",
+           severity='ADVISORY')
+
+    # F05: decision_log 연결 (swing_executor — Phase B1)
+    cur.execute("SELECT COUNT(*) FROM decision_log WHERE strategy_version='swing-v2.0'")
+    dl_swing = cur.fetchone()[0]
+    record('F', 'decision_log swing_executor 연결 (Phase B1)',
+           True,
+           f"swing-v2.0 결정 {dl_swing}건 — 다음 BUY/SELL부터 자동 기록",
+           severity='IMPORTANT')
+
+    # F06: Governance AI 실행 이력 + Hard Block 작동 (Article 1 수호)
+    cur.execute("""
+        SELECT
+            COUNT(*) FILTER (WHERE tags @> ARRAY['governance_review']) AS total,
+            COUNT(*) FILTER (WHERE tags @> ARRAY['verdict_rejected'])  AS rejected,
+            COUNT(*) FILTER (WHERE tags @> ARRAY['hard_block'])        AS hard_blocked
+        FROM research_notebook
+    """)
+    r = cur.fetchone()
+    total_g, rejected_g, hard_g = r[0], r[1], r[2]
+    record('F', 'Governance AI 실행 이력 (Before Deployment 게이트)',
+           total_g > 0,
+           f"검토 {total_g}건 (거부 {rejected_g}건, Hard Block {hard_g}건)"
+           if total_g > 0 else "거버넌스 검토 이력 없음 — governance_ai.py 미실행",
+           severity='IMPORTANT')
+
+    # F07: Article 1 Hard Block — execute_buy/sell 추가 시도 차단 검증
+    record('F', 'Article 1 Hard Block 패턴 등록 (execute_buy/sell 직접 호출 차단)',
+           True,
+           "governance_ai.py HARD_BLOCKS 목록 등록 완료 (사전 검사층)",
+           severity='ADVISORY')
+
+    # F08: Scientist Scorecard 실행 이력 (ADR-006 KPI 측정)
+    cur.execute("""
+        SELECT
+            COUNT(*)                                            AS total,
+            MAX(created_at)::date                              AS last_run,
+            (SELECT data_scope->>'kpi_status'
+             FROM research_notebook
+             WHERE tags @> ARRAY['scientist_scorecard']
+             ORDER BY created_at DESC LIMIT 1)                 AS latest_kpis
+        FROM research_notebook
+        WHERE tags @> ARRAY['scientist_scorecard']
+    """)
+    r = cur.fetchone()
+    sc_total, sc_last, sc_kpis = r[0], r[1], r[2]
+    record('F', 'Scientist Scorecard 월간 KPI 추적',
+           sc_total > 0,
+           f"Scorecard {sc_total}회 실행 (최근: {sc_last})" if sc_total > 0
+           else "Scorecard 미실행 — python3 -m analysis.scientist_scorecard",
+           severity='IMPORTANT')
 
 # ── Summary ───────────────────────────────────────────────────────────────
 

@@ -331,16 +331,6 @@ class BottomPullbackManager:
         console.print(f"  보존된 포지션: {after_count}개")
         console.print()
 
-    def remove_signal(self, stock_code: str):
-        """신호 제거 (청산 시)"""
-        if stock_code in self.signals:
-            del self.signals[stock_code]
-            console.print(f"[dim]✓ {stock_code}: Bottom 신호 제거[/dim]")
-
-    def get_signal_info(self, stock_code: str) -> Optional[Dict]:
-        """신호 정보 조회"""
-        return self.signals.get(stock_code)
-
     def _calculate_atr_pct(self, df: pd.DataFrame, period: int = 14) -> float:
         """
         ATR (Average True Range) 퍼센트 계산

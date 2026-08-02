@@ -170,25 +170,31 @@ def get_executed_trades_today():
             with open('data/risk_log.json', 'r', encoding='utf-8') as f:
                 risk_log = json.load(f)
 
-            logged_trades = risk_log.get('daily_trades', [])
-            logged_pnl = risk_log.get('daily_realized_pnl', 0.0)
-
-            console.print(f"시스템 기록: {len(logged_trades)}건")
-            console.print(f"실제 체결: {len(trades)}건")
-            console.print()
-
-            if len(logged_trades) != len(trades):
-                console.print(f"[red]❌ 불일치! 차이: {len(trades) - len(logged_trades)}건[/red]")
-                console.print(f"[red]   시스템이 {abs(len(trades) - len(logged_trades))}건의 거래를 기록하지 못했습니다![/red]")
+            # 🔧 2026-07-27: today 불일치 시 daily_trades/daily_realized_pnl은
+            # 지난 거래일의 스탈 값이므로 "오늘" 비교로 쓰지 않는다 (freshness 미검증 버그)
+            if risk_log.get('today') != datetime.now().strftime('%Y-%m-%d'):
+                console.print(f"[yellow]⚠️  risk_log.json 이 오늘자가 아님 (기록일: {risk_log.get('today')}) "
+                              f"— 스탈 데이터라 비교 생략[/yellow]")
             else:
-                console.print("[green]✅ 거래 건수 일치[/green]")
+                logged_trades = risk_log.get('daily_trades', [])
+                logged_pnl = risk_log.get('daily_realized_pnl', 0.0)
 
-            if abs(logged_pnl - realized_pnl) > 0.01:
-                console.print(f"[red]❌ 손익 불일치![/red]")
-                console.print(f"   시스템 기록: {logged_pnl:+,}원")
-                console.print(f"   실제 손익: {realized_pnl:+,}원")
-            else:
-                console.print(f"[green]✅ 손익 일치: {realized_pnl:+,}원[/green]")
+                console.print(f"시스템 기록: {len(logged_trades)}건")
+                console.print(f"실제 체결: {len(trades)}건")
+                console.print()
+
+                if len(logged_trades) != len(trades):
+                    console.print(f"[red]❌ 불일치! 차이: {len(trades) - len(logged_trades)}건[/red]")
+                    console.print(f"[red]   시스템이 {abs(len(trades) - len(logged_trades))}건의 거래를 기록하지 못했습니다![/red]")
+                else:
+                    console.print("[green]✅ 거래 건수 일치[/green]")
+
+                if abs(logged_pnl - realized_pnl) > 0.01:
+                    console.print(f"[red]❌ 손익 불일치![/red]")
+                    console.print(f"   시스템 기록: {logged_pnl:+,}원")
+                    console.print(f"   실제 손익: {realized_pnl:+,}원")
+                else:
+                    console.print(f"[green]✅ 손익 일치: {realized_pnl:+,}원[/green]")
 
         except Exception as e:
             console.print(f"[yellow]⚠️  risk_log.json 비교 실패: {e}[/yellow]")

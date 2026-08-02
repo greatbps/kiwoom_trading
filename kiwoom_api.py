@@ -850,7 +850,13 @@ class KiwoomAPI:
                 print(f"  응답 내용: {e.response.text}")
             raise
 
-    @retry_on_error(max_retries=1, delay=1.0, exceptions=(TradingConnectionError, TradingTimeoutError))
+    # 🔧 2026-07-28 [V2-CRIT01] TradingTimeoutError를 재시도 대상에서 제외.
+    # HTTP 타임아웃은 "주문 실패"가 아니라 "응답만 유실"일 수 있다 — 주문이 이미 키움에
+    # 접수된 상태에서 재시도하면 동일 종목 매수가 2회 체결된다(중복 포지션/이중 노출).
+    # 하류에 재시도 중복을 막는 장치가 없다(DUPLICATE_BLOCK은 API 호출 이전 단계 검사).
+    # TradingConnectionError는 연결 자체가 수립되지 않은 경우라 주문 미전송이 거의 확실해 유지한다.
+    # 트레이드오프: 타임아웃 시 진입 1건을 놓칠 수 있으나, 중복 주문보다 손실이 작다.
+    @retry_on_error(max_retries=1, delay=1.0, exceptions=(TradingConnectionError,))
     @handle_trading_errors(notify_user=True, log_errors=True)
     @handle_api_errors(raise_on_auth_error=True, log_errors=True)
     def order_buy(self, stock_code: str, quantity: int, price: int = 0,
@@ -946,7 +952,10 @@ class KiwoomAPI:
         except requests.exceptions.RequestException as e:
             self._handle_request_error(e, f"매수 주문({stock_code})", timeout=15)
 
-    @retry_on_error(max_retries=1, delay=1.0, exceptions=(TradingConnectionError, TradingTimeoutError))
+    # 🔧 2026-07-28 [V2-CRIT01] order_buy와 동일 사유로 TradingTimeoutError 재시도 제외.
+    # 매도 중복은 수량 부족으로 거부될 가능성이 높지만, 부분청산 중이라면 의도보다
+    # 많은 수량이 청산될 수 있어 동일하게 보수적으로 처리한다.
+    @retry_on_error(max_retries=1, delay=1.0, exceptions=(TradingConnectionError,))
     @handle_trading_errors(notify_user=True, log_errors=True)
     @handle_api_errors(raise_on_auth_error=True, log_errors=True)
     def order_sell(self, stock_code: str, quantity: int, price: int = 0,

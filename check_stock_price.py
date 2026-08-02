@@ -85,9 +85,18 @@ def check_stock_price(stock_code: str):
                     buy_price = trade['price']
                     break
 
+        # 종목명 조회
+        stock_name = stock_code
+        try:
+            info = api.get_stock_info(stock_code)
+            if info:
+                stock_name = info.get('stk_nm', stock_code).strip()
+        except Exception:
+            pass
+
         print()
         print("=" * 60)
-        print(f"📊 {stock_code} - 온코닉테라퓨틱스")
+        print(f"📊 {stock_code} - {stock_name}")
         print("=" * 60)
         print(f"데이터 날짜: {data_date}")
         print()

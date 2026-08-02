@@ -84,7 +84,7 @@ def _lookup_regime(timeline: list[tuple[datetime, str]], accept_dt: datetime) ->
 # auto_trading_YYYYMMDD.log ACCEPT 라인
 _ACCEPT_RE = re.compile(
     r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),\d+ - INFO - '
-    r'✅ ACCEPT (\w+) @([\d,]+)원 \|.*?conf=([\d.]+) alpha=([+-]?[\d.]+)'
+    r'(?:✅ ACCEPT|🟡 CANDIDATE_ACCEPT) (\w+) @([\d,]+)원 \|.*?conf=([\d.]+) alpha=([+-]?[\d.]+)'
 )
 
 # smc_decision_YYYYMMDD.log NO_SIG 라인 (log_no_sig 형식)

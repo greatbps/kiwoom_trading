@@ -16,8 +16,9 @@ from typing import Optional
 
 import yfinance as yf
 import pandas as pd
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 
 # Add kiwoom_trading to path for internal modules
 sys.path.insert(0, str(Path('/home/greatbps/projects/kiwoom_trading')))
@@ -44,6 +45,9 @@ logger = logging.getLogger(__name__)
 
 _kiwoom_cache: dict = {}        # key → (data, timestamp)
 _KIWOOM_TTL = 30                # seconds (candidates/stats 등 일반 TTL)
+
+# ─── Log Parse 캐시 (mtime 기반 — 파일 안 바뀌면 sub-ms 반환) ───────────────
+_log_parse_cache: dict = {'mtime': -1.0, 'events': [], 'path': None}
 
 
 def _kiwoom_api():
@@ -101,7 +105,7 @@ def fetch_kiwoom_positions() -> list[dict]:
             if qty <= 0:
                 continue
             entry_price   = float(row.get('pur_pric', 0) or 0)
-            current_price = float(row.get('cur_prc',  0) or 0)
+            current_price = abs(float(row.get('cur_prc', 0) or 0))  # Kiwoom이 음수 반환하는 경우 보정
             eval_amount   = current_price * qty
             eval_profit   = (current_price - entry_price) * qty
             profit_rate   = ((current_price / entry_price) - 1) * 100 if entry_price else 0
@@ -185,14 +189,14 @@ def fetch_kiwoom_balance() -> dict:
 
     # Kiwoom API 직접 호출
     def _call():
-        deposit = withdrawable = holding_value = eval_profit = 0
+        deposit = pymn_alow = holding_value = eval_profit = 0
         try:
             bal = _kiwoom_api().get_balance()
             def _int(v): return abs(int(float(str(v or '0').replace(',', ''))))
-            # entr = 예수금(원화 현금)
-            deposit      = _int(bal.get('entr', 0))
-            # fc_stk_krw_repl_set_amt = 외화주식 원화환산 인출가능금
-            withdrawable = _int(bal.get('fc_stk_krw_repl_set_amt', 0))
+            # entr = 예수금 D+1 (T+2 미결제 매수대금 포함 — 표시용)
+            deposit   = _int(bal.get('entr', 0))
+            # pymn_alow_amt = 출금가능금(인출가능금) — 증거금/미결제금 차감 후 실제 현금
+            pymn_alow = _int(bal.get('pymn_alow_amt', 0)) or _int(bal.get('d1_pymn_alow_amt', 0))
         except Exception:
             pass
         # 보유종목 평가금액: ka10085 결과에서 직접 집계
@@ -203,10 +207,11 @@ def fetch_kiwoom_balance() -> dict:
         except Exception:
             pass
         return {
-            'deposit':       deposit,
-            'withdrawable':  withdrawable,
+            'deposit':       deposit,       # 예수금 D+1 (표시용)
+            'withdrawable':  pymn_alow,     # 출금가능금 (실제 사용 가능 현금)
             'holding_value': holding_value,
-            'total_assets':  deposit + withdrawable + holding_value,
+            # 총자산 = 출금가능금 + 주식평가 (T+2 이중계산 방지)
+            'total_assets':  pymn_alow + holding_value,
             'eval_profit':   eval_profit,
         }
 
@@ -317,22 +322,68 @@ def _fetch_price_sync(code: str) -> float:
 
 
 async def get_ohlcv(code: str, current_price: float) -> list[dict]:
-    """Fetch 5-min OHLCV (40 bars). Cache 5 min."""
+    """Fetch 5-min OHLCV (40 bars). Cache 5 min (빈 결과는 캐시하지 않음 — 다음 요청에서 재시도)."""
     now = datetime.now()
     if code in _OHLCV_TS and (now - _OHLCV_TS[code]).seconds < 300:
         return _OHLCV_CACHE.get(code, [])
 
     loop = asyncio.get_event_loop()
     bars = await loop.run_in_executor(None, _fetch_ohlcv_sync, code)
-    _OHLCV_CACHE[code] = bars
-    _OHLCV_TS[code] = now
+    if bars:
+        _OHLCV_CACHE[code] = bars
+        _OHLCV_TS[code] = now
     return bars
+
+
+def _fetch_ohlcv_kiwoom(code: str) -> list[dict]:
+    """키움 분봉 API로 오늘 5분봉 조회. 장중에만 유효."""
+    import datetime as dt
+    today_str = dt.date.today().strftime('%Y%m%d')
+
+    def _price(v: str) -> int:
+        try:
+            return abs(int(v))
+        except Exception:
+            return 0
+
+    try:
+        result = _kiwoom_api().get_minute_chart(code, tic_scope='5')
+        rows = result.get('stk_min_pole_chart_qry', [])
+        if not rows:
+            return []
+        bars = []
+        for row in reversed(rows):          # API는 최신→과거 순서, 역순으로 시간 순 정렬
+            ct = row.get('cntr_tm', '')     # 'YYYYMMDDHHmmSS'
+            if not ct or ct[:8] != today_str:
+                continue
+            hhmm = f"{ct[8:10]}:{ct[10:12]}"
+            bars.append({
+                'time':   hhmm,
+                'open':   _price(row.get('open_pric', '0')),
+                'high':   _price(row.get('high_pric', '0')),
+                'low':    _price(row.get('low_pric', '0')),
+                'close':  _price(row.get('cur_prc', '0')),
+                'volume': _price(row.get('trde_qty', '0')),
+            })
+        return bars
+    except Exception as e:
+        logger.warning(f'Kiwoom OHLCV failed {code}: {e}')
+        return []
 
 
 def _fetch_ohlcv_sync(code: str) -> list[dict]:
     import datetime as dt
     from datetime import timezone, timedelta
     KST = timezone(timedelta(hours=9))
+    now_kst  = dt.datetime.now(KST)
+    today    = now_kst.date()
+    in_market = dt.time(9, 0) <= now_kst.time() <= dt.time(15, 35)
+
+    # 장중에는 키움 실시간 데이터를 우선 사용
+    if in_market:
+        bars = _fetch_ohlcv_kiwoom(code)
+        if bars:
+            return bars
 
     def _val(v):
         try:
@@ -362,8 +413,12 @@ def _fetch_ohlcv_sync(code: str) -> list[dict]:
 
             # Show most recent trading day's full session
             latest_date = df.index.date[-1]
+
+            # 장 외 시간에 yfinance latest가 어제이면 당일 데이터 없음 → 빈 배열
+            if latest_date < today:
+                return []
+
             df = df[df.index.date == latest_date]
-            # If fewer than 3 bars, likely wrong exchange data — skip
             if len(df) < 3:
                 continue
 
@@ -693,10 +748,24 @@ def parse_today_log() -> list[dict]:
 
     Reads the entire file but only matches lines with known keywords (fast grep-style).
     Avoids the 'last N lines' trap where post-market news logs bury trading events.
+
+    mtime 캐시: 파일이 바뀌지 않았으면 이전 결과 즉시 반환 (sub-ms).
+    파일이 바뀌었을 때만 전체 파싱 실행.
     """
     log_path = _latest_log_path()
     if not log_path:
         return _parse_smc_decision_log()
+
+    # mtime 캐시 — 파일 변경 없으면 즉시 반환
+    try:
+        cur_mtime = log_path.stat().st_mtime
+        if (
+            _log_parse_cache['path'] == str(log_path)
+            and _log_parse_cache['mtime'] == cur_mtime
+        ):
+            return _log_parse_cache['events']
+    except Exception:
+        cur_mtime = -1.0
 
     # Log format: "2026-04-10 09:17:47,014 - INFO - <message>"
     TS = r'\d{4}-\d{2}-\d{2} (\d{2}:\d{2}:\d{2}),\d+'
@@ -799,7 +868,13 @@ def parse_today_log() -> list[dict]:
     orch_events = _parse_orchestrator_log()
     all_events = sorted(events + smc_events + orch_events, key=lambda e: e['time'])
 
-    return list(reversed(all_events[-80:]))  # newest first
+    result = list(reversed(all_events[-80:]))  # newest first
+
+    # mtime 캐시에 저장
+    _log_parse_cache['path']   = str(log_path)
+    _log_parse_cache['mtime']  = cur_mtime
+    _log_parse_cache['events'] = result
+    return result
 
 
 def _parse_orchestrator_log() -> list[dict]:
@@ -850,7 +925,7 @@ def _parse_orchestrator_log() -> list[dict]:
     # Old: ✅ ACCEPT 009420 @45750원 | conf=0.49 alpha=+1.55 pos_mult=0.40
     # New: ✅ ACCEPT 056360 @12410원 | PID:2379128 | conf=0.52 alpha=+1.65 pos_mult=0.62
     pat_accept = re.compile(
-        TS + r' - \w+ - .*✅ ACCEPT (\d{6}) @([\d,]+)원 \| (?:PID:\d+ \| )?conf=([\d.]+) alpha=([+\-\d.]+)'
+        TS + r' - \w+ - .*(?:✅ ACCEPT|🟡 CANDIDATE_ACCEPT) (\d{6}) @([\d,]+)원 \| (?:PID:\d+ \| )?conf=([\d.]+) alpha=([+\-\d.]+)'
     )
     # REJECT: ❌ REJECT 218410 | PID:2379128 | L0 | 진입 시간 외 (09:17, 10:00 이전)
     # Also without PID: ❌ REJECT 218410 | L0 | 진입 시간 외 ...
@@ -875,10 +950,10 @@ def _parse_orchestrator_log() -> list[dict]:
                         seen.add(uid)
                         _sym_a = m.group(2)
                         accept_events.append({
-                            'type': 'FILTER', 'event': 'ACCEPT', 'symbol': _sym_a,
+                            'type': 'FILTER', 'event': 'CANDIDATE_ACCEPT', 'symbol': _sym_a,
                             'symbolName': _name_map.get(_sym_a, ''),
                             'params': f'price:{m.group(3)}원  conf:{m.group(4)}  alpha:{m.group(5)}',
-                            'result': 'PASS', 'resultClass': 'pass', 'time': m.group(1),
+                            'result': 'CANDIDATE', 'resultClass': 'candidate', 'time': m.group(1),
                             'id': f'orch_accept_{hash(line) & 0xffff}',
                             'fnRef': 'signal_orchestrator',
                         })
@@ -1020,12 +1095,18 @@ async def build_candidates() -> list[dict]:
         if not code:
             return None
 
-        price, news_items, supply, stats = await asyncio.gather(
+        price, bars_for_price, news_items, supply, stats = await asyncio.gather(
             get_current_price(code),
+            get_ohlcv(code, 0),
             fetch_news(code, display=5),
             fetch_supply(code),
             get_stats(code),
         )
+        # 장중 Kiwoom OHLCV 마지막 bar close로 가격 보정
+        # → yfinance .KS/.KQ 혼동 (예: KOSDAQ 종목에 .KS 가격 적용) 방지
+        if bars_for_price and bars_for_price[-1].get('close', 0) > 0:
+            price = float(bars_for_price[-1]['close'])
+
         in_position  = code in positions_raw
         news_score   = _calc_news_score(news_items)
         supply_score = _calc_supply_score(supply)
@@ -1103,6 +1184,21 @@ def _is_ghost_position(code: str, entry_date_str: str) -> bool:
         return False
 
 
+def _longterm_hold_codes() -> set[str]:
+    """config/strategy_hybrid.yaml의 risk_control.longterm_hold_exclude 목록.
+
+    엔진이 관리하지 않는 장기보유 종목 — SL/TP/전략을 API/폴백에서 그대로
+    형식적으로 계산해 보여주면(entry×0.97 등) 실제 손절/전략이 있는 것처럼
+    오해하게 만들어 여기서 별도 처리한다.
+    """
+    try:
+        import yaml
+        cfg = yaml.safe_load(CONFIG_PATH.read_text(encoding='utf-8'))
+        return set(cfg.get('risk_control', {}).get('longterm_hold_exclude', []) or [])
+    except Exception:
+        return set()
+
+
 def build_positions() -> list[dict]:
     """
     포지션 목록.
@@ -1110,11 +1206,14 @@ def build_positions() -> list[dict]:
     ② 실패 시: positions_state.json + 유령 포지션 필터 폴백
     positions_state의 SL/TP/전략 메타는 API 결과에 보완.
     """
+    longterm_codes = _longterm_hold_codes()
     # ── ① Kiwoom API ──────────────────────────────────────────────────────────
     kiwoom_pos = fetch_kiwoom_positions()
     if kiwoom_pos:
         # positions_state 메타 (SL, TP, strategy, entry_date, choch_grade 등) 보완
         state_raw: dict = read_json(POSITIONS_PATH)
+        # swing_positions.json도 메타 소스로 병합 (swing_executor 진입 종목 커버)
+        swing_raw: dict = read_json(BASE / 'data' / 'swing_positions.json')
         result = []
         for kp in kiwoom_pos:
             code    = kp['symbol']
@@ -1124,8 +1223,34 @@ def build_positions() -> list[dict]:
             pnl     = kp['eval_profit']
             pnl_pct = kp['profit_rate']
 
-            # positions_state에서 추가 메타 읽기
-            meta = state_raw.get(code, {}) if isinstance(state_raw, dict) else {}
+            # positions_state 우선, 없으면 swing_positions에서 메타 읽기
+            smc_meta   = state_raw.get(code, {}) if isinstance(state_raw, dict) else {}
+            swing_meta = swing_raw.get(code, {}) if isinstance(swing_raw, dict) else {}
+            meta = smc_meta if smc_meta else swing_meta
+
+            if code in longterm_codes:
+                # 🔒 장기보유 제외 종목 — 엔진이 관리 안 함(positions_state에 기록 없음).
+                # meta가 비어서 SL/TP를 entry×0.97/1.05로 형식 계산하면 실제 손절이
+                # 있는 것처럼 보여 오해를 유발함 — sl/tp 없이 '관리 대상 아님'으로 표시.
+                result.append({
+                    'symbol':         code,
+                    'name':           kp['name'],
+                    'entryPrice':     entry,
+                    'currentPrice':   current,
+                    'quantity':       qty,
+                    'sl':             None,
+                    'tp':             None,
+                    'pnl':            round(pnl),
+                    'pnlPct':         round(pnl_pct, 2),
+                    'strategy':       'LONGTERM_HOLD',
+                    'holdMinutes':    _calc_hold_minutes(meta.get('entry_date', '') or meta.get('entry_time', '')),
+                    'chochGrade':     None,
+                    'trailingActive': False,
+                    'highestPrice':   current,
+                    'source':         'kiwoom_api',
+                })
+                continue
+
             trailing_stop = meta.get('trailing_stop_price')
             stop_loss     = meta.get('stop_loss_price')
             sl = (
@@ -1154,9 +1279,14 @@ def build_positions() -> list[dict]:
                 'tp':             tp,
                 'pnl':            round(pnl),
                 'pnlPct':         round(pnl_pct, 2),
-                'strategy':       meta.get('strategy') or meta.get('entry_reason', 'SMC'),
-                'holdMinutes':    _calc_hold_minutes(meta.get('entry_date', '')),
-                'chochGrade':     str(meta.get('choch_grade') or 'B'),
+                'strategy':       (
+                    meta.get('strategy') or meta.get('entry_reason')
+                    or ('SWING' if swing_meta else 'SMC')
+                ),
+                'holdMinutes':    _calc_hold_minutes(
+                    meta.get('entry_date', '') or meta.get('entry_time', '')
+                ),
+                'chochGrade':     str(meta.get('choch_grade') or meta.get('pattern') or 'B'),
                 'trailingActive': trailing_active,
                 'highestPrice':   highest,
                 'source':         'kiwoom_api',
@@ -1221,7 +1351,11 @@ def _calc_hold_minutes(entry_date_str: str) -> int:
     if not entry_date_str:
         return 0
     try:
-        entry_dt = datetime.fromisoformat(entry_date_str.replace('Z', ''))
+        s = str(entry_date_str).replace('Z', '')
+        # 날짜만 있는 경우 (YYYY-MM-DD) 당일 09:00 기준으로 계산
+        if len(s) == 10:
+            s = s + 'T09:00:00'
+        entry_dt = datetime.fromisoformat(s)
         delta = datetime.now() - entry_dt
         return max(0, int(delta.total_seconds() / 60))
     except Exception:
@@ -1483,7 +1617,7 @@ def get_filter_stats() -> list[dict]:
     if total_signals == 0:
         log = _latest_log_path()
         if log:
-            accept = sum(1 for l in log.read_text(errors='ignore').splitlines() if '✅ ACCEPT' in l)
+            accept = sum(1 for l in log.read_text(errors='ignore').splitlines() if 'CANDIDATE_ACCEPT' in l or '✅ ACCEPT' in l)
             reject = sum(1 for l in log.read_text(errors='ignore').splitlines() if '❌ REJECT' in l)
             total_signals = accept + reject
             passed2 = accept
@@ -1541,6 +1675,43 @@ async def api_market_regime():
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(None, get_market_regime)
     return result
+
+
+def _get_regime_v14() -> dict:
+    """v1.4 EMA20 기반 레짐 (TREND_UP / NEUTRAL / RISK_OFF) 계산."""
+    try:
+        import yaml
+        from analyzers.market.regime_analyzer import RegimeAnalyzer
+
+        cfg_raw = yaml.safe_load(CONFIG_PATH.read_text(encoding='utf-8'))
+
+        class _Cfg:
+            def __init__(self, d): self._d = d
+            def get(self, key, default=None):
+                v = self._d
+                for k in key.split('.'):
+                    v = v.get(k, default) if isinstance(v, dict) else default
+                return v
+
+        dec = RegimeAnalyzer(api=None, config=_Cfg(cfg_raw)).evaluate_for_datetime(
+            datetime.now()
+        )
+        return {
+            'regime':            dec.regime,
+            'score':             dec.score,
+            'allow_new_entries': dec.allow_new_entries,
+            'size_mult':         dec.size_multiplier,
+            'reasons':           dec.reasons,
+            'as_of':             datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        }
+    except Exception as e:
+        return {'regime': 'UNKNOWN', 'score': 0, 'error': str(e)}
+
+
+@app.get('/api/regime/v14')
+async def api_regime_v14():
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _get_regime_v14)
 
 
 @app.get('/api/candidates')
@@ -1636,9 +1807,71 @@ def _make_news_summary(news_items: list[dict], stock_name: str) -> str:
     return f'{stock_name}: {tone} 뉴스 우세 ({pos}↑{neg}↓/{total}건). 최신: {latest}'
 
 
+@app.get('/api/ohlcv/{symbol}')
+async def api_ohlcv(symbol: str):
+    """OHLCV 전용 경량 엔드포인트 — 차트 자동 갱신용."""
+    bars = await get_ohlcv(symbol, 0)
+    return {'symbol': symbol, 'bars': bars}
+
+
 @app.get('/api/decision-log')
 def api_decision_log():
     return parse_today_log()
+
+
+@app.get('/api/events/signal-feed')
+async def signal_feed_sse(request: Request):
+    """SSE 엔드포인트 — 로그 파일 mtime 변경 시 즉시 push, 변경 없으면 5초 heartbeat."""
+    async def event_stream():
+        last_mtime = -1.0
+        last_path_str = ''
+        hb_ticks = 0
+
+        # 접속 즉시 현재 상태 전송 + last_mtime 초기화 (중복 방지)
+        try:
+            log_path0 = _latest_log_path()
+            if log_path0:
+                last_mtime    = log_path0.stat().st_mtime
+                last_path_str = str(log_path0)
+            events = await asyncio.to_thread(parse_today_log)
+            yield f"data: {json.dumps(events, ensure_ascii=False)}\n\n"
+        except Exception:
+            pass
+
+        while True:
+            if await request.is_disconnected():
+                break
+
+            try:
+                log_path = _latest_log_path()
+                if log_path:
+                    cur_mtime = log_path.stat().st_mtime
+                    path_str  = str(log_path)
+                    if cur_mtime != last_mtime or path_str != last_path_str:
+                        last_mtime    = cur_mtime
+                        last_path_str = path_str
+                        hb_ticks = 0
+                        events = await asyncio.to_thread(parse_today_log)
+                        yield f"data: {json.dumps(events, ensure_ascii=False)}\n\n"
+            except Exception:
+                pass
+
+            hb_ticks += 1
+            if hb_ticks >= 50:          # 50 × 100ms = 5초마다 heartbeat
+                hb_ticks = 0
+                yield ": heartbeat\n\n"
+
+            await asyncio.sleep(0.1)    # 100ms 주기 mtime 감시
+
+    return StreamingResponse(
+        event_stream(),
+        media_type='text/event-stream',
+        headers={
+            'Cache-Control':      'no-cache',
+            'Connection':         'keep-alive',
+            'X-Accel-Buffering':  'no',       # nginx 버퍼링 비활성
+        },
+    )
 
 
 @app.get('/api/positions')
@@ -1801,7 +2034,12 @@ def api_account():
     if rlog_path.exists():
         try:
             rlog = json.loads(rlog_path.read_text(encoding='utf-8'))
-            weekly_pnl         = int(rlog.get('weekly_realized_pnl', 0) or 0)
+            # weekly_realized_pnl은 risk_log.json의 week_start가 이번 주와 같을 때만 유효
+            # (main_auto_trading.py의 RiskManager는 거래가 없으면 새 주에도 save()를 안 하므로
+            #  파일이 지난 주 값에 멈춰있을 수 있음 — 그대로 신뢰하면 대시보드가 옛날 주 손익을 표시함)
+            current_week_start = (date.today() - timedelta(days=date.today().weekday())).isoformat()
+            if rlog.get('week_start') == current_week_start:
+                weekly_pnl = int(rlog.get('weekly_realized_pnl', 0) or 0)
             consecutive_losses = int(rlog.get('consecutive_losses', 0) or 0)
         except Exception:
             pass
@@ -1819,7 +2057,14 @@ def api_account():
         total_assets  = kbal['total_assets']
         daily_pnl     = _today_realized_pnl_from_db()
         data_source   = 'db_snapshot' if kbal.get('_from_db') else 'kiwoom_api'
-        snapshot_age  = 0
+        # DB 스냅샷이면 실제 나이를 계산 (하드코딩 0이면 stale 폴백도 "방금 갱신"처럼 보임)
+        if kbal.get('_from_db') and kbal.get('_snapshot_at'):
+            try:
+                snapshot_age = int((datetime.now() - datetime.fromisoformat(kbal['_snapshot_at'])).total_seconds())
+            except Exception:
+                snapshot_age = 0
+        else:
+            snapshot_age = 0
 
     # ── 3. Fallback: account_snapshot.json ──────────────────────────────────
     if data_source == 'estimate' and ACCOUNT_SNAPSHOT_PATH_K.exists():

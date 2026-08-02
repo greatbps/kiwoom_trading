@@ -1,69 +1,58 @@
 {
-  "initial_balance": 4635655.0,
-  "today": "2026-06-19",
+  "initial_balance": 4563361.0,
+  "today": "2026-07-01",
   "daily_trades": [
     {
-      "timestamp": "2026-06-19T10:54:06.947371",
-      "stock_code": "396470",
-      "stock_name": "워트",
+      "timestamp": "2026-07-01T14:50:00.818049",
+      "stock_code": "005930",
+      "stock_name": "삼성전자",
       "type": "SELL",
-      "quantity": 21,
-      "price": 6350.0,
-      "amount": 133350.0,
-      "realized_pnl": -7140.0,
-      "reason": "10:54 [HARD_STOP] -5.0% (-5.08%)"
+      "quantity": 6,
+      "price": 318500.0,
+      "amount": 1911000.0,
+      "realized_pnl": -93000.0,
+      "reason": "14:50 오버나이트 차단 (손실-4.64%<-3.0%, B급+손실-4.64%<-1.5%)"
     },
     {
-      "timestamp": "2026-06-23T09:00:06",
+      "timestamp": "2026-07-01T09:00:04",
       "stock_code": "005930",
       "stock_name": "삼성전자",
       "type": "BUY",
       "quantity": 6,
-      "price": 347500.0,
-      "amount": 2085000.0,
+      "price": 334000.0,
+      "amount": 2004000.0,
       "realized_pnl": 0.0,
-      "order_no": "0100436"
+      "order_no": "0082676"
     },
     {
-      "timestamp": "2026-06-24T09:00:05",
+      "timestamp": "2026-07-06T12:47:24",
+      "stock_code": "0177R0",
+      "stock_name": "TIGER 반도체TOP10커버드콜액티",
+      "type": "BUY",
+      "quantity": 180,
+      "price": 14585.0,
+      "amount": 2625300.0,
+      "realized_pnl": 0.0,
+      "order_no": "0447535"
+    }
+  ],
+  "daily_realized_pnl": -93000.0,
+  "week_start": "2026-06-29",
+  "weekly_trades": [
+    {
+      "timestamp": "2026-07-01T14:50:00.818049",
       "stock_code": "005930",
       "stock_name": "삼성전자",
       "type": "SELL",
       "quantity": 6,
-      "price": 314000.0,
-      "amount": 1884000.0,
-      "realized_pnl": 0.0,
-      "order_no": "0099531"
+      "price": 318500.0,
+      "amount": 1911000.0,
+      "realized_pnl": -93000.0,
+      "reason": "14:50 오버나이트 차단 (손실-4.64%<-3.0%, B급+손실-4.64%<-1.5%)"
     }
   ],
-  "daily_realized_pnl": -7140.0,
-  "week_start": "2026-06-15",
-  "weekly_trades": [
-    {
-      "timestamp": "2026-06-17T14:50:00.308172",
-      "stock_code": "035420",
-      "stock_name": "NAVER",
-      "type": "SELL",
-      "quantity": 13,
-      "price": 242000.0,
-      "amount": 3146000.0,
-      "realized_pnl": -143000.0,
-      "reason": "14:50 오버나이트 차단 (손실-4.35%<-3.0%)"
-    },
-    {
-      "timestamp": "2026-06-19T10:54:06.947371",
-      "stock_code": "396470",
-      "stock_name": "워트",
-      "type": "SELL",
-      "quantity": 21,
-      "price": 6350.0,
-      "amount": 133350.0,
-      "realized_pnl": -7140.0,
-      "reason": "10:54 [HARD_STOP] -5.0% (-5.08%)"
-    }
-  ],
-  "weekly_realized_pnl": -150140.0,
-  "consecutive_losses": 2,
-  "cooldown_until": null,
+  "weekly_realized_pnl": -93000.0,
+  "consecutive_losses": 3,
+  "cooldown_until": "2026-07-01T15:30:00",
   "lsg_activated_date": null
 }

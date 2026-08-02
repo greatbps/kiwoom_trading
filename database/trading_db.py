@@ -421,6 +421,47 @@ class TradingDatabase:
                     ALTER TABLE trades ADD COLUMN IF NOT EXISTS {col} {coltype}
                 """)
 
+            # 🔧 2026-07-04: D1 pre-candidate 컬럼 마이그레이션
+            for col, coltype in [
+                ('pre_candidate_first_time',  'TIMESTAMP'),
+                ('pre_candidate_first_price', 'INTEGER'),
+                ('from_pre_candidate',        'BOOLEAN DEFAULT FALSE'),
+            ]:
+                cursor.execute(f"""
+                    ALTER TABLE trades ADD COLUMN IF NOT EXISTS {col} {coltype}
+                """)
+
+            # 🔧 2026-07-04: signal_events 테이블 (G3 차단 / D1 pre-candidate 이벤트 기록)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS signal_events (
+                    event_id   SERIAL PRIMARY KEY,
+                    event_time TIMESTAMP NOT NULL DEFAULT NOW(),
+                    event_type VARCHAR(50) NOT NULL,
+                    stock_code VARCHAR(20),
+                    event_data JSONB,
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_sig_ev_type ON signal_events(event_type)"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_sig_ev_code ON signal_events(stock_code)"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_sig_ev_time ON signal_events(event_time)"
+            )
+            # 🔧 2026-07-04: G3 컨텍스트 컬럼 추가 (g3_stage, reject_reason)
+            # 🔧 2026-07-04 v2: 파이프라인 타임스탬프 3종 추가 (first_signal/choch_raw/g3_eval)
+            for _col, _typ in [
+                ('g3_stage',         'VARCHAR(50)'),
+                ('reject_reason',    'VARCHAR(200)'),
+                ('first_signal_time','TIMESTAMP'),
+                ('choch_raw_time',   'TIMESTAMP'),
+                ('g3_eval_time',     'TIMESTAMP'),
+            ]:
+                cursor.execute(f"ALTER TABLE signal_events ADD COLUMN IF NOT EXISTS {_col} {_typ}")
+
             # 인덱스 생성
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_trades_stock ON trades(stock_code)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_trades_time ON trades(trade_time)")
@@ -502,11 +543,16 @@ class TradingDatabase:
                     entry_context, exit_context, filter_scores,
                     entry_time, exit_time, holding_minutes,
                     exit_category, exit_subreason, use_for_ml, exit_category_version,
-                    overnight_held
+                    overnight_held, candidate_first_time, candidate_first_price,
+                    entry_signal_time, entry_signal_price,
+                    pre_candidate_first_time, pre_candidate_first_price, from_pre_candidate,
+                    market_regime, position_size_mult
                 ) VALUES (
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s
                 ) RETURNING trade_id
             """, (
                 trade_data['stock_code'],
@@ -543,12 +589,48 @@ class TradingDatabase:
                 trade_data.get('use_for_ml', True),
                 trade_data.get('exit_category_version', 1),
                 trade_data.get('overnight_held', False),
+                trade_data.get('candidate_first_time'),
+                trade_data.get('candidate_first_price'),
+                trade_data.get('entry_signal_time'),
+                trade_data.get('entry_signal_price'),
+                trade_data.get('pre_candidate_first_time'),
+                trade_data.get('pre_candidate_first_price'),
+                trade_data.get('from_pre_candidate', False),
+                trade_data.get('market_regime'),
+                trade_data.get('position_size_mult'),
             ))
 
             trade_id = cursor.fetchone()[0]
             conn.commit()
             cursor.close()
             return trade_id
+        finally:
+            self._put_conn(conn)
+
+    def log_signal_event(self, event_type: str, stock_code: str = None,
+                         event_data: dict = None,
+                         g3_stage: str = None, reject_reason: str = None,
+                         first_signal_time=None, choch_raw_time=None, g3_eval_time=None) -> None:
+        """G3 차단 / D1 pre-candidate / SIGNAL_PIPELINE 등 signal_events 테이블에 기록"""
+        conn = self._get_conn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO signal_events
+                    (event_time, event_type, stock_code, event_data,
+                     g3_stage, reject_reason,
+                     first_signal_time, choch_raw_time, g3_eval_time)
+                VALUES (NOW(), %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (event_type, stock_code, json.dumps(event_data or {}),
+                 g3_stage, reject_reason,
+                 first_signal_time, choch_raw_time, g3_eval_time)
+            )
+            conn.commit()
+            cursor.close()
+        except Exception:
+            pass  # 이벤트 로그 실패는 조용히 무시 (주거래 흐름 보호)
         finally:
             self._put_conn(conn)
 

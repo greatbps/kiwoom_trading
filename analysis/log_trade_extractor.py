@@ -28,6 +28,8 @@ import psycopg2
 from psycopg2.extras import execute_batch
 from dotenv import load_dotenv
 
+from utils.database_guard import assert_destructive_allowed
+
 load_dotenv()
 
 RE_PREFIX = re.compile(
@@ -40,7 +42,7 @@ RE_MKT_TRADE_OK = re.compile(r"TRADE_OK")
 RE_MKT_BAD = re.compile(r"context=BAD_MARKET")
 
 RE_ACCEPT = re.compile(
-    r"✅ ACCEPT (?P<code>\w+) @(?P<price>\d+)원 \| PID:(?P<pid>\d+) \| conf=(?P<conf>[\d.]+) alpha=(?P<alpha>[+-][\d.]+) pos_mult=(?P<pos>[\d.]+)"
+    r"(?:✅ ACCEPT|🟡 CANDIDATE_ACCEPT) (?P<code>\w+) @(?P<price>\d+)원 \| PID:(?P<pid>\d+) \| conf=(?P<conf>[\d.]+) alpha=(?P<alpha>[+-][\d.]+) pos_mult=(?P<pos>[\d.]+)"
 )
 RE_SMC_SIG = re.compile(r"\[SMC_SIG\]\s+(?P<code>\w+)\s+(?P<name>[^:]+):\s*(?P<reason>.+)")
 RE_TREND_SIG_CODED = re.compile(r"\[TREND_SIG\]\s+(?P<code>\w+)\s+(?P<name>[^:]+):\s*(?P<reason>.+)")
@@ -296,6 +298,13 @@ def ensure_schema(conn, schema_sql_path: str):
 
 
 def truncate_table(conn, table: str):
+    """table은 로그 재추출로 언제든 재생성 가능한 파생 캐시 테이블(예: log_trade_events)
+    이라 research 스키마보다 위험도는 낮지만, 2026-07-27 TRUNCATE 사고 이후 원칙대로
+    파괴적 작업 전 항상 database_guard를 거친다."""
+    assert_destructive_allowed(
+        os.getenv('POSTGRES_DB', 'trading_system'),
+        operation=f'TRUNCATE TABLE {table}',
+    )
     with conn.cursor() as cur:
         cur.execute(f"TRUNCATE TABLE {table}")
     conn.commit()

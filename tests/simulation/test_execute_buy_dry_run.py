@@ -150,6 +150,10 @@ def _make_stub() -> KiwoomAutoTrader:
     # ── market_context ───────────────────────────────────────────────────────
     mc = MagicMock()
     mc.evaluate.return_value = ("OK", "", {"atr_mode": "NORMAL", "atr_ratio": 1.0})
+    # [CBF-2 2026-07-20] EQ-6 레짐필터가 get_regime()을 (regime, reason) 튜플로 언패킹함 —
+    # 미설정 시 MagicMock 기본값이 언패킹 불가해 ValueError → Fail Closed 차단되어 테스트 목적과
+    # 무관하게 order_buy 호출 전에 막힘 (수정 전엔 무음 예외swallow라 우연히 통과했었음)
+    mc.get_regime.return_value = ("NEUTRAL", "")
     t.market_context = mc
 
     # ── risk_manager ─────────────────────────────────────────────────────────

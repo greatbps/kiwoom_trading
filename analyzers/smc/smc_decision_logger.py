@@ -11,8 +11,43 @@ SMC 결정 로거 — 의사결정 핵심만 기록
   [SUMMARY] CHoCH=N / SWEEP=N (P:N/E:N/F:N) / ENTRY=N
 """
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from collections import defaultdict
+
+
+class _DailyFileHandler(logging.Handler):
+    """자정 넘겨도 프로세스가 계속 살아있으면 기록 시점 날짜 기준으로 파일을 갈아끼움
+    (싱글턴 로거가 프로세스 시작일 파일명으로 고정되던 문제 수정, 2026-07-07)."""
+
+    def __init__(self, path_fmt: str, encoding: str = 'utf-8'):
+        super().__init__()
+        self._path_fmt = path_fmt
+        self._encoding = encoding
+        self._current_date = None
+        self._fh = None
+        self._ensure_today()
+
+    def _ensure_today(self):
+        today = date.today()
+        if today == self._current_date:
+            return
+        if self._fh is not None:
+            self._fh.close()
+        self._current_date = today
+        self._fh = logging.FileHandler(
+            self._path_fmt.format(date=today.strftime('%Y%m%d')), encoding=self._encoding
+        )
+        if self.formatter:
+            self._fh.setFormatter(self.formatter)
+
+    def setFormatter(self, fmt):
+        super().setFormatter(fmt)
+        if self._fh:
+            self._fh.setFormatter(fmt)
+
+    def emit(self, record):
+        self._ensure_today()
+        self._fh.emit(record)
 
 
 class SMCDecisionLogger:
@@ -22,10 +57,7 @@ class SMCDecisionLogger:
         self._log.propagate = False
 
         if not self._log.handlers:
-            _today = datetime.today().strftime('%Y%m%d')
-            _fh = logging.FileHandler(
-                f'logs/smc_decision_{_today}.log', encoding='utf-8'
-            )
+            _fh = _DailyFileHandler('logs/smc_decision_{date}.log')
             _fh.setFormatter(logging.Formatter('%(asctime)s %(message)s', datefmt='%H:%M:%S'))
             self._log.addHandler(_fh)
 

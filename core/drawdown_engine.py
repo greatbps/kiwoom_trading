@@ -23,7 +23,11 @@ core/drawdown_engine.py — 실시간 Drawdown 기반 리스크 컨트롤 (v1.1)
 v1.0 2026-04-03: 최초 작성 (전체 계좌만)
 v1.1 2026-04-04: 전략별 독립 drawdown 추가
 """
+import json
 import logging
+import os
+from datetime import date
+from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -33,6 +37,19 @@ LEVEL_NORMAL  = "NORMAL"
 LEVEL_CAUTION = "CAUTION"
 LEVEL_DANGER  = "DANGER"
 LEVEL_HALT    = "HALT"
+
+# 🔧 2026-07-27: 재시작 영속화 — trading/equity_controller.py의 원자적 쓰기 패턴 재사용
+_STATE_PATH = Path(__file__).parent.parent / 'data' / 'drawdown_state.json'
+_STATE_TMP  = Path(__file__).parent.parent / 'data' / 'drawdown_state.json.tmp'
+
+
+def _atomic_write(path: Path, tmp_path: Path, payload: str):
+    path.parent.mkdir(exist_ok=True)
+    with open(tmp_path, 'w', encoding='utf-8') as f:
+        f.write(payload)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_path, path)
 
 
 class _StrategyDDTracker:
@@ -72,8 +89,11 @@ class _StrategyDDTracker:
 class DrawdownEngine:
     """실시간 당일 drawdown 추적 + 사이징 축소 (전체 + 전략별)."""
 
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, state_path: Optional[Path] = None):
         self.config = config
+        # 🔧 2026-07-27: 테스트 격리를 위해 상태파일 경로 주입 가능 (기본값=운영 경로)
+        self._state_path = state_path or _STATE_PATH
+        self._state_tmp  = Path(str(self._state_path) + '.tmp')
 
         # 전체 계좌 추적
         self._daily_pnl:      float = 0.0
@@ -89,7 +109,62 @@ class DrawdownEngine:
         for tag in ["def", "rs", "smc", "trend", "exploration"]:
             self._strategy_trackers[tag] = _StrategyDDTracker(tag, _strat_halt)
 
+        # 🔧 2026-07-27: 재시작 시 당일 상태 복원 (같은 날짜일 때만 — 다른 날짜면 기본값 유지)
+        self._load()
+
         logger.info("[DRAWDOWN] DrawdownEngine v1.1 초기화 완료 (전략별 분리)")
+
+    # ─────────────────────────────────────────────────────────────────
+    # 상태 영속화 (재시작 복원용 — DANGER/HALT를 재시작으로 무력화하지 않기 위함)
+    # ─────────────────────────────────────────────────────────────────
+
+    def _load(self):
+        if not self._state_path.exists():
+            return
+        try:
+            data = json.loads(self._state_path.read_text(encoding='utf-8'))
+            if data.get('date') != date.today().isoformat():
+                logger.info("[DRAWDOWN] 상태파일이 이전 날짜 — 오늘 기본값으로 시작")
+                return
+            self._daily_pnl      = float(data.get('daily_pnl', 0.0))
+            self._peak_pnl       = float(data.get('peak_pnl', 0.0))
+            self._drawdown       = float(data.get('drawdown', 0.0))
+            self._halt_triggered = bool(data.get('halt_triggered', False))
+            self._halt_at        = float(data.get('halt_at', 0.0))
+            for tag, s in (data.get('strategies') or {}).items():
+                if tag in self._strategy_trackers:
+                    t = self._strategy_trackers[tag]
+                    t.daily_pnl = float(s.get('daily_pnl', 0.0))
+                    t.peak_pnl  = float(s.get('peak_pnl', 0.0))
+                    t.drawdown  = float(s.get('drawdown', 0.0))
+                    t.halted    = bool(s.get('halted', False))
+            if self._halt_triggered:
+                logger.warning(
+                    f"[DRAWDOWN] 재시작 — 당일 HALT 상태 복원됨 (daily_pnl={self._daily_pnl:.2f}%). "
+                    f"재시작으로 자동 해제되지 않음"
+                )
+            else:
+                logger.info(f"[DRAWDOWN] 재시작 — 당일 상태 복원 (daily_pnl={self._daily_pnl:.2f}%)")
+        except Exception as e:
+            logger.warning(f"[DRAWDOWN] 상태 복원 실패 (기본값 유지): {e}")
+
+    def _save(self):
+        try:
+            payload = json.dumps({
+                'date': date.today().isoformat(),
+                'daily_pnl': self._daily_pnl, 'peak_pnl': self._peak_pnl,
+                'drawdown': self._drawdown, 'halt_triggered': self._halt_triggered,
+                'halt_at': self._halt_at,
+                'strategies': {
+                    tag: {
+                        'daily_pnl': t.daily_pnl, 'peak_pnl': t.peak_pnl,
+                        'drawdown': t.drawdown, 'halted': t.halted,
+                    } for tag, t in self._strategy_trackers.items()
+                },
+            }, ensure_ascii=False, indent=2)
+            _atomic_write(self._state_path, self._state_tmp, payload)
+        except Exception as e:
+            logger.warning(f"[DRAWDOWN] 상태 저장 실패: {e}")
 
     # ─────────────────────────────────────────────────────────────────
     # Public API
@@ -105,6 +180,7 @@ class DrawdownEngine:
         for tracker in self._strategy_trackers.values():
             tracker.reset()
         logger.info("[DRAWDOWN] 당일 지표 전체 초기화")
+        self._save()
 
     def record_pnl(self, pnl_pct: float, strategy: Optional[str] = None):
         """
@@ -142,6 +218,8 @@ class DrawdownEngine:
         # 전략별 갱신
         if strategy and strategy in self._strategy_trackers:
             self._strategy_trackers[strategy].record(pnl_pct)
+
+        self._save()
 
     def can_enter(self, strategy: Optional[str] = None) -> Tuple[bool, str]:
         """

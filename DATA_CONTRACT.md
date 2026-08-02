@@ -1,12 +1,33 @@
-# Trading OS — Data Contracts v1.0
+# Trading OS — Data Contracts v2.0
 
 > CONSTITUTION(Why) → ARCHITECTURE(How) → **DATA_CONTRACT(Contract)** → CLAUDE.md(What)
+
+**v2.0 변경 사항 (2026-06-30)**
+- `candidate` 계약 추가 — 평가 파이프라인 진입 전 단계
+- `decision_ledger` 계약 추가 — 불변 의사결정 원장 (v1 `decision_log`와 별개, 연구 전용)
+- `future_returns` 계약 추가 — 비동기 사후 성과 추적
+- `hypothesis` 계약 개정 — version 및 hypothesis_group_id 추가
+- Event Bus 테이블 갱신
 
 이 문서는 Trading OS의 객체 간 인터페이스를 정의한다.  
 새로운 AI 모델, 새로운 연구 모듈, 새로운 데이터 소스가 추가될 때  
 **이 계약을 만족하면 시스템에 연결될 수 있다.**
 
 계약을 만족하지 못하면 연결되지 않는다.
+
+---
+
+## 전역 설계 결정 (Phase 2 Final Freeze — 2026-06-30)
+
+| 항목 | 결정 | 이유 |
+|------|------|------|
+| **ID 전략** | UUIDv7 (시간순 정렬 가능) | Event Replay / 분산 환경 / 백테스트 Import 시 PK 충돌 방지 |
+| **Snapshot 철학** | feature_snapshot에 계산 가능한 값도 전부 저장 | 3개월 후 계산식 변경 시 재현 불가 방지. "당시 현실"을 저장 |
+| **Event Time** | 4개 timestamp 필수 (observed_at / decided_at / executed_at / recorded_at) | Decision Latency 계산 가능 |
+| **Enum 금지** | reason_dictionary 테이블로 대체 | 신규 Reason 추가 시 DDL 변경 불필요 |
+| **future_returns** | 고정 컬럼 아닌 Event 모델 (future_return_events) | +10D, +20D 등 horizon 추가 시 DDL 불필요 |
+| **event_store** | 모든 Research 이벤트 중앙 로그 | Replay / Timeline / Debug / AI Learning 기반 |
+| **연구 재현성 우선** | 성능 < Research Reproducibility | 6개월 후 의사결정 완벽 재현 가능 여부가 설계 기준 |
 
 ---
 
@@ -135,9 +156,10 @@ SellDecisionLogged  {decision_id, trade_id, reason}
 ## CONTRACT: hypothesis
 
 ```
-VERSION: 1.0
+VERSION: 2.0
 SOURCE : Scientist AI or PM manual
 TABLE  : hypotheses
+CHANGED: version, hypothesis_group_id 추가 (v2.0)
 ```
 
 **REQUIRED**
@@ -147,23 +169,33 @@ TABLE  : hypotheses
 | description | TEXT | NOT NULL |
 | status | VARCHAR | state machine (아래 참조) |
 | research_environment_id | INTEGER | 활성 RE 참조 필수 |
+| version | SMALLINT | ≥ 1, 동일 group 내 단조증가 |
+| hypothesis_group_id | VARCHAR | 'HYP-YYYYMMDD-NNN' 형식 |
 
 **OPTIONAL**
 `rationale, source_data JSONB, proposed_change JSONB`  
-`tags[], parent_hypothesis_id, knowledge_base_id`
+`tags[], parent_hypothesis_id, knowledge_base_id`  
+`target_feature, expected_effect, expected_direction`  
+`priority_score NUMERIC` (Research Director Rule Engine이 계산)
 
 **INVARIANT**
 - 상태 머신: draft → pending_review → queued → backtesting → walk_forward  
   → paper_trading → awaiting_pm → approved | rejected → deployed | archived
 - 역방향 전이 불가
+- 동일 hypothesis_group_id 내 version은 단조증가 (gap 없음)
+- 신규 version 생성 시: 이전 version status → 'superseded' (삭제 아님)
 - knowledge_base_id: 이 가설과 관련된 기존 지식 연결
 - Scientist AI L0는 hypothesis INSERT 권한 없음 (L1부터)
 
+**IMMUTABLE** (생성 후)
+`hypothesis_group_id`, `version`, `title`, `description`, `target_feature`, `expected_effect`
+
 **EVENTS**
 ```
-HypothesisCreated  {hypo_id, title, scientist_level, re_id}
-HypothesisApproved {hypo_id, experiment_id}
-HypothesisRejected {hypo_id, reason}
+HypothesisCreated    {hypo_id, group_id, version, title, scientist_level, re_id}
+HypothesisSuperseded {old_hypo_id, new_hypo_id, group_id, version}
+HypothesisApproved   {hypo_id, experiment_id}
+HypothesisRejected   {hypo_id, reason}
 ```
 
 ---
@@ -248,6 +280,267 @@ PredictionEvaluated {pred_id, outcome_correct, calibration_error}
 
 ---
 
+---
+
+## CONTRACT: candidate
+
+```
+VERSION: 1.0
+SOURCE : signal_orchestrator.py → SignalOrchestrator (ACCEPT 시점)
+TABLE  : research.candidates
+```
+
+후보(Candidate)는 평가 파이프라인에 진입한 종목을 나타낸다.  
+Decision이 만들어지기 전 단계이며, 하나의 Candidate는 정확히 하나의 Decision을 생성한다.
+
+**REQUIRED**
+| 필드 | 타입 | 유효 범위 |
+|------|------|---------|
+| candidate_id | BIGSERIAL | PK |
+| session_id | INTEGER | FK → trading_sessions.id |
+| market_context_id | INTEGER | FK → market_context.id |
+| stock_code | VARCHAR(10) | NOT NULL |
+| observed_at | TIMESTAMPTZ | NOT NULL |
+| price | NUMERIC | > 0 |
+| lifecycle_status | VARCHAR | {'CREATED', 'EVALUATED', 'ARCHIVED'} |
+
+**OPTIONAL**
+`stock_name, sector, market (KOSPI/KOSDAQ)`  
+`rs_score NUMERIC` (상대강도 0~100)  
+`rvol NUMERIC` (상대거래량 배율)  
+`atr_pct NUMERIC` (ATR %)  
+`regime VARCHAR` (시장 레짐 — 진입 시점 스냅샷)  
+`ema_gap_pct NUMERIC` (EMA 이격률)  
+`orchestrator_score NUMERIC`  
+`orchestrator_accept_reason TEXT`
+
+**INVARIANT**
+- observed_at은 생성 후 불변
+- lifecycle_status 전이: CREATED → EVALUATED → ARCHIVED (역방향 불가)
+- 동일 (session_id, stock_code)에 대해 복수 Candidate 허용 (재평가 추적 목적)
+
+**EVENTS**
+```
+CandidateCreated   {candidate_id, stock_code, session_id, observed_at}
+CandidateEvaluated {candidate_id, decision_id}
+```
+
+---
+
+## CONTRACT: decision_ledger
+
+```
+VERSION: 1.0
+SOURCE : main_auto_trading.py → execute_buy() 진입·거절 시점
+TABLE  : research.decision_ledger
+```
+
+Decision Ledger는 모든 의사결정의 불변 원장이다.  
+FROZEN 이후 어떤 필드도 수정할 수 없다.  
+수정이 필요하면 별도 Audit 또는 Knowledge 레코드로 기록한다.
+
+**REQUIRED**
+| 필드 | 타입 | 유효 범위 |
+|------|------|---------|
+| decision_id | BIGSERIAL | PK |
+| candidate_id | BIGINT | FK → research.candidates.candidate_id |
+| decided_at | TIMESTAMPTZ | NOT NULL |
+| policy_version | VARCHAR | NOT NULL, e.g. 'SMC_v2.3' |
+| decision | VARCHAR | {'PASS', 'REJECT', 'SHADOW_PASS', 'SHADOW_REJECT'} |
+| decision_reason_code | VARCHAR | 열거값 (아래 참조) |
+| lifecycle_status | VARCHAR | state machine (아래 참조) |
+
+**OPTIONAL**
+`market_context_id, session_id`  
+`feature_snapshot JSONB` — 결정 시점 모든 feature 스냅샷  
+`decision_verdict TEXT` — LLM이 생성하는 자연어 판결문 (배치, 15:30)  
+`confidence NUMERIC` (0.0 ~ 1.0)  
+`expected_rr NUMERIC` (기대 Risk/Reward)  
+`risk_score NUMERIC` (0.0 ~ 1.0)  
+`shadow_results JSONB` — Shadow Policy 비교 결과  
+`execution_result JSONB` — {'trade_id': int, 'order_no': str, 'executed_price': numeric}  
+`decision_auditor_result JSONB` — Decision Auditor 평가  
+`outcome_auditor_result JSONB` — Outcome Auditor 평가
+
+**decision_reason_code 열거값**
+```
+PASS                  — 모든 조건 충족, 진입
+CHOCH_MISSING         — 구조 전환(CHoCH) 미확인
+SWEEP_MISSING         — 유동성 스윕 미탐지
+FVG_MISSING           — Fair Value Gap 없음
+VOLUME_INSUFFICIENT   — 거래량 기준 미달
+CONFIDENCE_LOW        — 신뢰도 임계값 미달
+RISK_SCORE_HIGH       — 리스크 점수 초과
+GLOBAL_GATE_BLOCKED   — 시스템 전역 차단 (Kill Switch / Daily Loss 등)
+STOCK_GATE_BLOCKED    — 종목 단위 차단 (손절 이력 / 쿨다운 등)
+MARKET_SENSOR_BLOCKED — Market Sensor 차단 (EF 누적)
+DATA_INSUFFICIENT     — 데이터 부족
+POLICY_MISMATCH       — 정책 버전 조건 불충족
+OTHER                 — 분류 불가 (비율 > 5% 시 신규 코드 분류 검토)
+```
+
+**lifecycle_status 상태 머신**
+```
+CREATED
+  ↓ (즉시, 동일 트랜잭션 내)
+FROZEN  ← 이 이후 decision·feature_snapshot·policy_version 불변
+  ↓
+  ├─ (decision=PASS) → EXECUTED | EXECUTION_FAILED
+  └─ (decision=REJECT/SHADOW_*) → OUTCOME_PENDING
+         ↓ (비동기 job — +30m/EOD/+3D/+5D 모두 채워지면)
+     OUTCOME_RECORDED
+         ↓ (Dual Auditor 평가 완료)
+     AUDIT_COMPLETED
+         ↓ (Knowledge 추출 후)
+     KNOWLEDGE_EXTRACTED
+```
+
+**IMMUTABLE** (lifecycle_status = FROZEN 이후 DB 트리거로 강제)
+`decision`, `decision_reason_code`, `feature_snapshot`, `policy_version`,  
+`confidence`, `expected_rr`, `risk_score`, `decided_at`, `candidate_id`
+
+**INVARIANT**
+- INSERT 권한만 허용: `REVOKE UPDATE, DELETE ON research.decision_ledger FROM trading_app`
+- FROZEN 전이는 INSERT와 동일 트랜잭션 내에서 처리 (CREATED 상태가 외부에 노출되지 않음)
+- decision=PASS 이면 execution_result.trade_id를 가능한 한 빨리 채움
+- decision_reason_code ≠ 'OTHER' 비율 ≥ 95% 유지 (INVARIANT 위반 시 로그 경고)
+- feature_snapshot에 최소 포함: `choch_grade, sweep_detected, rvol, atr_pct, regime`
+
+**EVENTS**
+```
+DecisionCreated   {decision_id, candidate_id, stock_code, decision, policy_version}
+DecisionFrozen    {decision_id, stock_code, decision, reason_code}
+DecisionExecuted  {decision_id, trade_id, executed_price}
+OutcomeRecorded   {decision_id, return_eod, return_5d}
+AuditCompleted    {decision_id, decision_quality, outcome_quality}
+```
+
+---
+
+## CONTRACT: future_return_events
+
+```
+VERSION: 1.0
+SOURCE : cron job — scripts/returns_collector.py
+TABLE  : research.future_return_events
+DESIGN : Event 모델 (고정 컬럼 아님) — 신규 horizon 추가 시 DDL 불필요
+```
+
+Decision 1건당 horizon별 수익률 이벤트를 별도 행으로 저장한다.  
+고정 컬럼(`return_30m`, `return_eod`, ...) 대신 Event 모델을 사용하여  
+`+10D`, `+20D`, `+60D` 등 신규 horizon이 추가돼도 스키마 변경이 없다.
+
+**REQUIRED**
+| 필드 | 타입 | 유효 범위 |
+|------|------|---------|
+| event_id | UUID | PK, UUIDv7 |
+| decision_id | UUID | FK → research.decision_ledger.decision_id |
+| stock_code | VARCHAR(10) | NOT NULL |
+| horizon_label | VARCHAR(10) | '+30m' \| '+EOD' \| '+1D' \| '+3D' \| '+5D' \| '+10D' \| '+20D' 등 |
+| decision_price | NUMERIC | NOT NULL, > 0 (결정 시점 가격, 재현성용 복사) |
+| return_pct | NUMERIC | NOT NULL, (price_at_horizon - decision_price) / decision_price × 100 |
+
+**OPTIONAL**
+`horizon_minutes INTEGER` — NULL = EOD (장마감 기준)  
+`price_at_horizon NUMERIC`
+
+**INVARIANT**
+- UNIQUE (decision_id, horizon_label): horizon당 하나의 이벤트
+- 기록 후 수정·삭제 불가 (Rule로 강제)
+- decision=PASS인 경우 기록 선택사항
+
+**outcome_label 계산** (VIEW `research.decision_outcomes`에서 +5D 기준 자동 산출)
+```
+return_5d ≤ -3%  → EXCELLENT_REJECT
+return_5d ≤  0%  → GOOD_REJECT
+return_5d <  3%  → POOR_REJECT
+return_5d ≥  3%  → OPPORTUNITY_LOSS
+return_5d ≥  7%  → LARGE_OPPORTUNITY_LOSS
+(PASS 결정)      → NULL
+(미집계)         → PENDING
+```
+
+**EVENTS**
+```
+FutureReturnPartial  {decision_id, horizon_label, return_pct}
+FutureReturnComplete {decision_id, return_5d, outcome_label}  — +5D 채워질 때
+```
+
+---
+
+## CONTRACT: reason_dictionary
+
+```
+VERSION: 1.0
+SOURCE : DBA / PM (수동 관리), INSERT only
+TABLE  : research.reason_dictionary
+DESIGN : DB ENUM 대신 Dictionary 테이블 — 신규 Reason 추가 시 DDL 불필요
+```
+
+**REQUIRED**
+| 필드 | 타입 | 유효 범위 |
+|------|------|---------|
+| reason_code | VARCHAR(50) | PK |
+| category | VARCHAR(30) | {'execution', 'technical', 'scoring', 'risk', 'system', 'data', 'policy', 'misc'} |
+| description | TEXT | NOT NULL |
+
+**OPTIONAL**
+`is_active BOOLEAN` (기본 TRUE — 비활성화 시 FALSE, 삭제 금지)
+
+**초기 reason_code 목록** (13개)
+```
+PASS / CHOCH_MISSING / SWEEP_MISSING / FVG_MISSING / VOLUME_INSUFFICIENT /
+CONFIDENCE_LOW / RISK_SCORE_HIGH / GLOBAL_GATE_BLOCKED / STOCK_GATE_BLOCKED /
+MARKET_SENSOR_BLOCKED / DATA_INSUFFICIENT / POLICY_MISMATCH / OTHER
+```
+
+**INVARIANT**
+- reason_code PK: 한 번 등록된 코드 변경 불가 (is_active=FALSE로 비활성화)
+- `OTHER` 비율 > 5% 시 신규 코드 추가 검토 (CLAUDE.md 체크리스트 항목)
+- reason_code 삭제 금지 (과거 decision_ledger의 FK 무결성)
+
+---
+
+## CONTRACT: event_store
+
+```
+VERSION: 1.0
+SOURCE : 모든 Research Layer 컴포넌트
+TABLE  : research.event_store
+DESIGN : Append-Only. Research Layer 전체 이벤트의 중앙 로그.
+```
+
+Replay / Timeline / Debug / AI Learning의 기반이 되는 단일 이벤트 로그.  
+이 테이블만 있으면 Research Layer의 모든 상태 변화를 재현할 수 있다.
+
+**REQUIRED**
+| 필드 | 타입 | 유효 범위 |
+|------|------|---------|
+| event_id | UUID | PK, UUIDv7 |
+| occurred_at | TIMESTAMPTZ | NOT NULL |
+| event_type | VARCHAR(60) | NOT NULL (아래 표준 이벤트 목록 참조) |
+| entity_type | VARCHAR(30) | {'candidate', 'decision', 'hypothesis', 'trade', 'audit', 'knowledge'} |
+| entity_id | UUID | NOT NULL |
+| source | VARCHAR(60) | NOT NULL (발행 모듈명) |
+| payload | JSONB | NOT NULL DEFAULT '{}' |
+
+**표준 event_type 목록**
+```
+CandidateCreated / CandidateEvaluated
+DecisionFrozen / DecisionExecuted / DecisionExecutionFailed
+OutcomePartialRecorded / OutcomeCompleteRecorded
+AuditDecisionCompleted / AuditOutcomeCompleted
+KnowledgeExtracted
+HypothesisCreated / HypothesisSuperseded / HypothesisApproved / HypothesisRejected
+```
+
+**INVARIANT**
+- Append-Only: UPDATE, DELETE 금지 (Rule로 강제)
+- entity_id는 반드시 해당 entity의 실제 PK (UUID)
+- occurred_at은 이벤트가 실제 발생한 시각 (recorded_at과 다를 수 있음)
+
+---
+
 ## CONTRACT: research_environment
 
 ```
@@ -319,8 +612,15 @@ WHERE event_type = 'TradeClosed'
 | TradeClosed | Rule Engine | Session Review, Knowledge |
 | SessionReviewed | Session Review | Scientist AI |
 | HypothesisCreated | Scientist AI | Research Queue |
+| HypothesisSuperseded | Scientist AI / Librarian AI | Research Queue |
 | PredictionEvaluated | Cron (evaluation_date) | Scorecard 갱신 |
 | KnowledgeCreated | Scientist AI / PM | Hypothesis 검토 |
+| CandidateCreated | Signal Orchestrator | Decision Ledger |
+| CandidateEvaluated | execute_buy gate | Future Returns |
+| DecisionFrozen | execute_buy gate | Future Returns (REJECT용) |
+| DecisionExecuted | execute_buy (체결) | trades, Future Returns |
+| FutureReturnComplete | returns_collector cron | Outcome Auditor |
+| AuditCompleted | Dual Auditor | Knowledge Base |
 
 ---
 
@@ -347,4 +647,5 @@ WHERE event_type = 'TradeClosed'
 ---
 
 *Data Contract v1.0 — 2026-06-27*  
+*Data Contract v2.0 — 2026-06-30 (candidate, decision_ledger, future_returns 추가; hypothesis v2.0)*  
 *AI 모델, 전략, 데이터 소스가 바뀌어도 이 계약은 유지된다.*

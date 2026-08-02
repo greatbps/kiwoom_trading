@@ -216,7 +216,3 @@ class RegimeDetector:
         except Exception:
             pass
         return None
-
-    def reset_cache(self):
-        self._cache_regime = None
-        self._cache_time   = None
