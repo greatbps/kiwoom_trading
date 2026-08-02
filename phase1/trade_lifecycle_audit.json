@@ -1,0 +1,319 @@
+{
+  "created_at": "2026-08-02T20:39:16",
+  "mapping_keys": [
+    {
+      "key": "trade_id",
+      "exists": true,
+      "filled": 411,
+      "total": 411,
+      "use": "행 PK — 연결용 아님"
+    },
+    {
+      "key": "stock_code",
+      "exists": true,
+      "filled": 411,
+      "total": 411,
+      "use": "BUY↔SELL 유일한 연결 축"
+    },
+    {
+      "key": "trade_time",
+      "exists": true,
+      "filled": 411,
+      "total": 411,
+      "use": "순서 결정"
+    },
+    {
+      "key": "entry_signal_id",
+      "exists": true,
+      "filled": 0,
+      "total": 411,
+      "use": "진입 신호 연결"
+    },
+    {
+      "key": "exit_signal_id",
+      "exists": true,
+      "filled": 7,
+      "total": 411,
+      "use": "청산 신호 연결"
+    },
+    {
+      "key": "entry_time",
+      "exists": true,
+      "filled": 27,
+      "total": 411,
+      "use": "보유 기간"
+    },
+    {
+      "key": "exit_time",
+      "exists": true,
+      "filled": 29,
+      "total": 411,
+      "use": "보유 기간"
+    },
+    {
+      "key": "order_no",
+      "exists": false,
+      "filled": 0,
+      "total": 411,
+      "use": "주문/포지션 연결"
+    },
+    {
+      "key": "position_id",
+      "exists": false,
+      "filled": 0,
+      "total": 411,
+      "use": "주문/포지션 연결"
+    },
+    {
+      "key": "order_id",
+      "exists": false,
+      "filled": 0,
+      "total": 411,
+      "use": "주문/포지션 연결"
+    }
+  ],
+  "causes": [
+    {
+      "code": "DUP",
+      "name": "중복 기록 (동일 청산이 반복 INSERT)",
+      "count": 74,
+      "evidence": "같은 종목·날짜·가격·수량·사유가 30~71초 간격으로 반복. 감시 루프 주기(60초)와 일치. 발생 구간 2025-11-01 ~ 2025-11-01 뿐이며 2026년 재발 없음."
+    },
+    {
+      "code": "A",
+      "name": "과거 데이터 기록 누락 (BUY 미저장)",
+      "count": 56,
+      "evidence": "BUY 행이 아예 없는 종목의 청산. 주문 실패·저장 실패·수동거래 중 무엇인지 **로그 근거가 없어 구분 불가**."
+    }
+  ],
+  "position_cases": [
+    {
+      "case": "Case 1  단일 BUY → 단일 SELL",
+      "count": 64,
+      "note": "연결 가능 (종목당 BUY 1건)"
+    },
+    {
+      "case": "Case 2  동일 종목 재진입",
+      "count": 33,
+      "note": "⚠️ 어느 BUY 의 청산인지 키로 구분 불가"
+    },
+    {
+      "case": "Case 3  보유 중 추가 진입",
+      "count": 12,
+      "note": "⚠️ 같은 날 복수 BUY — 평단 병합 여부 기록 없음"
+    },
+    {
+      "case": "Case 4  부분 청산",
+      "count": 23,
+      "note": "부분청산 표기가 있는 청산"
+    },
+    {
+      "case": "Case 5  재시작 후 보유 Position",
+      "count": null,
+      "note": "⚠️ positions_state.json 은 당일 진입분만 복원 — 전일 보유는 브로커 동기화 경로로 들어온다"
+    }
+  ],
+  "buy": 165,
+  "sell": 246,
+  "sell_effective": 172,
+  "duplicate_extra": 74,
+  "matched": 116,
+  "orphan": 56,
+  "coverage_pct": 67.4,
+  "duplicate_symbol": 33,
+  "same_day_reentry": 12,
+  "orphan_rows": [
+    {
+      "stock_code": "000230",
+      "name": "일동홀딩스",
+      "buy": 0,
+      "sell_effective": 1,
+      "orphan": 1,
+      "cause": "BUY 기록 전무"
+    },
+    {
+      "stock_code": "002020",
+      "name": "코오롱",
+      "buy": 0,
+      "sell_effective": 1,
+      "orphan": 1,
+      "cause": "BUY 기록 전무"
+    },
+    {
+      "stock_code": "005940",
+      "name": "NH투자증권",
+      "buy": 0,
+      "sell_effective": 1,
+      "orphan": 1,
+      "cause": "BUY 기록 전무"
+    },
+    {
+      "stock_code": "009420",
+      "name": "한올바이오파마",
+      "buy": 3,
+      "sell_effective": 12,
+      "orphan": 9,
+      "cause": "SELL 초과"
+    },
+    {
+      "stock_code": "026890",
+      "name": "스틱인베스트먼트",
+      "buy": 0,
+      "sell_effective": 1,
+      "orphan": 1,
+      "cause": "BUY 기록 전무"
+    },
+    {
+      "stock_code": "045100",
+      "name": "한양이엔지",
+      "buy": 0,
+      "sell_effective": 1,
+      "orphan": 1,
+      "cause": "BUY 기록 전무"
+    },
+    {
+      "stock_code": "049950",
+      "name": "미래컴퍼니",
+      "buy": 1,
+      "sell_effective": 3,
+      "orphan": 2,
+      "cause": "SELL 초과"
+    },
+    {
+      "stock_code": "050890",
+      "name": "쏠리드",
+      "buy": 0,
+      "sell_effective": 1,
+      "orphan": 1,
+      "cause": "BUY 기록 전무"
+    },
+    {
+      "stock_code": "068290",
+      "name": "삼성출판사",
+      "buy": 0,
+      "sell_effective": 1,
+      "orphan": 1,
+      "cause": "BUY 기록 전무"
+    },
+    {
+      "stock_code": "070300",
+      "name": "엑스큐어",
+      "buy": 1,
+      "sell_effective": 2,
+      "orphan": 1,
+      "cause": "SELL 초과"
+    },
+    {
+      "stock_code": "082920",
+      "name": "비츠로셀",
+      "buy": 2,
+      "sell_effective": 3,
+      "orphan": 1,
+      "cause": "SELL 초과"
+    },
+    {
+      "stock_code": "133690",
+      "name": "TIGER 미국나스닥100",
+      "buy": 0,
+      "sell_effective": 1,
+      "orphan": 1,
+      "cause": "BUY 기록 전무"
+    },
+    {
+      "stock_code": "136540",
+      "name": "윈스테크넷",
+      "buy": 0,
+      "sell_effective": 1,
+      "orphan": 1,
+      "cause": "BUY 기록 전무"
+    },
+    {
+      "stock_code": "140430",
+      "name": "카티스",
+      "buy": 0,
+      "sell_effective": 1,
+      "orphan": 1,
+      "cause": "BUY 기록 전무"
+    },
+    {
+      "stock_code": "204620",
+      "name": "글로벌텍스프리",
+      "buy": 0,
+      "sell_effective": 4,
+      "orphan": 4,
+      "cause": "BUY 기록 전무"
+    },
+    {
+      "stock_code": "226330",
+      "name": "신테카바이오",
+      "buy": 0,
+      "sell_effective": 1,
+      "orphan": 1,
+      "cause": "BUY 기록 전무"
+    },
+    {
+      "stock_code": "235980",
+      "name": "메드팩토",
+      "buy": 0,
+      "sell_effective": 6,
+      "orphan": 6,
+      "cause": "BUY 기록 전무"
+    },
+    {
+      "stock_code": "290550",
+      "name": "디케이티",
+      "buy": 0,
+      "sell_effective": 2,
+      "orphan": 2,
+      "cause": "BUY 기록 전무"
+    },
+    {
+      "stock_code": "323280",
+      "name": "태성",
+      "buy": 1,
+      "sell_effective": 3,
+      "orphan": 2,
+      "cause": "SELL 초과"
+    },
+    {
+      "stock_code": "361390",
+      "name": "제노코",
+      "buy": 1,
+      "sell_effective": 8,
+      "orphan": 7,
+      "cause": "SELL 초과"
+    },
+    {
+      "stock_code": "366030",
+      "name": "공구우먼",
+      "buy": 0,
+      "sell_effective": 7,
+      "orphan": 7,
+      "cause": "BUY 기록 전무"
+    },
+    {
+      "stock_code": "388870",
+      "name": "파로스아이바이오",
+      "buy": 0,
+      "sell_effective": 2,
+      "orphan": 2,
+      "cause": "BUY 기록 전무"
+    },
+    {
+      "stock_code": "420770",
+      "name": "기가비스",
+      "buy": 0,
+      "sell_effective": 1,
+      "orphan": 1,
+      "cause": "BUY 기록 전무"
+    },
+    {
+      "stock_code": "498410",
+      "name": "KODEX 금융고배당TOP10타겟위클리커버드콜",
+      "buy": 0,
+      "sell_effective": 1,
+      "orphan": 1,
+      "cause": "BUY 기록 전무"
+    }
+  ]
+}
