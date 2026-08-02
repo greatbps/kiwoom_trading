@@ -1,0 +1,14 @@
+{
+  "built_at": "2026-08-03T05:06:32",
+  "tic": "5",
+  "timezone": "Asia/Seoul",
+  "symbols": 112,
+  "collected": 112,
+  "failed": 0,
+  "bars": 2056648,
+  "start": "2025-08-01 09:00:00+09:00",
+  "end": "2026-07-31 15:30:00+09:00",
+  "validation_pass": 112,
+  "validation_fail": 0,
+  "elapsed_sec": 795.3
+}

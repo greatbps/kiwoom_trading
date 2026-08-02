@@ -49,3 +49,6 @@ phase1/paper_choch/*.csv
 
 # 유니버스 실험 캐시 — 재생성 가능 (수백 MB)
 phase1/universe/ohlcv_expanded.pkl
+
+# 분봉 데이터셋 — 재수집 가능, 100MB+
+phase1/minute_cache/5m/*.pkl
