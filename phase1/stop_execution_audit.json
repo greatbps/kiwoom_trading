@@ -1,0 +1,130 @@
+{
+  "created_at": "2026-08-02T13:28:03",
+  "exp2": {
+    "trades": [
+      {
+        "code": "006400",
+        "name": "삼성SDI",
+        "buy_date": "2026-05-12",
+        "buy_price": 684000,
+        "stop_price": 670658,
+        "stop_pct": -1.95,
+        "stop_breach_date": "2026-05-12",
+        "exit_date": "2026-05-13",
+        "delay_days": 1,
+        "exit_price": 629000,
+        "exit_reason": "09:00 [HARD_STOP] -5.0% (-6.95%)",
+        "excess_loss_won": 333264,
+        "stop_executed": false
+      },
+      {
+        "code": "000660",
+        "name": "SK하이닉스",
+        "buy_date": "2026-06-10",
+        "buy_price": 2215000,
+        "stop_price": 2104512,
+        "stop_pct": -4.99,
+        "stop_breach_date": "2026-06-10",
+        "exit_date": "2026-06-11",
+        "delay_days": 1,
+        "exit_price": 1975000,
+        "exit_reason": "MA5_EXIT",
+        "excess_loss_won": 129512,
+        "stop_executed": false
+      },
+      {
+        "code": "035420",
+        "name": "NAVER",
+        "buy_date": "2026-06-15",
+        "buy_price": 253000,
+        "stop_price": 239493,
+        "stop_pct": -5.34,
+        "stop_breach_date": "2026-06-17",
+        "exit_date": "2026-06-17",
+        "delay_days": 0,
+        "exit_price": 242000,
+        "exit_reason": "14:50 오버나이트 차단 (손실-4.35%<-3.0%)",
+        "excess_loss_won": 0,
+        "stop_executed": true
+      },
+      {
+        "code": "005930",
+        "name": "삼성전자",
+        "buy_date": "2026-06-23",
+        "buy_price": 353500,
+        "stop_price": 341246,
+        "stop_pct": -3.47,
+        "stop_breach_date": "2026-06-23",
+        "exit_date": "2026-06-24",
+        "delay_days": 1,
+        "exit_price": 314000,
+        "exit_reason": "DRAWDOWN_STOP",
+        "excess_loss_won": 163476,
+        "stop_executed": false
+      },
+      {
+        "code": "005930",
+        "name": "삼성전자",
+        "buy_date": "2026-07-01",
+        "buy_price": 334000,
+        "stop_price": 329315,
+        "stop_pct": -1.4,
+        "stop_breach_date": "2026-07-01",
+        "exit_date": "2026-07-01",
+        "delay_days": 0,
+        "exit_price": 318500,
+        "exit_reason": "14:50 오버나이트 차단 (손실-4.64%<-3.0%, B급+손실-4.64%<-1.5%)",
+        "excess_loss_won": 64890,
+        "stop_executed": false
+      }
+    ],
+    "stop_executed": 1,
+    "total": 5,
+    "excess_loss_won": 691142
+  },
+  "exp3": {
+    "live_exits": 242,
+    "stop_family": 39,
+    "with_profit_rate": 39,
+    "deeper_than_5pct": 3,
+    "stop_execution_rate": 92.3,
+    "pass": false,
+    "note": "분봉 부재로 시간 지연 대신 손절폭 초과율로 대체"
+  },
+  "exp4": {
+    "mapping": [
+      {
+        "backtest_rule": "SL",
+        "live_rules": "HARD_STOP|SWING_HARD_STOP|STRUCTURE_STOP|STOP_LOSS",
+        "live_trades": 39
+      },
+      {
+        "backtest_rule": "TP",
+        "live_rules": "TAKE_PROFIT|TP1|TP2",
+        "live_trades": 0
+      },
+      {
+        "backtest_rule": "TRAIL",
+        "live_rules": "TRAILING|TRAIL",
+        "live_trades": 4
+      },
+      {
+        "backtest_rule": "BE_STOP",
+        "live_rules": "BREAK_EVEN|BE_STOP",
+        "live_trades": 0
+      },
+      {
+        "backtest_rule": "MAX_HOLD",
+        "live_rules": "TIME_EXIT",
+        "live_trades": 10
+      },
+      {
+        "backtest_rule": "(대응 없음)",
+        "live_rules": "EARLY_FAILURE|OVERNIGHT_BLOCK|MA5_EXIT|DRAWDOWN_STOP|OTHER",
+        "live_trades": 189
+      }
+    ],
+    "coverage_pct": 21.9,
+    "pass": false
+  }
+}
