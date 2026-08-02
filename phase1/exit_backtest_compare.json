@@ -1,0 +1,217 @@
+{
+  "created_at": "2026-08-02T14:59:32",
+  "base_profile": {
+    "swing_mode": true,
+    "tp_pct": 0.15,
+    "sl_pct": -0.05,
+    "min_hold_bars": 3,
+    "trailing_pct": 0.08,
+    "be_trigger_pct": 0.05,
+    "max_hold_bars": 30,
+    "commission": 0.0035
+  },
+  "goal": {
+    "win_rate": 40.0,
+    "profit_factor": 1.5,
+    "mdd": -15.0,
+    "avg_hold": 5.0
+  },
+  "rows": [
+    {
+      "name": "Case1 현재 Exit 유지",
+      "trades": 81,
+      "win_rate": 43.2,
+      "avg_return_pct": 2.25,
+      "avg_win_pct": 11.59,
+      "avg_loss_pct": -4.86,
+      "profit_factor": 1.813,
+      "expectancy_pct": 2.246,
+      "expectancy_won": 449156,
+      "max_consecutive_loss": 10,
+      "total_pnl_won": 36381684,
+      "total_return_pct": 36.38,
+      "mdd_pct": -11.27,
+      "sharpe": 1.15,
+      "avg_hold_bars": 8.6,
+      "exit_reasons": {
+        "SL": 38,
+        "TP": 26,
+        "TRAIL": 9,
+        "BE_STOP": 5,
+        "MAX_HOLD": 3
+      },
+      "selection_days": 67,
+      "binding_days": 0,
+      "dropped_candidates": 0,
+      "case": "Case1 현재 Exit 유지",
+      "params": {
+        "sl_pct": -0.05,
+        "min_hold_bars": 3,
+        "max_hold_bars": 30
+      },
+      "pass": true,
+      "missed": []
+    },
+    {
+      "name": "Case2 Live Exit 이식",
+      "trades": 95,
+      "win_rate": 44.2,
+      "avg_return_pct": 0.68,
+      "avg_win_pct": 5.58,
+      "avg_loss_pct": -3.2,
+      "profit_factor": 1.381,
+      "expectancy_pct": 0.681,
+      "expectancy_won": 136179,
+      "max_consecutive_loss": 5,
+      "total_pnl_won": 12937061,
+      "total_return_pct": 12.94,
+      "mdd_pct": -5.29,
+      "sharpe": 0.79,
+      "avg_hold_bars": 1.0,
+      "exit_reasons": {
+        "MAX_HOLD": 95
+      },
+      "selection_days": 78,
+      "binding_days": 0,
+      "dropped_candidates": 0,
+      "case": "Case2 Live Exit 이식",
+      "params": {
+        "sl_pct": -0.02,
+        "min_hold_bars": 0,
+        "max_hold_bars": 1
+      },
+      "pass": false,
+      "missed": [
+        "PF",
+        "보유"
+      ]
+    },
+    {
+      "name": "Case3 Swing 정의 Exit",
+      "trades": 80,
+      "win_rate": 43.8,
+      "avg_return_pct": 2.44,
+      "avg_win_pct": 11.9,
+      "avg_loss_pct": -4.91,
+      "profit_factor": 1.884,
+      "expectancy_pct": 2.442,
+      "expectancy_won": 488479,
+      "max_consecutive_loss": 9,
+      "total_pnl_won": 39078362,
+      "total_return_pct": 39.08,
+      "mdd_pct": -11.27,
+      "sharpe": 1.24,
+      "avg_hold_bars": 8.8,
+      "exit_reasons": {
+        "SL": 38,
+        "TP": 27,
+        "TRAIL": 9,
+        "BE_STOP": 6
+      },
+      "selection_days": 66,
+      "binding_days": 0,
+      "dropped_candidates": 0,
+      "case": "Case3 Swing 정의 Exit",
+      "params": {
+        "sl_pct": -0.05,
+        "min_hold_bars": 3,
+        "max_hold_bars": 60
+      },
+      "pass": true,
+      "missed": []
+    },
+    {
+      "name": "A 차단 유지 (당일청산)",
+      "trades": 95,
+      "win_rate": 44.2,
+      "avg_return_pct": 0.68,
+      "avg_win_pct": 5.58,
+      "avg_loss_pct": -3.2,
+      "profit_factor": 1.381,
+      "expectancy_pct": 0.681,
+      "expectancy_won": 136179,
+      "max_consecutive_loss": 5,
+      "total_pnl_won": 12937061,
+      "total_return_pct": 12.94,
+      "mdd_pct": -5.29,
+      "sharpe": 0.79,
+      "avg_hold_bars": 1.0,
+      "exit_reasons": {
+        "MAX_HOLD": 95
+      },
+      "selection_days": 78,
+      "binding_days": 0,
+      "dropped_candidates": 0,
+      "case": "A 차단 유지 (당일청산)",
+      "pass": false,
+      "missed": [
+        "PF",
+        "보유"
+      ]
+    },
+    {
+      "name": "B 허용 (스윙 정의)",
+      "trades": 81,
+      "win_rate": 43.2,
+      "avg_return_pct": 2.25,
+      "avg_win_pct": 11.59,
+      "avg_loss_pct": -4.86,
+      "profit_factor": 1.813,
+      "expectancy_pct": 2.246,
+      "expectancy_won": 449156,
+      "max_consecutive_loss": 10,
+      "total_pnl_won": 36381684,
+      "total_return_pct": 36.38,
+      "mdd_pct": -11.27,
+      "sharpe": 1.15,
+      "avg_hold_bars": 8.6,
+      "exit_reasons": {
+        "SL": 38,
+        "TP": 26,
+        "TRAIL": 9,
+        "BE_STOP": 5,
+        "MAX_HOLD": 3
+      },
+      "selection_days": 67,
+      "binding_days": 0,
+      "dropped_candidates": 0,
+      "case": "B 허용 (스윙 정의)",
+      "pass": true,
+      "missed": []
+    },
+    {
+      "name": "C 조건부 (손실만 차단)",
+      "trades": 87,
+      "win_rate": 23.0,
+      "avg_return_pct": 0.38,
+      "avg_win_pct": 11.84,
+      "avg_loss_pct": -3.04,
+      "profit_factor": 1.162,
+      "expectancy_pct": 0.379,
+      "expectancy_won": 75746,
+      "max_consecutive_loss": 13,
+      "total_pnl_won": 6589907,
+      "total_return_pct": 6.59,
+      "mdd_pct": -10.85,
+      "sharpe": 0.31,
+      "avg_hold_bars": 3.4,
+      "exit_reasons": {
+        "OVERNIGHT_BLOCK": 55,
+        "TP": 15,
+        "SL": 9,
+        "TRAIL": 5,
+        "BE_STOP": 3
+      },
+      "selection_days": 73,
+      "binding_days": 0,
+      "dropped_candidates": 0,
+      "case": "C 조건부 (손실만 차단)",
+      "pass": false,
+      "missed": [
+        "승률",
+        "PF",
+        "보유"
+      ]
+    }
+  ]
+}

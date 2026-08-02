@@ -1,0 +1,9 @@
+﻿trade_id,symbol,name,entry_date,entry_price,exit_date,exit_price,holding_period_days,holding_minutes,profit_loss,profit_rate,live_exit_reason,exit_class,backtest_rule,mapping_basis,strategy_horizon
+381,082920,비츠로셀,2026-04-14 11:03:11,44700.0,2026-04-14 14:50:00,44700.0,0,226,0.0,,"14:50 오버나이트 차단 (CHoCH B급, 당일 강제 청산)",OVERNIGHT_BLOCK,MAX_HOLD,당일 보유 상한 — MAX_HOLD 를 1일로 둔 것,INTRADAY
+382,082920,비츠로셀,2026-04-14 11:03:11,44700.0,2026-04-14 15:25:00,44700.0,0,261,0.0,,15:25 무조건 강제청산 [OVERNIGHT_FAILSAFE],OVERNIGHT_BLOCK,MAX_HOLD,당일 보유 상한 — MAX_HOLD 를 1일로 둔 것,INTRADAY
+386,070300,엑스큐어,2026-04-15 12:25:27,2915.0,2026-04-15 14:50:00,2915.0,0,144,0.0,,"14:50 오버나이트 차단 (CHoCH B급, 당일 강제 청산)",OVERNIGHT_BLOCK,MAX_HOLD,당일 보유 상한 — MAX_HOLD 를 1일로 둔 것,INTRADAY
+387,070300,엑스큐어,2026-04-15 12:25:27,2915.0,2026-04-15 15:25:00,2915.0,0,179,0.0,,15:25 무조건 강제청산 [OVERNIGHT_FAILSAFE],OVERNIGHT_BLOCK,MAX_HOLD,당일 보유 상한 — MAX_HOLD 를 1일로 둔 것,INTRADAY
+391,420770,기가비스,,,2026-04-27 14:50:00,99800.0,,340,-700.0,-0.7,"14:50 오버나이트 차단 (등급=B, HTF❌, 수익=-0.70%<1.5%)",OVERNIGHT_BLOCK,MAX_HOLD,당일 보유 상한 — MAX_HOLD 를 1일로 둔 것,INTRADAY
+397,136540,윈스테크넷,,,2026-05-08 14:50:00,12700.0,,359,0.0,,"14:50 오버나이트 차단 (등급=B, HTF❌, 수익=+0.00%<1.5%)",OVERNIGHT_BLOCK,MAX_HOLD,당일 보유 상한 — MAX_HOLD 를 1일로 둔 것,INTRADAY
+422,035420,NAVER,2026-06-15 09:00:05,253000.0,2026-06-17 14:50:00,242000.0,2,349,-143000.0,-4.35,14:50 오버나이트 차단 (손실-4.35%<-3.0%),OVERNIGHT_BLOCK,MAX_HOLD,당일 보유 상한 — MAX_HOLD 를 1일로 둔 것,INTRADAY
+428,005930,삼성전자,2026-07-01 09:00:04,334000.0,2026-07-01 14:50:00,318500.0,0,349,-93000.0,-4.64,"14:50 오버나이트 차단 (손실-4.64%<-3.0%, B급+손실-4.64%<-1.5%)",OVERNIGHT_BLOCK,MAX_HOLD,당일 보유 상한 — MAX_HOLD 를 1일로 둔 것,INTRADAY

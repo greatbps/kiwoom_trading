@@ -1,0 +1,12 @@
+﻿live_class,backtest_rule,trades,pct,basis
+TIME_EXIT,MAX_HOLD,93,38.4,보유 기간 상한 — 일봉 MAX_HOLD 와 동일 의미
+EARLY_FAILURE,SL,46,19.0,시간 제한이 붙은 손절 — 손실 제한이라는 점에서 SL
+TRAILING,TRAIL,33,13.6,고점 대비 되돌림 청산
+HARD_STOP,SL,28,11.6,손실 제한 — 백테스트 SL 과 동일 의미
+STRUCTURE_WEAK,(대응 없음),14,5.8,구조/모멘텀 약화 — 백테스트에 대응 규칙 없음
+OVERNIGHT_BLOCK,MAX_HOLD,8,3.3,당일 보유 상한 — MAX_HOLD 를 1일로 둔 것
+MA5_EXIT,(대응 없음),7,2.9,이동평균 이탈 — 백테스트에 대응 규칙 없음
+STRUCTURE_STOP,SL,6,2.5,구조 기반 손절 — SL 의 가격 산출 방식 차이
+STOP_LOSS,SL,5,2.1,손실 제한
+NO_PROGRESS,(대응 없음),1,0.4,일정 시간 내 진전 없음 — 대응 규칙 없음
+DRAWDOWN_STOP,(대응 없음),1,0.4,계좌 단위 리스크 — 거래 단위 청산 규칙이 아님
