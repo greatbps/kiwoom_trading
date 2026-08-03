@@ -1,0 +1,1673 @@
+{
+  "audited_at": "2026-08-03T17:29:53",
+  "tr": {
+    "kt00001": {
+      "name": "예수금상세현황",
+      "ok": true,
+      "return_code": 0,
+      "raw": {
+        "entr": "000000001857799",
+        "profa_ch": "000000000000000",
+        "bncr_profa_ch": "000000000000000",
+        "nxdy_bncr_sell_exct": "000000000000000",
+        "fc_stk_krw_repl_set_amt": "000000000000000",
+        "crd_grnta_ch": "000000000000000",
+        "crd_grnt_ch": "000000000000000",
+        "add_grnt_ch": "000000000000000",
+        "etc_profa": "000000000000000",
+        "uncl_stk_amt": "000000000000000",
+        "shrts_prica": "000000000000000",
+        "crd_set_grnta": "000000000000000",
+        "chck_ina_amt": "000000000000000",
+        "etc_chck_ina_amt": "000000000000000",
+        "crd_grnt_ruse": "000000000000000",
+        "knx_asset_evltv": "000000000000000",
+        "elwdpst_evlta": "000000003223999",
+        "crd_ls_rght_frcs_amt": "000000000000000",
+        "lvlh_join_amt": "000000000000000",
+        "lvlh_trns_alowa": "000000000000000",
+        "repl_amt": "000000001366200",
+        "remn_repl_evlta": "000000001366200",
+        "trst_remn_repl_evlta": "000000000000000",
+        "bncr_remn_repl_evlta": "000000000000000",
+        "profa_repl": "000000000000000",
+        "crd_grnta_repl": "000000000000000",
+        "crd_grnt_repl": "000000000000000",
+        "add_grnt_repl": "000000000000000",
+        "rght_repl_amt": "000000000000000",
+        "pymn_alow_amt": "000000001857799",
+        "wrap_pymn_alow_amt": "000000000000000",
+        "ord_alow_amt": "000000001857799",
+        "bncr_buy_alowa": "000000001857799",
+        "20stk_ord_alow_amt": "000000001857799",
+        "30stk_ord_alow_amt": "000000001857799",
+        "40stk_ord_alow_amt": "000000001857799",
+        "100stk_ord_alow_amt": "000000001857799",
+        "ch_uncla": "000000000000000",
+        "ch_uncla_dlfe": "000000000000000",
+        "ch_uncla_tot": "000000000000000",
+        "crd_int_npay": "000000000000000",
+        "int_npay_amt_dlfe": "000000000000000",
+        "int_npay_amt_tot": "000000000000000",
+        "etc_loana": "000000000000000",
+        "etc_loana_dlfe": "000000000000000",
+        "etc_loan_tot": "000000000000000",
+        "nrpy_loan": "000000000000000",
+        "loan_sum": "000000000000000",
+        "ls_sum": "000000000000000",
+        "crd_grnt_rt": "0.00",
+        "mdstrm_usfe": "000000000000616",
+        "min_ord_alow_yn": "000000000000000",
+        "loan_remn_evlt_amt": "000000000000000",
+        "dpst_grntl_remn": "000000000000000",
+        "sell_grntl_remn": "000000000000000",
+        "d1_entra": "000000001857799",
+        "d1_slby_exct_amt": "000000000000000",
+        "d1_buy_exct_amt": "000000000000000",
+        "d1_out_rep_mor": "000000000000000",
+        "d1_sel_exct_amt": "000000000000000",
+        "d1_pymn_alow_amt": "000000001857799",
+        "d2_entra": "000000001857799",
+        "d2_slby_exct_amt": "000000000000000",
+        "d2_buy_exct_amt": "000000000000000",
+        "d2_out_rep_mor": "000000000000000",
+        "d2_sel_exct_amt": "000000000000000",
+        "d2_pymn_alow_amt": "000000001857799",
+        "50stk_ord_alow_amt": "000000001857799",
+        "60stk_ord_alow_amt": "000000001857799",
+        "stk_entr_prst": [
+          {
+            "crnc_cd": "USD",
+            "fx_entr": "0.09",
+            "fc_krw_repl_evlta": "0.00",
+            "fc_trst_profa": "0.00",
+            "pymn_alow_amt_entr": "",
+            "ord_alow_amt_entr": "",
+            "fc_uncla": "0.00",
+            "fc_ch_uncla": "0.00",
+            "dly_amt": "0.00",
+            "d1_fx_entr": "0.00",
+            "d2_fx_entr": "0.00",
+            "d3_fx_entr": "0.00",
+            "d4_fx_entr": "0.00"
+          }
+        ],
+        "return_code": 0,
+        "return_msg": "조회가 완료되었습니다"
+      }
+    },
+    "kt00004": {
+      "name": "계좌평가현황",
+      "ok": true,
+      "return_code": 0,
+      "raw": {
+        "acnt_nm": "***",
+        "brch_nm": "***",
+        "entr": "000001857799",
+        "d2_entra": "000001857799",
+        "tot_est_amt": "000001826340",
+        "aset_evlt_amt": "000003684799",
+        "tot_pur_amt": "000002625300",
+        "prsm_dpst_aset_amt": "000003684529",
+        "tot_grnt_sella": "000000000000",
+        "tdy_lspft_amt": "000000000000",
+        "invt_bsamt": "000000000000",
+        "lspft_amt": "000000000000",
+        "tdy_lspft": "000000000000",
+        "lspft2": "000000000000",
+        "lspft": "000000000000",
+        "tdy_lspft_rt": "0.00",
+        "lspft_ratio": "0.00",
+        "lspft_rt": "0.00",
+        "stk_acnt_evlt_prst": [
+          {
+            "stk_cd": "A0177R0",
+            "stk_nm": "TIGER 반도체TOP10커버드콜액티�",
+            "rmnd_qty": "000000000180",
+            "avg_prc": "000000014585",
+            "cur_prc": "000000010150",
+            "evlt_amt": "000001826340",
+            "pl_amt": "-00000798960",
+            "pl_rt": "-30.4331",
+            "loan_dt": "",
+            "pur_amt": "000002625300",
+            "setl_remn": "000000000180",
+            "pred_buyq": "000000000000",
+            "pred_sellq": "000000000000",
+            "tdy_buyq": "000000000000",
+            "tdy_sellq": "000000000000"
+          }
+        ],
+        "return_code": 0,
+        "return_msg": "조회가 완료되었습니다."
+      }
+    },
+    "ka01690": {
+      "name": "일별잔고수익률",
+      "ok": true,
+      "return_code": 0,
+      "raw": {
+        "dt": "20260803",
+        "tot_buy_amt": "2625300",
+        "tot_evlt_amt": "1827000",
+        "tot_evltv_prft": "-798960",
+        "tot_prft_rt": "-30.43",
+        "dbst_bal": "1857799",
+        "day_stk_asst": "3684529",
+        "buy_wght": "50.42",
+        "day_bal_rt": [
+          {
+            "cur_prc": "10150",
+            "stk_cd": "0177R0",
+            "stk_nm": "TIGER 반도체TOP10커버드콜액티브",
+            "rmnd_qty": "180",
+            "buy_uv": "14585",
+            "buy_wght": "100.0",
+            "evltv_prft": "-798960",
+            "prft_rt": "-30.43",
+            "evlt_amt": "1827000",
+            "evlt_wght": "100.0"
+          }
+        ],
+        "return_code": 0,
+        "return_msg": "정상적으로 처리되었습니다"
+      }
+    }
+  },
+  "fields": {
+    "kt00001": {
+      "entr": {
+        "raw": "000000001857799",
+        "num": 1857799.0
+      },
+      "fc_stk_krw_repl_set_amt": {
+        "raw": "000000000000000",
+        "num": 0.0
+      },
+      "crd_grnta_ch": {
+        "raw": "000000000000000",
+        "num": 0.0
+      },
+      "crd_grnt_ch": {
+        "raw": "000000000000000",
+        "num": 0.0
+      },
+      "uncl_stk_amt": {
+        "raw": "000000000000000",
+        "num": 0.0
+      },
+      "crd_set_grnta": {
+        "raw": "000000000000000",
+        "num": 0.0
+      },
+      "chck_ina_amt": {
+        "raw": "000000000000000",
+        "num": 0.0
+      },
+      "etc_chck_ina_amt": {
+        "raw": "000000000000000",
+        "num": 0.0
+      },
+      "crd_grnt_ruse": {
+        "raw": "000000000000000",
+        "num": 0.0
+      },
+      "knx_asset_evltv": {
+        "raw": "000000000000000",
+        "num": 0.0
+      },
+      "elwdpst_evlta": {
+        "raw": "000000003223999",
+        "num": 3223999.0
+      },
+      "crd_ls_rght_frcs_amt": {
+        "raw": "000000000000000",
+        "num": 0.0
+      },
+      "lvlh_join_amt": {
+        "raw": "000000000000000",
+        "num": 0.0
+      },
+      "repl_amt": {
+        "raw": "000000001366200",
+        "num": 1366200.0
+      },
+      "remn_repl_evlta": {
+        "raw": "000000001366200",
+        "num": 1366200.0
+      },
+      "trst_remn_repl_evlta": {
+        "raw": "000000000000000",
+        "num": 0.0
+      },
+      "bncr_remn_repl_evlta": {
+        "raw": "000000000000000",
+        "num": 0.0
+      },
+      "profa_repl": {
+        "raw": "000000000000000",
+        "num": 0.0
+      },
+      "crd_grnta_repl": {
+        "raw": "000000000000000",
+        "num": 0.0
+      },
+      "crd_grnt_repl": {
+        "raw": "000000000000000",
+        "num": 0.0
+      },
+      "add_grnt_repl": {
+        "raw": "000000000000000",
+        "num": 0.0
+      },
+      "rght_repl_amt": {
+        "raw": "000000000000000",
+        "num": 0.0
+      },
+      "pymn_alow_amt": {
+        "raw": "000000001857799",
+        "num": 1857799.0
+      },
+      "wrap_pymn_alow_amt": {
+        "raw": "000000000000000",
+        "num": 0.0
+      },
+      "ord_alow_amt": {
+        "raw": "000000001857799",
+        "num": 1857799.0
+      },
+      "20stk_ord_alow_amt": {
+        "raw": "000000001857799",
+        "num": 1857799.0
+      },
+      "30stk_ord_alow_amt": {
+        "raw": "000000001857799",
+        "num": 1857799.0
+      },
+      "40stk_ord_alow_amt": {
+        "raw": "000000001857799",
+        "num": 1857799.0
+      },
+      "100stk_ord_alow_amt": {
+        "raw": "000000001857799",
+        "num": 1857799.0
+      },
+      "ch_uncla": {
+        "raw": "000000000000000",
+        "num": 0.0
+      },
+      "ch_uncla_dlfe": {
+        "raw": "000000000000000",
+        "num": 0.0
+      },
+      "ch_uncla_tot": {
+        "raw": "000000000000000",
+        "num": 0.0
+      },
+      "crd_int_npay": {
+        "raw": "000000000000000",
+        "num": 0.0
+      },
+      "int_npay_amt_dlfe": {
+        "raw": "000000000000000",
+        "num": 0.0
+      },
+      "int_npay_amt_tot": {
+        "raw": "000000000000000",
+        "num": 0.0
+      },
+      "etc_loana": {
+        "raw": "000000000000000",
+        "num": 0.0
+      },
+      "etc_loana_dlfe": {
+        "raw": "000000000000000",
+        "num": 0.0
+      },
+      "etc_loan_tot": {
+        "raw": "000000000000000",
+        "num": 0.0
+      },
+      "nrpy_loan": {
+        "raw": "000000000000000",
+        "num": 0.0
+      },
+      "loan_sum": {
+        "raw": "000000000000000",
+        "num": 0.0
+      },
+      "crd_grnt_rt": {
+        "raw": "0.00",
+        "num": 0.0
+      },
+      "min_ord_alow_yn": {
+        "raw": "000000000000000",
+        "num": 0.0
+      },
+      "loan_remn_evlt_amt": {
+        "raw": "000000000000000",
+        "num": 0.0
+      },
+      "dpst_grntl_remn": {
+        "raw": "000000000000000",
+        "num": 0.0
+      },
+      "d1_entra": {
+        "raw": "000000001857799",
+        "num": 1857799.0
+      },
+      "d1_slby_exct_amt": {
+        "raw": "000000000000000",
+        "num": 0.0
+      },
+      "d1_buy_exct_amt": {
+        "raw": "000000000000000",
+        "num": 0.0
+      },
+      "d1_out_rep_mor": {
+        "raw": "000000000000000",
+        "num": 0.0
+      },
+      "d1_sel_exct_amt": {
+        "raw": "000000000000000",
+        "num": 0.0
+      },
+      "d1_pymn_alow_amt": {
+        "raw": "000000001857799",
+        "num": 1857799.0
+      },
+      "d2_entra": {
+        "raw": "000000001857799",
+        "num": 1857799.0
+      },
+      "d2_slby_exct_amt": {
+        "raw": "000000000000000",
+        "num": 0.0
+      },
+      "d2_buy_exct_amt": {
+        "raw": "000000000000000",
+        "num": 0.0
+      },
+      "d2_out_rep_mor": {
+        "raw": "000000000000000",
+        "num": 0.0
+      },
+      "d2_sel_exct_amt": {
+        "raw": "000000000000000",
+        "num": 0.0
+      },
+      "d2_pymn_alow_amt": {
+        "raw": "000000001857799",
+        "num": 1857799.0
+      },
+      "50stk_ord_alow_amt": {
+        "raw": "000000001857799",
+        "num": 1857799.0
+      },
+      "60stk_ord_alow_amt": {
+        "raw": "000000001857799",
+        "num": 1857799.0
+      }
+    },
+    "kt00004": {
+      "entr": {
+        "raw": "000001857799",
+        "num": 1857799.0
+      },
+      "d2_entra": {
+        "raw": "000001857799",
+        "num": 1857799.0
+      },
+      "tot_est_amt": {
+        "raw": "000001826340",
+        "num": 1826340.0
+      },
+      "aset_evlt_amt": {
+        "raw": "000003684799",
+        "num": 3684799.0
+      },
+      "tot_pur_amt": {
+        "raw": "000002625300",
+        "num": 2625300.0
+      },
+      "prsm_dpst_aset_amt": {
+        "raw": "000003684529",
+        "num": 3684529.0
+      },
+      "tot_grnt_sella": {
+        "raw": "000000000000",
+        "num": 0.0
+      },
+      "tdy_lspft_amt": {
+        "raw": "000000000000",
+        "num": 0.0
+      },
+      "invt_bsamt": {
+        "raw": "000000000000",
+        "num": 0.0
+      },
+      "lspft_amt": {
+        "raw": "000000000000",
+        "num": 0.0
+      }
+    },
+    "ka01690": {
+      "tot_buy_amt": {
+        "raw": "2625300",
+        "num": 2625300.0
+      },
+      "tot_evlt_amt": {
+        "raw": "1827000",
+        "num": 1827000.0
+      },
+      "tot_evltv_prft": {
+        "raw": "-798960",
+        "num": -798960.0
+      },
+      "tot_prft_rt": {
+        "raw": "-30.43",
+        "num": -30.43
+      },
+      "dbst_bal": {
+        "raw": "1857799",
+        "num": 1857799.0
+      },
+      "day_stk_asst": {
+        "raw": "3684529",
+        "num": 3684529.0
+      }
+    }
+  },
+  "candidates": {
+    "A  출금가능금(pymn_alow_amt) + 평가금액": 3684799.0,
+    "B  예수금(entr) + 평가금액": 3684799.0,
+    "C  D+2추정예수금(d2_entra) + 평가금액": 3684799.0,
+    "C' D+2출금가능금(d2_pymn_alow_amt) + 평가금액": 3684799.0,
+    "E  D+1추정예수금(d1_entra) + 평가금액": 3684799.0,
+    "D  출금가능금 + 평가금액 + 당일매도체결금": 3684799.0
+  },
+  "errors": [],
+  "d2_fields": {
+    "kt00001.d2_entra": {
+      "raw": "000000001857799",
+      "num": 1857799.0
+    },
+    "kt00001.d2_slby_exct_amt": {
+      "raw": "000000000000000",
+      "num": 0.0
+    },
+    "kt00001.d2_buy_exct_amt": {
+      "raw": "000000000000000",
+      "num": 0.0
+    },
+    "kt00001.d2_out_rep_mor": {
+      "raw": "000000000000000",
+      "num": 0.0
+    },
+    "kt00001.d2_sel_exct_amt": {
+      "raw": "000000000000000",
+      "num": 0.0
+    },
+    "kt00001.d2_pymn_alow_amt": {
+      "raw": "000000001857799",
+      "num": 1857799.0
+    },
+    "kt00004.d2_entra": {
+      "raw": "000001857799",
+      "num": 1857799.0
+    }
+  },
+  "d1_fields": {
+    "kt00001.d1_entra": {
+      "raw": "000000001857799",
+      "num": 1857799.0
+    },
+    "kt00001.d1_slby_exct_amt": {
+      "raw": "000000000000000",
+      "num": 0.0
+    },
+    "kt00001.d1_buy_exct_amt": {
+      "raw": "000000000000000",
+      "num": 0.0
+    },
+    "kt00001.d1_out_rep_mor": {
+      "raw": "000000000000000",
+      "num": 0.0
+    },
+    "kt00001.d1_sel_exct_amt": {
+      "raw": "000000000000000",
+      "num": 0.0
+    },
+    "kt00001.d1_pymn_alow_amt": {
+      "raw": "000000001857799",
+      "num": 1857799.0
+    }
+  },
+  "log_total_assets": null,
+  "d2_analysis": [
+    {
+      "fill_date": "2025-11-10",
+      "type": "SELL",
+      "amount": 445830.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 445,830 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2025-11-11",
+      "type": "SELL",
+      "amount": 1427120.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 1,427,120 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2025-11-12",
+      "type": "SELL",
+      "amount": 444920.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 444,920 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2025-11-13",
+      "type": "SELL",
+      "amount": 343880.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 343,880 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2025-11-14",
+      "type": "SELL",
+      "amount": 1332090.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 1,332,090 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2025-11-17",
+      "type": "SELL",
+      "amount": 366100.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 366,100 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2025-11-18",
+      "type": "SELL",
+      "amount": 2705250.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 2,705,250 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2025-11-19",
+      "type": "SELL",
+      "amount": 242070.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 242,070 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2025-11-20",
+      "type": "SELL",
+      "amount": 131720.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 131,720 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2025-11-21",
+      "type": "SELL",
+      "amount": 39500.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 39,500 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2025-11-24",
+      "type": "BUY",
+      "amount": 100000.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 100,000 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2025-11-28",
+      "type": "BUY",
+      "amount": 273150.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 273,150 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2025-11-28",
+      "type": "SELL",
+      "amount": 320650.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 320,650 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2025-12-01",
+      "type": "BUY",
+      "amount": 213280.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 213,280 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2025-12-01",
+      "type": "SELL",
+      "amount": 161960.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 161,960 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2025-12-03",
+      "type": "BUY",
+      "amount": 60430.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 60,430 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2025-12-03",
+      "type": "SELL",
+      "amount": 42240.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 42,240 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2025-12-05",
+      "type": "BUY",
+      "amount": 180820.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 180,820 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2025-12-05",
+      "type": "SELL",
+      "amount": 51720.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 51,720 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2025-12-08",
+      "type": "BUY",
+      "amount": 88590.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 88,590 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2025-12-08",
+      "type": "SELL",
+      "amount": 74000.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 74,000 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2025-12-10",
+      "type": "BUY",
+      "amount": 121428.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 121,428 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2025-12-10",
+      "type": "SELL",
+      "amount": 77142.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 77,142 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2025-12-11",
+      "type": "BUY",
+      "amount": 126910.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 126,910 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2025-12-11",
+      "type": "SELL",
+      "amount": 114565.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 114,565 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2025-12-16",
+      "type": "BUY",
+      "amount": 180705.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 180,705 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2025-12-16",
+      "type": "SELL",
+      "amount": 137885.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 137,885 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2025-12-18",
+      "type": "BUY",
+      "amount": 68390.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 68,390 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2025-12-18",
+      "type": "SELL",
+      "amount": 41500.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 41,500 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2025-12-19",
+      "type": "BUY",
+      "amount": 60680.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 60,680 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2025-12-19",
+      "type": "SELL",
+      "amount": 29720.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 29,720 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2025-12-23",
+      "type": "BUY",
+      "amount": 31000.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 31,000 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2025-12-23",
+      "type": "SELL",
+      "amount": 31400.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 31,400 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2025-12-24",
+      "type": "BUY",
+      "amount": 59390.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 59,390 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2025-12-26",
+      "type": "BUY",
+      "amount": 50275.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 50,275 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2025-12-26",
+      "type": "SELL",
+      "amount": 28735.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 28,735 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2025-12-30",
+      "type": "BUY",
+      "amount": 110015.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 110,015 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2025-12-30",
+      "type": "SELL",
+      "amount": 108005.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 108,005 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-01-02",
+      "type": "BUY",
+      "amount": 479740.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 479,740 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-01-02",
+      "type": "SELL",
+      "amount": 84450.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 84,450 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-01-06",
+      "type": "BUY",
+      "amount": 95140.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 95,140 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-01-06",
+      "type": "SELL",
+      "amount": 94800.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 94,800 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-01-07",
+      "type": "BUY",
+      "amount": 207000.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 207,000 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-01-07",
+      "type": "SELL",
+      "amount": 133850.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 133,850 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-01-08",
+      "type": "BUY",
+      "amount": 277220.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 277,220 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-01-08",
+      "type": "SELL",
+      "amount": 274580.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 274,580 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-01-09",
+      "type": "BUY",
+      "amount": 663760.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 663,760 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-01-09",
+      "type": "SELL",
+      "amount": 395590.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 395,590 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-01-12",
+      "type": "BUY",
+      "amount": 164310.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 164,310 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-01-13",
+      "type": "BUY",
+      "amount": 246490.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 246,490 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-01-13",
+      "type": "SELL",
+      "amount": 257490.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 257,490 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-01-14",
+      "type": "BUY",
+      "amount": 279960.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 279,960 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-01-14",
+      "type": "SELL",
+      "amount": 128670.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 128,670 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-01-15",
+      "type": "BUY",
+      "amount": 707770.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 707,770 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-01-15",
+      "type": "SELL",
+      "amount": 396670.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 396,670 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-01-16",
+      "type": "BUY",
+      "amount": 242920.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 242,920 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-01-16",
+      "type": "SELL",
+      "amount": 78900.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 78,900 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-01-20",
+      "type": "BUY",
+      "amount": 27720.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 27,720 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-01-20",
+      "type": "SELL",
+      "amount": 27280.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 27,280 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-01-21",
+      "type": "BUY",
+      "amount": 93495.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 93,495 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-01-21",
+      "type": "SELL",
+      "amount": 90680.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 90,680 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-01-22",
+      "type": "BUY",
+      "amount": 540910.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 540,910 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-01-22",
+      "type": "SELL",
+      "amount": 361030.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 361,030 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-01-23",
+      "type": "BUY",
+      "amount": 236460.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 236,460 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-01-23",
+      "type": "SELL",
+      "amount": 101400.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 101,400 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-01-26",
+      "type": "BUY",
+      "amount": 128880.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 128,880 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-01-27",
+      "type": "BUY",
+      "amount": 77500.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 77,500 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-01-27",
+      "type": "SELL",
+      "amount": 129710.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 129,710 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-01-28",
+      "type": "BUY",
+      "amount": 49400.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 49,400 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-01-29",
+      "type": "BUY",
+      "amount": 166400.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 166,400 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-01-29",
+      "type": "SELL",
+      "amount": 109800.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 109,800 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-01-30",
+      "type": "BUY",
+      "amount": 132100.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 132,100 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-01-30",
+      "type": "SELL",
+      "amount": 97900.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 97,900 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-02-02",
+      "type": "BUY",
+      "amount": 128380.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 128,380 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-02-02",
+      "type": "SELL",
+      "amount": 429850.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 429,850 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-02-05",
+      "type": "BUY",
+      "amount": 194260.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 194,260 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-02-05",
+      "type": "SELL",
+      "amount": 188460.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 188,460 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-02-06",
+      "type": "BUY",
+      "amount": 67800.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 67,800 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-02-06",
+      "type": "SELL",
+      "amount": 66100.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 66,100 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-02-09",
+      "type": "BUY",
+      "amount": 175650.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 175,650 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-02-09",
+      "type": "SELL",
+      "amount": 174100.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 174,100 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-02-10",
+      "type": "BUY",
+      "amount": 618660.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 618,660 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-02-10",
+      "type": "SELL",
+      "amount": 404280.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 404,280 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-02-13",
+      "type": "BUY",
+      "amount": 52560.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 52,560 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-02-13",
+      "type": "SELL",
+      "amount": 52080.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 52,080 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-02-19",
+      "type": "BUY",
+      "amount": 137130.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 137,130 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-02-19",
+      "type": "SELL",
+      "amount": 135990.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 135,990 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-02-25",
+      "type": "BUY",
+      "amount": 25350.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 25,350 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-02-25",
+      "type": "SELL",
+      "amount": 25050.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 25,050 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-03-25",
+      "type": "BUY",
+      "amount": 122490.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 122,490 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-03-26",
+      "type": "BUY",
+      "amount": 254950.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 254,950 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-03-26",
+      "type": "SELL",
+      "amount": 125350.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 125,350 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-04-01",
+      "type": "BUY",
+      "amount": 81900.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 81,900 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-04-06",
+      "type": "BUY",
+      "amount": 125200.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 125,200 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-04-06",
+      "type": "SELL",
+      "amount": 123500.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 123,500 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-04-08",
+      "type": "BUY",
+      "amount": 123050.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 123,050 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-04-14",
+      "type": "BUY",
+      "amount": 103180.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 103,180 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-04-14",
+      "type": "SELL",
+      "amount": 147200.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 147,200 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-04-15",
+      "type": "BUY",
+      "amount": 23215.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 23,215 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-04-15",
+      "type": "SELL",
+      "amount": 37730.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 37,730 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-04-16",
+      "type": "BUY",
+      "amount": 6030.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "BUY 6,030 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-04-16",
+      "type": "SELL",
+      "amount": 6010.0,
+      "settle_date": null,
+      "deposit_delta": null,
+      "lag_days": null,
+      "note": "SELL 6,010 → 예수금 변동 미관측"
+    },
+    {
+      "fill_date": "2026-04-26",
+      "type": "BUY",
+      "amount": 10000.0,
+      "settle_date": "2026-04-27",
+      "deposit_delta": 100500.0,
+      "lag_days": 1,
+      "confirmed": false,
+      "note": "BUY 10,000 → 예수금 +100,500 (2026-04-27, 관측 1거래일 후)  (미확정)"
+    },
+    {
+      "fill_date": "2026-04-27",
+      "type": "SELL",
+      "amount": 99800.0,
+      "settle_date": "2026-04-28",
+      "deposit_delta": -100510.0,
+      "lag_days": 1,
+      "confirmed": false,
+      "note": "SELL 99,800 → 예수금 -100,510 (2026-04-28, 관측 1거래일 후)  (미확정)"
+    },
+    {
+      "fill_date": "2026-04-30",
+      "type": "BUY",
+      "amount": 20000.0,
+      "settle_date": "2026-05-06",
+      "deposit_delta": 230000.0,
+      "lag_days": 3,
+      "confirmed": false,
+      "note": "BUY 20,000 → 예수금 +230,000 (2026-05-06, 관측 3거래일 후)  (미확정)"
+    },
+    {
+      "fill_date": "2026-05-07",
+      "type": "SELL",
+      "amount": 66900.0,
+      "settle_date": "2026-05-08",
+      "deposit_delta": -67010.0,
+      "lag_days": 1,
+      "confirmed": false,
+      "note": "SELL 66,900 → 예수금 -67,010 (2026-05-08, 관측 1거래일 후)  (미확정)"
+    },
+    {
+      "fill_date": "2026-05-08",
+      "type": "SELL",
+      "amount": 261525.0,
+      "settle_date": "2026-05-11",
+      "deposit_delta": -130963.0,
+      "lag_days": 1,
+      "confirmed": false,
+      "note": "SELL 261,525 → 예수금 -130,963 (2026-05-11, 관측 1거래일 후)  (미확정)"
+    },
+    {
+      "fill_date": "2026-05-11",
+      "type": "BUY",
+      "amount": 69100.0,
+      "settle_date": "2026-05-13",
+      "deposit_delta": -2654359.0,
+      "lag_days": 1,
+      "confirmed": false,
+      "note": "BUY 69,100 → 예수금 -2,654,359 (2026-05-13, 관측 1거래일 후)  (미확정)"
+    },
+    {
+      "fill_date": "2026-05-11",
+      "type": "SELL",
+      "amount": 68700.0,
+      "settle_date": "2026-05-13",
+      "deposit_delta": -2654359.0,
+      "lag_days": 1,
+      "confirmed": false,
+      "note": "SELL 68,700 → 예수금 -2,654,359 (2026-05-13, 관측 1거래일 후)  (미확정)"
+    },
+    {
+      "fill_date": "2026-05-12",
+      "type": "BUY",
+      "amount": 5472000.0,
+      "settle_date": "2026-05-13",
+      "deposit_delta": -2654359.0,
+      "lag_days": 1,
+      "confirmed": false,
+      "note": "BUY 5,472,000 → 예수금 -2,654,359 (2026-05-13, 관측 1거래일 후)  (미확정)"
+    },
+    {
+      "fill_date": "2026-05-13",
+      "type": "SELL",
+      "amount": 5032000.0,
+      "settle_date": "2026-05-14",
+      "deposit_delta": -5327502.0,
+      "lag_days": 1,
+      "confirmed": false,
+      "note": "SELL 5,032,000 → 예수금 -5,327,502 (2026-05-14, 관측 1거래일 후)  (미확정)"
+    },
+    {
+      "fill_date": "2026-05-22",
+      "type": "SELL",
+      "amount": 4526860.0,
+      "settle_date": "2026-05-27",
+      "deposit_delta": 4518290.0,
+      "lag_days": 3,
+      "confirmed": true,
+      "note": "SELL 4,526,860 → 예수금 +4,518,290 (2026-05-27, 관측 3거래일 후)  ✅확정"
+    },
+    {
+      "fill_date": "2026-06-09",
+      "type": "BUY",
+      "amount": 140490.0,
+      "settle_date": "2026-06-11",
+      "deposit_delta": -140510.0,
+      "lag_days": 2,
+      "confirmed": true,
+      "note": "BUY 140,490 → 예수금 -140,510 (2026-06-11, 관측 2거래일 후)  ✅확정"
+    },
+    {
+      "fill_date": "2026-06-10",
+      "type": "BUY",
+      "amount": 2215000.0,
+      "settle_date": "2026-06-11",
+      "deposit_delta": -140510.0,
+      "lag_days": 1,
+      "confirmed": false,
+      "note": "BUY 2,215,000 → 예수금 -140,510 (2026-06-11, 관측 1거래일 후)  (미확정)"
+    },
+    {
+      "fill_date": "2026-06-11",
+      "type": "SELL",
+      "amount": 1975000.0,
+      "settle_date": "2026-06-12",
+      "deposit_delta": -2137320.0,
+      "lag_days": 1,
+      "confirmed": false,
+      "note": "SELL 1,975,000 → 예수금 -2,137,320 (2026-06-12, 관측 1거래일 후)  (미확정)"
+    },
+    {
+      "fill_date": "2026-06-15",
+      "type": "BUY",
+      "amount": 3289000.0,
+      "settle_date": "2026-06-17",
+      "deposit_delta": -3289490.0,
+      "lag_days": 2,
+      "confirmed": true,
+      "note": "BUY 3,289,000 → 예수금 -3,289,490 (2026-06-17, 관측 2거래일 후)  ✅확정"
+    },
+    {
+      "fill_date": "2026-06-17",
+      "type": "SELL",
+      "amount": 3146000.0,
+      "settle_date": "2026-06-19",
+      "deposit_delta": 3171674.0,
+      "lag_days": 2,
+      "confirmed": true,
+      "note": "SELL 3,146,000 → 예수금 +3,171,674 (2026-06-19, 관측 2거래일 후)  ✅확정"
+    },
+    {
+      "fill_date": "2026-06-19",
+      "type": "SELL",
+      "amount": 133350.0,
+      "settle_date": "2026-06-23",
+      "deposit_delta": 133064.0,
+      "lag_days": 3,
+      "confirmed": true,
+      "note": "SELL 133,350 → 예수금 +133,064 (2026-06-23, 관측 3거래일 후)  ✅확정"
+    },
+    {
+      "fill_date": "2026-06-23",
+      "type": "BUY",
+      "amount": 2121000.0,
+      "settle_date": "2026-06-25",
+      "deposit_delta": -2085310.0,
+      "lag_days": 2,
+      "confirmed": true,
+      "note": "BUY 2,121,000 → 예수금 -2,085,310 (2026-06-25, 관측 2거래일 후)  ✅확정"
+    },
+    {
+      "fill_date": "2026-06-24",
+      "type": "SELL",
+      "amount": 1884000.0,
+      "settle_date": "2026-06-25",
+      "deposit_delta": -2085310.0,
+      "lag_days": 1,
+      "confirmed": false,
+      "note": "SELL 1,884,000 → 예수금 -2,085,310 (2026-06-25, 관측 1거래일 후)  (미확정)"
+    },
+    {
+      "fill_date": "2026-07-01",
+      "type": "BUY",
+      "amount": 2004000.0,
+      "settle_date": "2026-07-03",
+      "deposit_delta": -118360.0,
+      "lag_days": 2,
+      "confirmed": false,
+      "note": "BUY 2,004,000 → 예수금 -118,360 (2026-07-03, 관측 2거래일 후)  (미확정)"
+    },
+    {
+      "fill_date": "2026-07-01",
+      "type": "SELL",
+      "amount": 1911000.0,
+      "settle_date": "2026-07-03",
+      "deposit_delta": -118360.0,
+      "lag_days": 2,
+      "confirmed": false,
+      "note": "SELL 1,911,000 → 예수금 -118,360 (2026-07-03, 관측 2거래일 후)  (미확정)"
+    }
+  ],
+  "today_sell_amount": 0.0,
+  "reference": {
+    "field": "kt00004.aset_evlt_amt",
+    "value": 3684799.0
+  },
+  "best_candidate": "A  출금가능금(pymn_alow_amt) + 평가금액"
+}
