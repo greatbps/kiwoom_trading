@@ -1,0 +1,176 @@
+{
+  "run_at": "2026-08-03T18:04:10",
+  "dataset": {
+    "source": "phase1/minute_cache/5m",
+    "symbols": 112,
+    "days": 243,
+    "start": "2025-08-01",
+    "end": "2026-07-31",
+    "resample": "5m→1d"
+  },
+  "common": {
+    "exit_profile": "phase0.portfolio.EXIT_PROFILE",
+    "commission": 0.0035,
+    "max_slots": 3,
+    "warmup_bars": 60
+  },
+  "strategies": {
+    "A": {
+      "name": "Live Swing (Pullback)",
+      "engine": "swing_runner.SignalEngine",
+      "funnel": {
+        "bars": 20322,
+        "signal": 792,
+        "filtered": 0,
+        "entry": 792,
+        "signal_days": 792,
+        "symbols_with_signal": 111,
+        "trades": 81,
+        "dropped_no_slot": 646,
+        "binding_days": 126
+      },
+      "entry_parity_pct": 10.23,
+      "metrics": {
+        "trades": 81,
+        "win_rate": 41.98,
+        "pf": 1.56,
+        "expectancy": 1.7232,
+        "avg_win": 11.434,
+        "avg_loss": -5.301,
+        "mdd": -8.29,
+        "avg_hold": 4.86,
+        "profit": 77748072.0,
+        "loss": 49834165.0,
+        "net_pnl": 27913907.0,
+        "avg_r": 0.345,
+        "recovery": 3.367,
+        "monthly": 7.0,
+        "weekly": 1.67,
+        "daily": 0.333
+      },
+      "score": 62.08,
+      "elapsed_sec": 91.8,
+      "bootstrap": {
+        "n": 81,
+        "pf_ci": [
+          0.98,
+          2.511
+        ],
+        "p_pf_below_1": 0.03,
+        "exp_ci": [
+          -14064.0,
+          745453.0
+        ]
+      }
+    },
+    "B": {
+      "name": "CHoCH",
+      "engine": "analyzers.swing.choch_engine",
+      "funnel": {
+        "bars": 20322,
+        "signal": 80,
+        "filtered": 0,
+        "entry": 80,
+        "signal_days": 80,
+        "symbols_with_signal": 43,
+        "trades": 41,
+        "dropped_no_slot": 23,
+        "binding_days": 16
+      },
+      "entry_parity_pct": 51.25,
+      "metrics": {
+        "trades": 41,
+        "win_rate": 31.71,
+        "pf": 1.06,
+        "expectancy": 0.2166,
+        "avg_win": 11.979,
+        "avg_loss": -5.245,
+        "mdd": -14.98,
+        "avg_hold": 4.49,
+        "profit": 31146201.0,
+        "loss": 29369378.0,
+        "net_pnl": 1776823.0,
+        "avg_r": 0.043,
+        "recovery": 0.119,
+        "monthly": 3.54,
+        "weekly": 0.84,
+        "daily": 0.169
+      },
+      "score": 22.78,
+      "elapsed_sec": 9.0,
+      "bootstrap": {
+        "n": 41,
+        "pf_ci": [
+          0.465,
+          2.041
+        ],
+        "p_pf_below_1": 0.445,
+        "exp_ci": [
+          -460331.0,
+          592482.0
+        ]
+      }
+    },
+    "C": {
+      "name": "Exploration (core rules only)",
+      "engine": "YAML 수치 규칙만 — Reference",
+      "funnel": {
+        "bars": 20322,
+        "signal": 1676,
+        "filtered": 1465,
+        "entry": 211,
+        "signal_days": 211,
+        "symbols_with_signal": 93,
+        "trades": 65,
+        "dropped_no_slot": 130,
+        "binding_days": 66
+      },
+      "entry_parity_pct": 30.81,
+      "metrics": {
+        "trades": 65,
+        "win_rate": 43.08,
+        "pf": 1.87,
+        "expectancy": 2.6557,
+        "avg_win": 13.246,
+        "avg_loss": -5.359,
+        "mdd": -11.65,
+        "avg_hold": 5.43,
+        "profit": 74180514.0,
+        "loss": 39658670.0,
+        "net_pnl": 34521844.0,
+        "avg_r": 0.531,
+        "recovery": 2.964,
+        "monthly": 5.62,
+        "weekly": 1.34,
+        "daily": 0.267
+      },
+      "score": 73.41,
+      "elapsed_sec": 0.6,
+      "bootstrap": {
+        "n": 65,
+        "pf_ci": [
+          1.105,
+          3.162
+        ],
+        "p_pf_below_1": 0.011,
+        "exp_ci": [
+          77801.0,
+          1012793.0
+        ]
+      }
+    }
+  },
+  "ranking": [
+    "C",
+    "A",
+    "B"
+  ],
+  "verdict": "PASS",
+  "caveats": [
+    "표본 41~81거래 — PF 95% 신뢰구간이 서로 크게 겹친다",
+    "B(CHoCH) 는 P(PF<1)=44.5% 로 손익분기와 구분 불가",
+    "일봉 리샘플 + EXIT_PROFILE 일봉 근사 — 절대 수익률 크기는 이 선택에 좌우",
+    "C 는 재현 불가 게이트 4개를 뺀 상한 추정치 (Reference)",
+    "swing_runner docstring 의 CHoCH 우위가 이 데이터셋에서 재현되지 않음"
+  ]
+}
