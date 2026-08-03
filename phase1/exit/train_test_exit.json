@@ -1,0 +1,86 @@
+{
+  "A": {
+    "train": {
+      "pf": 2.622,
+      "trades": 25
+    },
+    "test": {
+      "pf": 1.094,
+      "trades": 56,
+      "mdd": -11.73,
+      "win_rate": 35.71
+    }
+  },
+  "B": {
+    "train": {
+      "pf": 4.554,
+      "trades": 15
+    },
+    "test": {
+      "pf": 0.835,
+      "trades": 29,
+      "mdd": -16.14,
+      "win_rate": 55.17
+    }
+  },
+  "C": {
+    "train": {
+      "pf": 2.657,
+      "trades": 13
+    },
+    "test": {
+      "pf": 2.071,
+      "trades": 23,
+      "mdd": -16.5,
+      "win_rate": 47.83
+    }
+  },
+  "D3": {
+    "train": {
+      "pf": 2.909,
+      "trades": 49
+    },
+    "test": {
+      "pf": 1.292,
+      "trades": 86,
+      "mdd": -12.66,
+      "win_rate": 40.7
+    }
+  },
+  "D5": {
+    "train": {
+      "pf": 1.361,
+      "trades": 33
+    },
+    "test": {
+      "pf": 1.33,
+      "trades": 67,
+      "mdd": -11.98,
+      "win_rate": 35.82
+    }
+  },
+  "D10": {
+    "train": {
+      "pf": 3.503,
+      "trades": 21
+    },
+    "test": {
+      "pf": 1.782,
+      "trades": 47,
+      "mdd": -13.42,
+      "win_rate": 29.79
+    }
+  },
+  "E": {
+    "train": {
+      "pf": 1.824,
+      "trades": 40
+    },
+    "test": {
+      "pf": 0.871,
+      "trades": 66,
+      "mdd": -21.53,
+      "win_rate": 31.82
+    }
+  }
+}

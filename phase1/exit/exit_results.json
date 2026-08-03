@@ -1,0 +1,524 @@
+{
+  "run_at": "2026-08-03T18:45:01",
+  "universe": 112,
+  "days": 243,
+  "signal_days": 792,
+  "common": {
+    "entry": "swing_runner.SignalEngine (무변경)",
+    "selection": "ScoreEngine Top-3 (무변경)",
+    "max_slots": 3,
+    "commission": 0.0035
+  },
+  "train_test": {
+    "train_days": 122,
+    "test_days": 121
+  },
+  "cases": {
+    "A": {
+      "name": "Current Baseline (EXIT_PROFILE)",
+      "metrics": {
+        "trades": 81,
+        "win_rate": 41.98,
+        "pf": 1.56,
+        "expectancy": 1.7232,
+        "avg_win": 11.434,
+        "avg_loss": -5.301,
+        "mdd": -8.29,
+        "avg_hold": 4.86,
+        "profit": 77748072.0,
+        "loss": 49834165.0,
+        "net_pnl": 27913907.0,
+        "avg_r": 0.345,
+        "recovery": 3.367,
+        "monthly": 7.0,
+        "weekly": 1.67,
+        "daily": 0.333
+      },
+      "train": {
+        "pf": 2.622,
+        "trades": 25
+      },
+      "test": {
+        "pf": 1.094,
+        "trades": 56,
+        "mdd": -11.73,
+        "win_rate": 35.71
+      },
+      "bootstrap": {
+        "n": 81,
+        "pf_ci": [
+          0.98,
+          2.511
+        ],
+        "p_pf_below_1": 0.03
+      },
+      "test_bootstrap": {
+        "n": 56,
+        "pf_ci": [
+          0.563,
+          1.884
+        ],
+        "p_pf_below_1": 0.367
+      },
+      "engine_kwargs": {
+        "swing_mode": true,
+        "tp_pct": 0.15,
+        "sl_pct": -0.05,
+        "min_hold_bars": 3,
+        "trailing_pct": 0.08,
+        "be_trigger_pct": 0.05,
+        "max_hold_bars": 30,
+        "commission": 0.0035
+      }
+    },
+    "B": {
+      "name": "Fixed Target + ATR Stop",
+      "metrics": {
+        "trades": 44,
+        "win_rate": 65.91,
+        "pf": 1.393,
+        "expectancy": 2.0325,
+        "avg_win": 10.926,
+        "avg_loss": -15.161,
+        "mdd": -12.71,
+        "avg_hold": 10.23,
+        "profit": 63367848.0,
+        "loss": 45481252.0,
+        "net_pnl": 17886596.0,
+        "avg_r": 0.407,
+        "recovery": 1.408,
+        "monthly": 3.8,
+        "weekly": 0.91,
+        "daily": 0.181
+      },
+      "train": {
+        "pf": 4.554,
+        "trades": 15
+      },
+      "test": {
+        "pf": 0.835,
+        "trades": 29,
+        "mdd": -16.14,
+        "win_rate": 55.17
+      },
+      "bootstrap": {
+        "n": 44,
+        "pf_ci": [
+          0.757,
+          3.149
+        ],
+        "p_pf_below_1": 0.158
+      },
+      "test_bootstrap": {
+        "n": 29,
+        "pf_ci": [
+          0.368,
+          1.955
+        ],
+        "p_pf_below_1": 0.663
+      },
+      "engine_kwargs": {
+        "swing_mode": true,
+        "tp_pct": 0.12,
+        "sl_pct": -0.05,
+        "min_hold_bars": 3,
+        "trailing_pct": 999.0,
+        "be_trigger_pct": 999.0,
+        "max_hold_bars": 30,
+        "commission": 0.0035,
+        "sl_atr_mult": 2.0
+      },
+      "adopt_check": {
+        "test_pf_up": false,
+        "ci_low_up": false,
+        "mdd_ok": false,
+        "p_down": false
+      }
+    },
+    "C": {
+      "name": "ATR Trailing (2.5×ATR)",
+      "metrics": {
+        "trades": 38,
+        "win_rate": 50.0,
+        "pf": 2.38,
+        "expectancy": 7.0571,
+        "avg_win": 24.344,
+        "avg_loss": -10.23,
+        "mdd": -14.33,
+        "avg_hold": 12.13,
+        "profit": 92506882.0,
+        "loss": 38871082.0,
+        "net_pnl": 53635800.0,
+        "avg_r": 1.411,
+        "recovery": 3.743,
+        "monthly": 3.28,
+        "weekly": 0.78,
+        "daily": 0.156
+      },
+      "train": {
+        "pf": 2.657,
+        "trades": 13
+      },
+      "test": {
+        "pf": 2.071,
+        "trades": 23,
+        "mdd": -16.5,
+        "win_rate": 47.83
+      },
+      "bootstrap": {
+        "n": 38,
+        "pf_ci": [
+          1.032,
+          5.418
+        ],
+        "p_pf_below_1": 0.021
+      },
+      "test_bootstrap": {
+        "n": 23,
+        "pf_ci": [
+          0.66,
+          6.025
+        ],
+        "p_pf_below_1": 0.104
+      },
+      "engine_kwargs": {
+        "swing_mode": true,
+        "tp_pct": null,
+        "sl_pct": -0.05,
+        "min_hold_bars": 3,
+        "trailing_pct": 0.03,
+        "be_trigger_pct": 999.0,
+        "max_hold_bars": 30,
+        "commission": 0.0035,
+        "sl_atr_mult": 2.0,
+        "trail_atr_mult": 2.5
+      },
+      "adopt_check": {
+        "test_pf_up": true,
+        "ci_low_up": true,
+        "mdd_ok": false,
+        "p_down": true
+      }
+    },
+    "D3": {
+      "name": "Time Exit 3일",
+      "metrics": {
+        "trades": 137,
+        "win_rate": 41.61,
+        "pf": 1.66,
+        "expectancy": 1.8117,
+        "avg_win": 10.949,
+        "avg_loss": -4.699,
+        "mdd": -9.24,
+        "avg_hold": 2.5,
+        "profit": 124828761.0,
+        "loss": 75176191.0,
+        "net_pnl": 49652570.0,
+        "avg_r": 0.362,
+        "recovery": 5.376,
+        "monthly": 11.84,
+        "weekly": 2.82,
+        "daily": 0.564
+      },
+      "train": {
+        "pf": 2.909,
+        "trades": 49
+      },
+      "test": {
+        "pf": 1.292,
+        "trades": 86,
+        "mdd": -12.66,
+        "win_rate": 40.7
+      },
+      "bootstrap": {
+        "n": 137,
+        "pf_ci": [
+          0.967,
+          2.577
+        ],
+        "p_pf_below_1": 0.033
+      },
+      "test_bootstrap": {
+        "n": 86,
+        "pf_ci": [
+          0.716,
+          2.158
+        ],
+        "p_pf_below_1": 0.191
+      },
+      "engine_kwargs": {
+        "swing_mode": true,
+        "tp_pct": null,
+        "sl_pct": -0.05,
+        "min_hold_bars": 3,
+        "trailing_pct": 999.0,
+        "be_trigger_pct": 999.0,
+        "max_hold_bars": 3,
+        "commission": 0.0035
+      },
+      "adopt_check": {
+        "test_pf_up": true,
+        "ci_low_up": true,
+        "mdd_ok": false,
+        "p_down": true
+      }
+    },
+    "D5": {
+      "name": "Time Exit 5일",
+      "metrics": {
+        "trades": 100,
+        "win_rate": 44.0,
+        "pf": 1.521,
+        "expectancy": 1.5209,
+        "avg_win": 10.09,
+        "avg_loss": -5.212,
+        "mdd": -9.89,
+        "avg_hold": 3.76,
+        "profit": 88788572.0,
+        "loss": 58371077.0,
+        "net_pnl": 30417495.0,
+        "avg_r": 0.304,
+        "recovery": 3.075,
+        "monthly": 8.64,
+        "weekly": 2.06,
+        "daily": 0.412
+      },
+      "train": {
+        "pf": 1.361,
+        "trades": 33
+      },
+      "test": {
+        "pf": 1.33,
+        "trades": 67,
+        "mdd": -11.98,
+        "win_rate": 35.82
+      },
+      "bootstrap": {
+        "n": 100,
+        "pf_ci": [
+          0.915,
+          2.498
+        ],
+        "p_pf_below_1": 0.054
+      },
+      "test_bootstrap": {
+        "n": 67,
+        "pf_ci": [
+          0.682,
+          2.292
+        ],
+        "p_pf_below_1": 0.197
+      },
+      "engine_kwargs": {
+        "swing_mode": true,
+        "tp_pct": null,
+        "sl_pct": -0.05,
+        "min_hold_bars": 3,
+        "trailing_pct": 999.0,
+        "be_trigger_pct": 999.0,
+        "max_hold_bars": 5,
+        "commission": 0.0035
+      },
+      "adopt_check": {
+        "test_pf_up": true,
+        "ci_low_up": true,
+        "mdd_ok": false,
+        "p_down": true
+      }
+    },
+    "D10": {
+      "name": "Time Exit 10일",
+      "metrics": {
+        "trades": 70,
+        "win_rate": 34.29,
+        "pf": 2.44,
+        "expectancy": 4.942,
+        "avg_win": 24.423,
+        "avg_loss": -5.222,
+        "mdd": -10.49,
+        "avg_hold": 5.96,
+        "profit": 117230808.0,
+        "loss": 48046483.0,
+        "net_pnl": 69184325.0,
+        "avg_r": 0.988,
+        "recovery": 6.594,
+        "monthly": 6.05,
+        "weekly": 1.44,
+        "daily": 0.288
+      },
+      "train": {
+        "pf": 3.503,
+        "trades": 21
+      },
+      "test": {
+        "pf": 1.782,
+        "trades": 47,
+        "mdd": -13.42,
+        "win_rate": 29.79
+      },
+      "bootstrap": {
+        "n": 70,
+        "pf_ci": [
+          1.248,
+          4.323
+        ],
+        "p_pf_below_1": 0.004
+      },
+      "test_bootstrap": {
+        "n": 47,
+        "pf_ci": [
+          0.699,
+          3.479
+        ],
+        "p_pf_below_1": 0.09
+      },
+      "engine_kwargs": {
+        "swing_mode": true,
+        "tp_pct": null,
+        "sl_pct": -0.05,
+        "min_hold_bars": 3,
+        "trailing_pct": 999.0,
+        "be_trigger_pct": 999.0,
+        "max_hold_bars": 10,
+        "commission": 0.0035
+      },
+      "adopt_check": {
+        "test_pf_up": true,
+        "ci_low_up": true,
+        "mdd_ok": false,
+        "p_down": true
+      }
+    },
+    "E": {
+      "name": "운영 Exit Replay (2층)",
+      "metrics": {
+        "trades": 107,
+        "win_rate": 34.58,
+        "pf": 1.236,
+        "expectancy": 0.9423,
+        "avg_win": 14.259,
+        "avg_loss": -6.096,
+        "mdd": -17.22,
+        "avg_hold": 3.38,
+        "profit": 105511832.0,
+        "loss": 85352582.0,
+        "net_pnl": 20159250.0,
+        "avg_r": 0.188,
+        "recovery": 1.171,
+        "monthly": 9.25,
+        "weekly": 2.2,
+        "daily": 0.44
+      },
+      "train": {
+        "pf": 1.824,
+        "trades": 40
+      },
+      "test": {
+        "pf": 0.871,
+        "trades": 66,
+        "mdd": -21.53,
+        "win_rate": 31.82
+      },
+      "bootstrap": {
+        "n": 107,
+        "pf_ci": [
+          0.692,
+          2.023
+        ],
+        "p_pf_below_1": 0.22
+      },
+      "test_bootstrap": {
+        "n": 66,
+        "pf_ci": [
+          0.394,
+          1.653
+        ],
+        "p_pf_below_1": 0.662
+      },
+      "intraday_lookback_bars": 500,
+      "eod_exits": null,
+      "note": "2층 재생: 장중 OptimizedExitLogic(SWING=손절만) + EOD HoldingManager(익절). datetime.now() 는 하네스에서 고정. 운영 코드 무수정.",
+      "exit_reasons": {
+        "[EOD] DRAWDOWN_STOP": 41,
+        "[EOD] MA20_EXIT": 11,
+        "[EOD] MA5_EXIT": 7,
+        "[STRUCTURE_STOP] 21,945원 (-5.41%)": 1,
+        "[STRUCTURE_STOP] 9,329원 (-8.25%)": 1,
+        "[STRUCTURE_STOP] 7,932원 (-6.47%)": 1,
+        "[STRUCTURE_STOP] 571,900원 (-5.40%)": 1,
+        "[STRUCTURE_STOP] 7,990원 (-5.23%)": 1,
+        "[STRUCTURE_STOP] 553,850원 (-5.32%)": 1,
+        "[STRUCTURE_STOP] 25,840원 (-14.89%)": 1,
+        "[STRUCTURE_STOP] 6,363원 (-5.61%)": 1,
+        "[STRUCTURE_STOP] 48,070원 (-7.61%)": 1,
+        "[STRUCTURE_STOP] 26,268원 (-5.24%)": 1,
+        "[STRUCTURE_STOP] 6,108원 (-5.21%)": 1,
+        "[STRUCTURE_STOP] 20,568원 (-5.31%)": 1,
+        "[STRUCTURE_STOP] 8,550원 (-9.00%)": 1,
+        "[STRUCTURE_STOP] 24,748원 (-5.37%)": 1,
+        "[STRUCTURE_STOP] 77,045원 (-5.67%)": 1,
+        "[STRUCTURE_STOP] 8,132원 (-6.19%)": 1,
+        "[STRUCTURE_STOP] 8,198원 (-5.79%)": 1,
+        "[STRUCTURE_STOP] 62,320원 (-5.18%)": 1,
+        "[STRUCTURE_STOP] 44,888원 (-5.08%)": 1,
+        "[STRUCTURE_STOP] 58,900원 (-11.77%)": 1,
+        "[STRUCTURE_STOP] 20,425원 (-8.47%)": 1,
+        "[STRUCTURE_STOP] 31,872원 (-6.41%)": 1,
+        "[STRUCTURE_STOP] 42,750원 (-8.00%)": 1,
+        "[STRUCTURE_STOP] 90,440원 (-7.25%)": 1,
+        "[STRUCTURE_STOP] 73,055원 (-5.33%)": 1,
+        "[STRUCTURE_STOP] 12,217원 (-6.30%)": 1,
+        "[STRUCTURE_STOP] 14,535원 (-10.59%)": 1,
+        "[STRUCTURE_STOP] 53,390원 (-5.16%)": 1,
+        "[STRUCTURE_STOP] 5,415원 (-5.09%)": 1,
+        "[STRUCTURE_STOP] 62,415원 (-5.02%)": 1,
+        "[STRUCTURE_STOP] 26,268원 (-5.06%)": 1,
+        "[STRUCTURE_STOP] 61,560원 (-6.79%)": 1,
+        "[STRUCTURE_STOP] 16,625원 (-5.83%)": 1,
+        "[STRUCTURE_STOP] 33,060원 (-14.94%)": 1,
+        "[STRUCTURE_STOP] 105,640원 (-6.83%)": 1,
+        "[STRUCTURE_STOP] 116,185원 (-7.85%)": 1,
+        "[STRUCTURE_STOP] 95,950원 (-5.15%)": 1,
+        "[STRUCTURE_STOP] 108,965원 (-5.06%)": 1,
+        "[STRUCTURE_STOP] 152,665원 (-5.04%)": 1,
+        "[STRUCTURE_STOP] 330,125원 (-7.77%)": 1,
+        "[STRUCTURE_STOP] 341,525원 (-5.15%)": 1,
+        "[STRUCTURE_STOP] 2,531,750원 (-11.89%)": 1,
+        "[STRUCTURE_STOP] 317,775원 (-12.56%)": 1,
+        "[STRUCTURE_STOP] 59,470원 (-7.03%)": 1,
+        "[STRUCTURE_STOP] 56,620원 (-5.70%)": 1,
+        "[STRUCTURE_STOP] 54,720원 (-7.29%)": 1,
+        "[STRUCTURE_STOP] 147,725원 (-8.10%)": 1,
+        "[STRUCTURE_STOP] 11,467원 (-5.03%)": 1
+      },
+      "adopt_check": {
+        "test_pf_up": false,
+        "ci_low_up": false,
+        "mdd_ok": false,
+        "p_down": false
+      }
+    }
+  },
+  "case_e_harness": {
+    "intraday_exceptions": 0,
+    "sample": [],
+    "partial_exits": 0,
+    "eod_exits": 59
+  },
+  "adoptable": [],
+  "verdict": "FAIL",
+  "elapsed_sec": 132.5,
+  "verdict_reason": "4조건(Test PF↑/CI하한↑/MDD 악화없음/P(PF<1)↓) 모두 만족하는 Exit 없음. C·D3·D5·D10 은 3/4 충족, MDD 에서 탈락.",
+  "key_finding": "운영 실제 청산(E, 2층)은 백테스트 청산(A)보다 나쁘다. A PF 1.560/Test 1.094/MDD -8.29% vs E PF 1.236/Test 0.871/MDD -17.22%. 8-0/8-1 이 보고한 PF 1.56 은 운영이 쓰지 않는 청산의 숫자다. 원인: 장중 층에 SWING 익절 경로가 하나도 없다 (전부 not _is_swing 게이트). 손절은 5분봉 즉시, 익절은 EOD 일봉 1회 — 비대칭.",
+  "best_candidate": {
+    "case": "D10",
+    "name": "Time Exit 10일",
+    "test_pf": 1.782,
+    "test_pf_current_backtest": 1.094,
+    "test_pf_current_live": 0.871,
+    "test_mdd": -13.42,
+    "test_mdd_current": -11.73,
+    "adopt_now": false,
+    "blocked_by": "MDD 조건 (1.69%p 악화, 47거래 — 잡음 범위)"
+  }
+}
