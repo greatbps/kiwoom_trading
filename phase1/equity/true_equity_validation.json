@@ -1,0 +1,123 @@
+{
+  "validated_at": "2026-08-03T17:40:44",
+  "method": "ka01690 qry_dt 과거조회 (체결 대기 불가로 대체)",
+  "events": [
+    {
+      "date": "20260521",
+      "note": "매도 전날",
+      "return_code": 0,
+      "dbst_bal": 542250,
+      "tot_evlt_amt": 4490750,
+      "day_stk_asst": 5032330,
+      "case_c_star": 5033000,
+      "case_a_ops": 4979525.0,
+      "err_c": 670,
+      "err_a": -52805.0
+    },
+    {
+      "date": "20260522",
+      "note": "SELL 4,526,860 당일 — 매도대금 미수령 구간",
+      "return_code": 0,
+      "dbst_bal": 5060450,
+      "tot_evlt_amt": 0,
+      "day_stk_asst": 5060450,
+      "case_c_star": 5060450,
+      "case_a_ops": 5033000.0,
+      "err_c": 0,
+      "err_a": -27450.0
+    },
+    {
+      "date": "20260526",
+      "note": "매도 결제 전 (미수령 유지)",
+      "return_code": 0,
+      "dbst_bal": 5060450,
+      "tot_evlt_amt": 0,
+      "day_stk_asst": 5060450,
+      "case_c_star": 5060450,
+      "case_a_ops": 542250.0,
+      "err_c": 0,
+      "err_a": -4518200.0
+    },
+    {
+      "date": "20260527",
+      "note": "매도 결제 완료",
+      "return_code": 0,
+      "dbst_bal": 5060540,
+      "tot_evlt_amt": 0,
+      "day_stk_asst": 5060540,
+      "case_c_star": 5060540,
+      "case_a_ops": 5060540.0,
+      "err_c": 0,
+      "err_a": 0.0
+    },
+    {
+      "date": "20260623",
+      "note": "BUY 2,121,000 당일 — 매수대금 미차감 구간",
+      "return_code": 0,
+      "dbst_bal": 2683409,
+      "tot_evlt_amt": 1860000,
+      "day_stk_asst": 4539419,
+      "case_c_star": 4543409,
+      "case_a_ops": 4768719.0,
+      "err_c": 3990,
+      "err_a": 229300.0
+    },
+    {
+      "date": "20260624",
+      "note": "SELL 1,884,000 당일",
+      "return_code": 0,
+      "dbst_bal": 4563361,
+      "tot_evlt_amt": 0,
+      "day_stk_asst": 4563361,
+      "case_c_star": 4563361,
+      "case_a_ops": 6628719.0,
+      "err_c": 0,
+      "err_a": 2065358.0
+    },
+    {
+      "date": "20260625",
+      "note": "매수 결제 반영",
+      "return_code": 0,
+      "dbst_bal": 4563361,
+      "tot_evlt_amt": 0,
+      "day_stk_asst": 4563361,
+      "case_c_star": 4563361,
+      "case_a_ops": 2683409.0,
+      "err_c": 0,
+      "err_a": -1879952.0
+    },
+    {
+      "date": "20260626",
+      "note": "매도 결제 반영",
+      "return_code": 0,
+      "dbst_bal": 4563361,
+      "tot_evlt_amt": 0,
+      "day_stk_asst": 4563361,
+      "case_c_star": 4563361,
+      "case_a_ops": 4563361.0,
+      "err_c": 0,
+      "err_a": 0.0
+    }
+  ],
+  "errors": [],
+  "precondition": {
+    "fills_30d": 0,
+    "last_fill": "None",
+    "ec_halt_7d": 2059
+  },
+  "summary": {
+    "case_a_max_abs_err": 4518200.0,
+    "case_c_max_abs_err": 3990,
+    "case_a_days_over_1pct": 5,
+    "case_c_days_over_1pct": 0
+  },
+  "today_deposit_fields": {
+    "entr": 1857799,
+    "pymn_alow_amt": 1857799,
+    "d1_entra": 1857799,
+    "d2_entra": 1857799,
+    "dbst_bal": 1857799
+  },
+  "today_fields_distinct": 1,
+  "verdict": "PASS"
+}
