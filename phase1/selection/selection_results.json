@@ -1,0 +1,437 @@
+{
+  "run_at": "2026-08-03T18:21:24",
+  "universe": 112,
+  "days": 243,
+  "signal_days": 792,
+  "symbols_with_signal": 111,
+  "score_distribution": {
+    "3.0": 697,
+    "4.0": 39,
+    "2.0": 30
+  },
+  "tie_days": 101,
+  "candidate_days": 131,
+  "common": {
+    "entry_engine": "swing_runner.SignalEngine (무변경)",
+    "exit": "phase0.portfolio.EXIT_PROFILE",
+    "commission": 0.0035,
+    "max_slots": 3
+  },
+  "cases": {
+    "A": {
+      "name": "Current ScoreEngine (Top-3)",
+      "metrics": {
+        "trades": 81,
+        "win_rate": 41.98,
+        "pf": 1.56,
+        "expectancy": 1.7232,
+        "avg_win": 11.434,
+        "avg_loss": -5.301,
+        "mdd": -8.29,
+        "avg_hold": 4.86,
+        "profit": 77748072.0,
+        "loss": 49834165.0,
+        "net_pnl": 27913907.0,
+        "avg_r": 0.345,
+        "recovery": 3.367,
+        "monthly": 7.0,
+        "weekly": 1.67,
+        "daily": 0.333
+      },
+      "bootstrap": {
+        "n": 81,
+        "pf_ci": [
+          0.98,
+          2.511
+        ],
+        "p_pf_below_1": 0.03
+      }
+    },
+    "B": {
+      "name": "RVOL Ranking",
+      "metrics": {
+        "trades": 77,
+        "win_rate": 42.86,
+        "pf": 1.656,
+        "expectancy": 2.076,
+        "avg_win": 12.227,
+        "avg_loss": -5.537,
+        "mdd": -8.06,
+        "avg_hold": 5.22,
+        "profit": 80701419.0,
+        "loss": 48730230.0,
+        "net_pnl": 31971189.0,
+        "avg_r": 0.415,
+        "recovery": 3.969,
+        "monthly": 6.65,
+        "weekly": 1.58,
+        "daily": 0.317
+      },
+      "bootstrap": {
+        "n": 77,
+        "pf_ci": [
+          1.032,
+          2.622
+        ],
+        "p_pf_below_1": 0.016
+      },
+      "adoptable": true,
+      "mdd_worse": false
+    },
+    "C": {
+      "name": "Momentum Ranking (20d)",
+      "metrics": {
+        "trades": 92,
+        "win_rate": 31.52,
+        "pf": 1.11,
+        "expectancy": 0.4003,
+        "avg_win": 12.791,
+        "avg_loss": -5.303,
+        "mdd": -11.9,
+        "avg_hold": 4.24,
+        "profit": 74185316.0,
+        "loss": 66820000.0,
+        "net_pnl": 7365316.0,
+        "avg_r": 0.08,
+        "recovery": 0.619,
+        "monthly": 7.95,
+        "weekly": 1.89,
+        "daily": 0.379
+      },
+      "bootstrap": {
+        "n": 92,
+        "pf_ci": [
+          0.697,
+          1.752
+        ],
+        "p_pf_below_1": 0.327
+      },
+      "adoptable": false,
+      "mdd_worse": true
+    },
+    "D": {
+      "name": "Trend Quality Ranking",
+      "metrics": {
+        "trades": 88,
+        "win_rate": 42.05,
+        "pf": 1.792,
+        "expectancy": 2.3626,
+        "avg_win": 12.716,
+        "avg_loss": -5.149,
+        "mdd": -7.55,
+        "avg_hold": 4.49,
+        "profit": 94099613.0,
+        "loss": 52520377.0,
+        "net_pnl": 41579236.0,
+        "avg_r": 0.473,
+        "recovery": 5.507,
+        "monthly": 7.6,
+        "weekly": 1.81,
+        "daily": 0.362
+      },
+      "bootstrap": {
+        "n": 88,
+        "pf_ci": [
+          1.136,
+          2.751
+        ],
+        "p_pf_below_1": 0.005
+      },
+      "adoptable": true,
+      "mdd_worse": false
+    },
+    "E": {
+      "name": "Composite — E4 Trend-저변동 (Train 선택)",
+      "weights": [
+        0.0,
+        0.0,
+        1.0,
+        1.0
+      ],
+      "train_pf": 3.218,
+      "test_pf": 1.132,
+      "test_trades": 61,
+      "metrics": {
+        "trades": 93,
+        "win_rate": 39.78,
+        "pf": 1.629,
+        "expectancy": 1.9698,
+        "avg_win": 12.819,
+        "avg_loss": -5.198,
+        "mdd": -9.11,
+        "avg_hold": 4.19,
+        "profit": 94856990.0,
+        "loss": 58220377.0,
+        "net_pnl": 36636613.0,
+        "avg_r": 0.394,
+        "recovery": 4.023,
+        "monthly": 8.04,
+        "weekly": 1.91,
+        "daily": 0.383
+      },
+      "bootstrap": {
+        "n": 93,
+        "pf_ci": [
+          1.04,
+          2.453
+        ],
+        "p_pf_below_1": 0.018
+      },
+      "grid": [
+        {
+          "name": "E1 RVOL+Trend",
+          "weights": [
+            1.0,
+            0.0,
+            1.0,
+            0.0
+          ],
+          "train_pf": 2.587,
+          "test_pf": 0.916,
+          "test_trades": 58
+        },
+        {
+          "name": "E2 Mom+Trend",
+          "weights": [
+            0.0,
+            1.0,
+            1.0,
+            0.0
+          ],
+          "train_pf": 2.101,
+          "test_pf": 1.074,
+          "test_trades": 62
+        },
+        {
+          "name": "E3 균등",
+          "weights": [
+            1.0,
+            1.0,
+            1.0,
+            0.0
+          ],
+          "train_pf": 2.225,
+          "test_pf": 1.021,
+          "test_trades": 61
+        },
+        {
+          "name": "E4 Trend-저변동",
+          "weights": [
+            0.0,
+            0.0,
+            1.0,
+            1.0
+          ],
+          "train_pf": 3.218,
+          "test_pf": 1.132,
+          "test_trades": 61
+        },
+        {
+          "name": "E5 RVOL+Mom",
+          "weights": [
+            1.0,
+            1.0,
+            0.0,
+            0.0
+          ],
+          "train_pf": 0.881,
+          "test_pf": 0.97,
+          "test_trades": 64
+        }
+      ],
+      "adoptable": true,
+      "mdd_worse": true
+    }
+  },
+  "random_control": {
+    "runs": 20,
+    "pf_mean": 1.34,
+    "pf_p5": 1.084,
+    "pf_p95": 1.678,
+    "trades_mean": 81.0
+  },
+  "adoptable": [
+    "B",
+    "D",
+    "E"
+  ],
+  "verdict": "FAIL",
+  "elapsed_sec": 117.0,
+  "train_test": {
+    "A": {
+      "train": {
+        "trades": 25,
+        "win_rate": 52.0,
+        "pf": 2.622,
+        "expectancy": 3.528,
+        "avg_win": 10.966,
+        "avg_loss": -4.53,
+        "mdd": -6.3,
+        "avg_hold": 6.16,
+        "profit": 28510649.0,
+        "loss": 10872771.0,
+        "net_pnl": 17637878.0,
+        "avg_r": 0.706,
+        "recovery": 2.799,
+        "monthly": 4.3,
+        "weekly": 1.02,
+        "daily": 0.205
+      },
+      "test": {
+        "trades": 56,
+        "win_rate": 35.71,
+        "pf": 1.094,
+        "expectancy": 0.338,
+        "avg_win": 10.972,
+        "avg_loss": -5.57,
+        "mdd": -11.73,
+        "avg_hold": 4.18,
+        "profit": 43887272.0,
+        "loss": 40101394.0,
+        "net_pnl": 3785878.0,
+        "avg_r": 0.068,
+        "recovery": 0.323,
+        "monthly": 9.72,
+        "weekly": 2.31,
+        "daily": 0.463
+      }
+    },
+    "B": {
+      "train": {
+        "trades": 21,
+        "win_rate": 57.14,
+        "pf": 3.114,
+        "expectancy": 4.7562,
+        "avg_win": 12.261,
+        "avg_loss": -5.25,
+        "mdd": -5.97,
+        "avg_hold": 7.38,
+        "profit": 29426619.0,
+        "loss": 9449853.0,
+        "net_pnl": 19976766.0,
+        "avg_r": 0.951,
+        "recovery": 3.346,
+        "monthly": 3.61,
+        "weekly": 0.86,
+        "daily": 0.172
+      },
+      "test": {
+        "trades": 54,
+        "win_rate": 35.19,
+        "pf": 1.096,
+        "expectancy": 0.3504,
+        "avg_win": 11.333,
+        "avg_loss": -5.611,
+        "mdd": -11.38,
+        "avg_hold": 4.39,
+        "profit": 43064649.0,
+        "loss": 39280377.0,
+        "net_pnl": 3784272.0,
+        "avg_r": 0.07,
+        "recovery": 0.333,
+        "monthly": 9.37,
+        "weekly": 2.23,
+        "daily": 0.446
+      }
+    },
+    "C": {
+      "train": {
+        "trades": 31,
+        "win_rate": 35.48,
+        "pf": 1.512,
+        "expectancy": 1.7194,
+        "avg_win": 14.3,
+        "avg_loss": -5.2,
+        "mdd": -6.85,
+        "avg_hold": 4.74,
+        "profit": 31460000.0,
+        "loss": 20800000.0,
+        "net_pnl": 10660000.0,
+        "avg_r": 0.344,
+        "recovery": 1.557,
+        "monthly": 5.34,
+        "weekly": 1.27,
+        "daily": 0.254
+      },
+      "test": {
+        "trades": 62,
+        "win_rate": 30.65,
+        "pf": 0.969,
+        "expectancy": -0.1156,
+        "avg_win": 11.996,
+        "avg_loss": -5.467,
+        "mdd": -12.82,
+        "avg_hold": 3.77,
+        "profit": 45585316.0,
+        "loss": 47020000.0,
+        "net_pnl": -1434684.0,
+        "avg_r": -0.023,
+        "recovery": -0.112,
+        "monthly": 10.76,
+        "weekly": 2.56,
+        "daily": 0.512
+      }
+    },
+    "D": {
+      "train": {
+        "trades": 29,
+        "win_rate": 58.62,
+        "pf": 4.111,
+        "expectancy": 5.729,
+        "avg_win": 12.914,
+        "avg_loss": -4.45,
+        "mdd": -4.82,
+        "avg_hold": 5.14,
+        "profit": 43906607.0,
+        "loss": 10680000.0,
+        "net_pnl": 33226607.0,
+        "avg_r": 1.146,
+        "recovery": 6.9,
+        "monthly": 4.99,
+        "weekly": 1.19,
+        "daily": 0.238
+      },
+      "test": {
+        "trades": 60,
+        "win_rate": 33.33,
+        "pf": 1.141,
+        "expectancy": 0.5178,
+        "avg_win": 12.548,
+        "avg_loss": -5.497,
+        "mdd": -9.82,
+        "avg_hold": 3.95,
+        "profit": 50193006.0,
+        "loss": 43980377.0,
+        "net_pnl": 6212629.0,
+        "avg_r": 0.104,
+        "recovery": 0.633,
+        "monthly": 10.41,
+        "weekly": 2.48,
+        "daily": 0.496
+      }
+    },
+    "random_Train": {
+      "mean": 2.642,
+      "p5": 1.478,
+      "p95": 3.638
+    },
+    "random_Test": {
+      "mean": 0.986,
+      "p5": 0.706,
+      "p95": 1.495
+    }
+  },
+  "verdict_reason": "Phase 4 전체구간 채택조건은 B/D/E 충족하나, Train/Test 분리 시 Test 구간에서 A~D 전부 무작위 5~95% 구간 안. 통계 우위 미확인 → 현행 ScoreEngine 유지",
+  "best_candidate": {
+    "case": "D",
+    "name": "Trend Quality Ranking",
+    "pf": 1.792,
+    "pf_current": 1.56,
+    "mdd": -7.55,
+    "mdd_current": -8.29,
+    "test_pf": 1.141,
+    "random_test_p95": 1.495,
+    "adopt_now": false
+  },
+  "key_finding": "현행 ScoreEngine 은 후보의 90.9%에 동일 점수(3.0)를 주고, 최고점 동점일이 131일 중 101일(77.1%)이다. 동점은 종목코드 순서로 갈린다. 성과가 무작위 선택과 구분되지 않는 것은 이 설계 공백의 결과다."
+}
