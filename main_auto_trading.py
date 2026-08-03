@@ -2370,6 +2370,46 @@ class IntegratedTradingSystem:
         console.print(f"[red]💀 로그인 실패: 모든 재시도 소진 ({max_retries}회)[/red]")
         return False
 
+    def _settled_cash(self, balance_info, pymn_alow_str):
+        """D+2 정산 기준 예수금(d2_entra). 실패 시 출금가능금으로 폴백하고 WARN을 남긴다.
+
+        출금가능금(pymn_alow_amt)은 결제 완료분만 반영해서 총자산이 양방향으로 틀린다.
+        브로커 실측(2026-08-03, phase1/equity/TRUE_EQUITY_VALIDATION.md):
+          2026-05-26 매도 미수령 → 총자산 542,250 (실제 5,060,450, -4,518,200)
+          2026-06-24 매수 미차감 → 총자산 6,628,719 (실제 4,563,361, +2,065,358)
+        d2_entra 기준은 같은 8일 검증에서 최대 오차 3,990원(0.09%)이었다.
+        """
+        _pymn = float(pymn_alow_str)
+        _raw = balance_info.get('d2_entra')
+        _d2 = None
+        if _raw not in (None, ''):
+            try:
+                _d2 = float(_raw)
+            except (TypeError, ValueError):
+                _d2 = None
+
+        # 관측 로그 — 어느 필드가 실제 D+2인지는 미결제가 있는 날에만 갈린다.
+        # 하루 1회만 남긴다 (Iteration 7-2A §5 미확정 항목 해소용)
+        _today = datetime.now().strftime('%Y%m%d')
+        if getattr(self, '_deposit_obs_date', None) != _today:
+            self._deposit_obs_date = _today
+            try:
+                logger.info(
+                    "[EQUITY_D2] entr=%s pymn_alow=%s d1_entra=%s d2_entra=%s",
+                    balance_info.get('entr'), balance_info.get('pymn_alow_amt'),
+                    balance_info.get('d1_entra'), balance_info.get('d2_entra'))
+            except Exception:
+                pass
+
+        # d2_entra=0 인데 출금가능금이 양수면 모순 → 폴백 (Fail Closed)
+        if _d2 is None or (_d2 <= 0 < _pymn):
+            logger.warning(
+                "[EQUITY_D2] d2_entra 사용 불가(raw=%r) → pymn_alow_amt %s 폴백. "
+                "결제 미완료 구간에서 총자산이 틀릴 수 있다.",
+                _raw, f"{_pymn:,.0f}")
+            return _pymn
+        return _d2
+
     async def initialize_account(self):
         """계좌 정보 초기화 (시스템 시작 시)"""
         from core.risk_manager import RiskManager
@@ -2390,6 +2430,8 @@ class IntegratedTradingSystem:
             # 출금가능금(pymn_alow_amt) — entr은 매수 미결제분이 안 빠진 값이라 총자산 이중계산 방지용
             _pymn_alow_str = balance_info.get('pymn_alow_amt') or balance_info.get('d1_pymn_alow_amt') or cash_str
             self.withdrawable_cash = float(_pymn_alow_str)
+            # 총자산 계산용 예수금은 D+2 정산 기준 — 출금가능금은 결제 완료분만 반영한다 (Iteration 7-3)
+            self.settled_cash = self._settled_cash(balance_info, _pymn_alow_str)
 
             # 2. 보유 종목 조회 (API-ID: ka01690)
             account_info = self.api.get_account_info()
@@ -2406,8 +2448,8 @@ class IntegratedTradingSystem:
                 rmnd_qty = int(pos.get('rmnd_qty', 0)) if pos.get('rmnd_qty') else 0
                 self.positions_value += cur_prc * rmnd_qty
 
-            # 4. 총 자산 (출금가능금 기준 — entr은 매수 미결제분 이중계산되어 사용 안 함)
-            self.total_assets = self.withdrawable_cash + self.positions_value
+            # 4. 총 자산 (D+2 정산 예수금 기준 — 출금가능금은 결제 지연으로 양방향 오차)
+            self.total_assets = self.settled_cash + self.positions_value
             self._account_data_reliable = True   # 실제 잔고 조회 성공 — peak 갱신에 사용 가능
 
             # 4. 계좌 정보 출력
@@ -2806,6 +2848,8 @@ class IntegratedTradingSystem:
             # 출금가능금(pymn_alow_amt) — entr은 매수 미결제분이 안 빠진 값이라 총자산 이중계산 방지용
             _pymn_alow_str = balance_info.get('pymn_alow_amt') or balance_info.get('d1_pymn_alow_amt') or cash_str
             self.withdrawable_cash = float(_pymn_alow_str)
+            # 총자산 계산용 예수금은 D+2 정산 기준 — 출금가능금은 결제 완료분만 반영한다 (Iteration 7-3)
+            self.settled_cash = self._settled_cash(balance_info, _pymn_alow_str)
 
             # 2. 보유 종목 조회 (API-ID: ka01690)
             account_info = self.api.get_account_info()
@@ -2821,8 +2865,8 @@ class IntegratedTradingSystem:
                 rmnd_qty = int(pos.get('rmnd_qty', 0)) if pos.get('rmnd_qty') else 0
                 self.positions_value += cur_prc * rmnd_qty
 
-            # 4. 총 자산 (출금가능금 기준 — entr은 매수 미결제분 이중계산되어 사용 안 함)
-            self.total_assets = self.withdrawable_cash + self.positions_value
+            # 4. 총 자산 (D+2 정산 예수금 기준 — 출금가능금은 결제 지연으로 양방향 오차)
+            self.total_assets = self.settled_cash + self.positions_value
             self._account_data_reliable = True   # 실제 잔고 조회 성공 — peak 갱신에 사용 가능
 
             # 4-1. 에쿼티 전고점 갱신 (멀티데이 DD 추적)

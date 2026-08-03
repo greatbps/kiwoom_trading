@@ -1,0 +1,337 @@
+{
+ "20260501": {
+  "dbst_bal": 363366,
+  "tot_evlt_amt": 0,
+  "day_stk_asst": 363366
+ },
+ "20260504": {
+  "dbst_bal": 593366,
+  "tot_evlt_amt": 0,
+  "day_stk_asst": 593366
+ },
+ "20260505": {
+  "dbst_bal": 593366,
+  "tot_evlt_amt": 0,
+  "day_stk_asst": 593366
+ },
+ "20260506": {
+  "dbst_bal": 7566004,
+  "tot_evlt_amt": 65500,
+  "day_stk_asst": 7631373
+ },
+ "20260507": {
+  "dbst_bal": 8083618,
+  "tot_evlt_amt": 260650,
+  "day_stk_asst": 8343857
+ },
+ "20260508": {
+  "dbst_bal": 8344826,
+  "tot_evlt_amt": 0,
+  "day_stk_asst": 8344826
+ },
+ "20260511": {
+  "dbst_bal": 8344319,
+  "tot_evlt_amt": 0,
+  "day_stk_asst": 8344319
+ },
+ "20260512": {
+  "dbst_bal": 2935509,
+  "tot_evlt_amt": 5032000,
+  "day_stk_asst": 7956695
+ },
+ "20260513": {
+  "dbst_bal": 542250,
+  "tot_evlt_amt": 4436010,
+  "day_stk_asst": 4977600
+ },
+ "20260514": {
+  "dbst_bal": 542250,
+  "tot_evlt_amt": 4483160,
+  "day_stk_asst": 5024740
+ },
+ "20260515": {
+  "dbst_bal": 542250,
+  "tot_evlt_amt": 4468900,
+  "day_stk_asst": 5010480
+ },
+ "20260518": {
+  "dbst_bal": 542250,
+  "tot_evlt_amt": 4416575,
+  "day_stk_asst": 4958165
+ },
+ "20260519": {
+  "dbst_bal": 542250,
+  "tot_evlt_amt": 4433020,
+  "day_stk_asst": 4974610
+ },
+ "20260520": {
+  "dbst_bal": 542250,
+  "tot_evlt_amt": 4437275,
+  "day_stk_asst": 4978865
+ },
+ "20260521": {
+  "dbst_bal": 542250,
+  "tot_evlt_amt": 4490750,
+  "day_stk_asst": 5032330
+ },
+ "20260522": {
+  "dbst_bal": 5060450,
+  "tot_evlt_amt": 0,
+  "day_stk_asst": 5060450
+ },
+ "20260525": {
+  "dbst_bal": 5060450,
+  "tot_evlt_amt": 0,
+  "day_stk_asst": 5060450
+ },
+ "20260526": {
+  "dbst_bal": 5060450,
+  "tot_evlt_amt": 0,
+  "day_stk_asst": 5060450
+ },
+ "20260527": {
+  "dbst_bal": 5060540,
+  "tot_evlt_amt": 0,
+  "day_stk_asst": 5060540
+ },
+ "20260528": {
+  "dbst_bal": 5060540,
+  "tot_evlt_amt": 0,
+  "day_stk_asst": 5060540
+ },
+ "20260529": {
+  "dbst_bal": 5060540,
+  "tot_evlt_amt": 0,
+  "day_stk_asst": 5060540
+ },
+ "20260601": {
+  "dbst_bal": 5060540,
+  "tot_evlt_amt": 0,
+  "day_stk_asst": 5060540
+ },
+ "20260602": {
+  "dbst_bal": 5060540,
+  "tot_evlt_amt": 0,
+  "day_stk_asst": 5060540
+ },
+ "20260603": {
+  "dbst_bal": 5060540,
+  "tot_evlt_amt": 0,
+  "day_stk_asst": 5060540
+ },
+ "20260604": {
+  "dbst_bal": 5060540,
+  "tot_evlt_amt": 0,
+  "day_stk_asst": 5060540
+ },
+ "20260605": {
+  "dbst_bal": 5060540,
+  "tot_evlt_amt": 0,
+  "day_stk_asst": 5060540
+ },
+ "20260608": {
+  "dbst_bal": 5060540,
+  "tot_evlt_amt": 0,
+  "day_stk_asst": 5060540
+ },
+ "20260609": {
+  "dbst_bal": 4920030,
+  "tot_evlt_amt": 137130,
+  "day_stk_asst": 5056866
+ },
+ "20260610": {
+  "dbst_bal": 2782710,
+  "tot_evlt_amt": 2179250,
+  "day_stk_asst": 4957292
+ },
+ "20260611": {
+  "dbst_bal": 4753471,
+  "tot_evlt_amt": 138390,
+  "day_stk_asst": 4891565
+ },
+ "20260612": {
+  "dbst_bal": 4753471,
+  "tot_evlt_amt": 145740,
+  "day_stk_asst": 4898900
+ },
+ "20260615": {
+  "dbst_bal": 1463981,
+  "tot_evlt_amt": 3372050,
+  "day_stk_asst": 4828787
+ },
+ "20260616": {
+  "dbst_bal": 1463981,
+  "tot_evlt_amt": 3289850,
+  "day_stk_asst": 4746762
+ },
+ "20260617": {
+  "dbst_bal": 4635655,
+  "tot_evlt_amt": 141330,
+  "day_stk_asst": 4776683
+ },
+ "20260618": {
+  "dbst_bal": 4635655,
+  "tot_evlt_amt": 137550,
+  "day_stk_asst": 4772910
+ },
+ "20260619": {
+  "dbst_bal": 4768719,
+  "tot_evlt_amt": 0,
+  "day_stk_asst": 4768719
+ },
+ "20260622": {
+  "dbst_bal": 4768719,
+  "tot_evlt_amt": 0,
+  "day_stk_asst": 4768719
+ },
+ "20260623": {
+  "dbst_bal": 2683409,
+  "tot_evlt_amt": 1860000,
+  "day_stk_asst": 4539419
+ },
+ "20260624": {
+  "dbst_bal": 4563361,
+  "tot_evlt_amt": 0,
+  "day_stk_asst": 4563361
+ },
+ "20260625": {
+  "dbst_bal": 4563361,
+  "tot_evlt_amt": 0,
+  "day_stk_asst": 4563361
+ },
+ "20260626": {
+  "dbst_bal": 4563361,
+  "tot_evlt_amt": 0,
+  "day_stk_asst": 4563361
+ },
+ "20260629": {
+  "dbst_bal": 4563361,
+  "tot_evlt_amt": 0,
+  "day_stk_asst": 4563361
+ },
+ "20260630": {
+  "dbst_bal": 4563361,
+  "tot_evlt_amt": 0,
+  "day_stk_asst": 4563361
+ },
+ "20260701": {
+  "dbst_bal": 4445001,
+  "tot_evlt_amt": 0,
+  "day_stk_asst": 4445001
+ },
+ "20260702": {
+  "dbst_bal": 4445001,
+  "tot_evlt_amt": 0,
+  "day_stk_asst": 4445001
+ },
+ "20260703": {
+  "dbst_bal": 4445001,
+  "tot_evlt_amt": 0,
+  "day_stk_asst": 4445001
+ },
+ "20260706": {
+  "dbst_bal": 1819311,
+  "tot_evlt_amt": 2647800,
+  "day_stk_asst": 4466721
+ },
+ "20260707": {
+  "dbst_bal": 1819311,
+  "tot_evlt_amt": 2451600,
+  "day_stk_asst": 4270551
+ },
+ "20260708": {
+  "dbst_bal": 1819311,
+  "tot_evlt_amt": 2309400,
+  "day_stk_asst": 4128371
+ },
+ "20260709": {
+  "dbst_bal": 1819311,
+  "tot_evlt_amt": 2379600,
+  "day_stk_asst": 4198561
+ },
+ "20260710": {
+  "dbst_bal": 1820899,
+  "tot_evlt_amt": 2463300,
+  "day_stk_asst": 4283839
+ },
+ "20260713": {
+  "dbst_bal": 1820899,
+  "tot_evlt_amt": 2145600,
+  "day_stk_asst": 3966179
+ },
+ "20260714": {
+  "dbst_bal": 1820899,
+  "tot_evlt_amt": 2145600,
+  "day_stk_asst": 3966179
+ },
+ "20260715": {
+  "dbst_bal": 1820899,
+  "tot_evlt_amt": 2365200,
+  "day_stk_asst": 4185749
+ },
+ "20260716": {
+  "dbst_bal": 1820899,
+  "tot_evlt_amt": 2133900,
+  "day_stk_asst": 3954479
+ },
+ "20260717": {
+  "dbst_bal": 1820899,
+  "tot_evlt_amt": 2133900,
+  "day_stk_asst": 3954479
+ },
+ "20260720": {
+  "dbst_bal": 1857799,
+  "tot_evlt_amt": 2036700,
+  "day_stk_asst": 3894199
+ },
+ "20260721": {
+  "dbst_bal": 1857799,
+  "tot_evlt_amt": 2124900,
+  "day_stk_asst": 3982389
+ },
+ "20260722": {
+  "dbst_bal": 1857799,
+  "tot_evlt_amt": 2114100,
+  "day_stk_asst": 3971589
+ },
+ "20260723": {
+  "dbst_bal": 1857799,
+  "tot_evlt_amt": 2166300,
+  "day_stk_asst": 4023779
+ },
+ "20260724": {
+  "dbst_bal": 1857799,
+  "tot_evlt_amt": 2004300,
+  "day_stk_asst": 3861799
+ },
+ "20260727": {
+  "dbst_bal": 1857799,
+  "tot_evlt_amt": 2029500,
+  "day_stk_asst": 3886999
+ },
+ "20260728": {
+  "dbst_bal": 1857799,
+  "tot_evlt_amt": 1746900,
+  "day_stk_asst": 3604439
+ },
+ "20260729": {
+  "dbst_bal": 1857799,
+  "tot_evlt_amt": 1604700,
+  "day_stk_asst": 3462259
+ },
+ "20260730": {
+  "dbst_bal": 1857799,
+  "tot_evlt_amt": 1513800,
+  "day_stk_asst": 3371379
+ },
+ "20260731": {
+  "dbst_bal": 1857799,
+  "tot_evlt_amt": 1952100,
+  "day_stk_asst": 3809609
+ },
+ "20260803": {
+  "dbst_bal": 1857799,
+  "tot_evlt_amt": 1827000,
+  "day_stk_asst": 3684529
+ }
+}

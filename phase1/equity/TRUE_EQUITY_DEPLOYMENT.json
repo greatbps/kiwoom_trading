@@ -1,0 +1,93 @@
+{
+  "iteration": "7-3",
+  "deployed_at": "2026-08-03T17:50:20",
+  "verdict": "FAIL (KPI: False EC_HALT 제거 <90%)",
+  "old_formula": "pymn_alow_amt + positions_value",
+  "new_formula": "d2_entra + positions_value (fallback pymn_alow_amt + WARN)",
+  "code_changes": {
+    "file": "main_auto_trading.py",
+    "helper": "_settled_cash",
+    "sites": 2,
+    "tests": "tests/unit/test_settled_cash_equity.py (12 PASS)"
+  },
+  "peak": {
+    "state_file_current": 4467501,
+    "rebuilt_TRUE": 8344826,
+    "rebuilt_OLD": 10461259.0,
+    "state_file_written": false
+  },
+  "ec_halt": {
+    "halt_days": 29,
+    "unblock_pct": {
+      "OLD": 3.4,
+      "TRUE": 0.0,
+      "TWR": 75.9
+    }
+  },
+  "kpi": {
+    "true_equity_applied": "PASS",
+    "peak_rebuilt": "PASS (상태파일 미반영)",
+    "dd_recomputed": "PASS",
+    "false_halt_removed_pct": 0.0,
+    "normal_halt_kept_pct": 100.0,
+    "regression": "507 PASS / 16 Known FAIL",
+    "runtime_error": 0
+  },
+  "root_cause": "equity 가 매매 성과가 아닌 원화 계좌 잔고 곡선. 입금은 peak 을 올리고 환전은 낙폭이 된다.",
+  "cashflows": [
+    {
+      "date": "20260504",
+      "name": "이체입금(지급결제)",
+      "amount": 230000.0,
+      "kind": "external"
+    },
+    {
+      "date": "20260506",
+      "name": "이체입금(지급결제)",
+      "amount": 7039648.0,
+      "kind": "external"
+    },
+    {
+      "date": "20260507",
+      "name": "이체입금(지급결제)",
+      "amount": 648577.0,
+      "kind": "external"
+    },
+    {
+      "date": "20260513",
+      "name": "원화주문 외화매수",
+      "amount": -2915060.0,
+      "kind": "external"
+    },
+    {
+      "date": "20260513",
+      "name": "환전정산입금",
+      "amount": 81308.0,
+      "kind": "external"
+    },
+    {
+      "date": "20260712",
+      "name": "예탁금이용료(이자)입금",
+      "amount": 1578.0,
+      "kind": "income"
+    },
+    {
+      "date": "20260712",
+      "name": "외화매도",
+      "amount": 30.0,
+      "kind": "external"
+    },
+    {
+      "date": "20260712",
+      "name": "예탁금이용료이자세금출금",
+      "amount": 20.0,
+      "kind": "income"
+    },
+    {
+      "date": "20260720",
+      "name": "수익분배금입금",
+      "amount": 36900.0,
+      "kind": "income"
+    }
+  ]
+}
