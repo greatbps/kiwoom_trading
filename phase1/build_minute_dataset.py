@@ -116,7 +116,10 @@ def fetch(api, code: str) -> tuple[list, dict]:
         nk, cy = r.get('next_key', ''), r.get('cont_yn', 'N')
         pages += 1
         # 보유 한계 도달하면 멈춘다
-        oldest = min(str(x.get('cntr_tm', '')) for x in rr if x.get('cntr_tm'))
+        # ⚠️ 일부 종목(신규상장/정지 등)은 페이지의 모든 행에 cntr_tm이 비어 응답할 수 있다
+        #    — 그 경우 min()이 빈 이터러블에서 터진다. default=''로 방어(기존 아래 조건이
+        #    이미 빈 문자열을 "보유한계 미도달"로 처리하므로 동작은 그대로다).
+        oldest = min((str(x.get('cntr_tm', '')) for x in rr if x.get('cntr_tm')), default='')
         if cy != 'Y' or (oldest and oldest[:8] <= START_FLOOR):
             break
         time.sleep(REQ_GAP)

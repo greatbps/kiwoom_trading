@@ -565,6 +565,134 @@ TABLE  : research_environment
 
 ---
 
+## CONTRACT: condition_candidate
+
+```
+VERSION: 1.0
+SOURCE : main_auto_trading.py → Strategy Monitor Router 호출 지점 (WI-9/WI-13)
+TABLE  : research.condition_candidates
+```
+
+HTS 조건검색 seq 32-39가 실제로 찾은 종목의 원본 이벤트. `candidate`
+계약(Signal Orchestrator ACCEPT 시점)과는 **다른 파이프라인 단계**이며 서로
+독립이다 — 혼동 금지.
+
+**REQUIRED**
+| 필드 | 타입 | 유효 범위 |
+|------|------|---------|
+| candidate_id | UUID | PK |
+| observed_at | TIMESTAMPTZ | NOT NULL |
+| stock_code | VARCHAR(10) | NOT NULL |
+| condition_seq | SMALLINT | 32 ~ 39 |
+| condition_name | VARCHAR(50) | NOT NULL |
+| condition_sources | JSONB | NOT NULL, 동시 매칭된 전체 seq 목록 |
+
+**OPTIONAL**
+`stock_name, market, source, trace_id`
+
+**INVARIANT**
+- 한 종목이 여러 seq에 동시 매칭되면 seq별로 별도 행 (병합 금지 — source 유실 방지)
+- condition_sources는 이 행이 속한 관측 시점에 동시 매칭된 전체 seq 스냅샷
+
+**EVENTS**
+```
+ConditionCandidateCreated {candidate_id, stock_code, condition_seq, observed_at}
+```
+
+---
+
+## CONTRACT: strategy_monitor_event
+
+```
+VERSION: 1.0
+SOURCE : main_auto_trading.py → Strategy Monitor Router 호출 지점 (WI-13)
+TABLE  : research.strategy_monitor_events
+```
+
+**REQUIRED**
+| 필드 | 타입 | 유효 범위 |
+|------|------|---------|
+| event_id | UUID | PK |
+| candidate_id | UUID | FK → research.condition_candidates |
+| monitor_name | VARCHAR(50) | NOT NULL |
+| monitor_status | VARCHAR(20) | {'SIGNAL','NO_SIGNAL','ERROR','NOT_IMPLEMENTED'} |
+
+**OPTIONAL**
+`monitor_version, monitor_state, monitor_result JSONB, monitor_error`
+
+**INVARIANT**
+- monitor_status='NOT_IMPLEMENTED'는 seq 34/35/39 전용 — 다른 Monitor로
+  fallback 금지(강제할 필드는 없으나 §Router 계약상 monitor_name이 해당 seq의
+  공식 Monitor 클래스명과 정확히 일치해야 함)
+- monitor_status='ERROR'여도 이 INSERT 자체는 실패하면 안 됨(트레이딩 흐름과 무관)
+
+**EVENTS**
+```
+StrategyMonitorEvaluated {event_id, candidate_id, monitor_name, monitor_status}
+```
+
+---
+
+## CONTRACT: strategy_signal
+
+```
+VERSION: 1.0
+SOURCE : main_auto_trading.py → Strategy Monitor Router 호출 지점 (WI-13)
+TABLE  : research.strategy_signals
+```
+
+`strategy_monitor_event.monitor_status = 'SIGNAL'`인 경우만 생성. 매매 판단이
+아니라 관측 기록 — execute_buy/Ranking/Gate와 무관.
+
+**REQUIRED**
+| 필드 | 타입 | 유효 범위 |
+|------|------|---------|
+| signal_id | UUID | PK |
+| candidate_id | UUID | FK → research.condition_candidates |
+| monitor_event_id | UUID | FK → research.strategy_monitor_events |
+| strategy_name | VARCHAR(50) | NOT NULL |
+
+**OPTIONAL**
+`signal_type, signal_score, entry_price_reference, signal_reason`
+
+**EVENTS**
+```
+StrategySignalCreated {signal_id, candidate_id, strategy_name, condition_seq}
+```
+
+---
+
+## CONTRACT: signal_outcome
+
+```
+VERSION: 1.0
+SOURCE : analysis/condition_signal_outcome_collector.py (cron, WI-13)
+TABLE  : research.signal_outcomes
+DESIGN : Event 모델 (future_return_events와 동일 원칙) — 신규 horizon 추가 시 DDL 불필요
+```
+
+**REQUIRED**
+| 필드 | 타입 | 유효 범위 |
+|------|------|---------|
+| outcome_event_id | UUID | PK |
+| signal_id | UUID | FK → research.strategy_signals |
+| horizon_label | VARCHAR(10) | '+1D' \| '+2D' \| '+3D' \| '+5D' |
+| reference_price | NUMERIC | > 0 |
+
+**OPTIONAL**
+`price_at_horizon, return_pct, mfe_pct, mae_pct`
+
+**INVARIANT**
+- UNIQUE (signal_id, horizon_label)
+- 기록 후 수정·삭제 불가 (DB 트리거 + RULE)
+
+**EVENTS**
+```
+SignalOutcomeRecorded {signal_id, horizon_label, return_pct}
+```
+
+---
+
 ## AI Plug-in 계약 (핵심 원칙)
 
 AI 모델이 Claude에서 GPT로, Gemini로, 오픈소스로 바뀌어도  
