@@ -11,6 +11,7 @@
 """
 import asyncio
 import websockets
+import functools
 import json
 import sys
 import os
@@ -396,6 +397,13 @@ def _save_account_snapshot_to_db(deposit: int, holding_value: int,
         logger.debug(f'[ACCT_SNAP_DB] 저장 실패: {_e}')
 
 
+def watchlist_rank_key(sym: str, score_map: dict) -> tuple:
+    """[WI3-B/E 2026-08-09] Ranking→Slot 순서보존용 정렬키 — Score DESC, Symbol ASC(동점
+    tie-break, 기존 설계에 명시적 tie-break 규칙 없어 채택). 모듈레벨 순수함수로 분리해
+    독립 유닛테스트 가능하게 한다(watchlist 캡/메인 스캔 순회 양쪽에서 재사용)."""
+    return (-score_map.get(sym, float('-inf')), sym)
+
+
 class IntegratedTradingSystem:
     """통합 자동매매 시스템"""
 
@@ -624,6 +632,15 @@ class IntegratedTradingSystem:
             self.decision_service = None
             console.print(f"[dim yellow]⚠ Research Layer 초기화 실패 (거래 무관): {_ds_err}[/dim yellow]")
 
+        # [WI-13] Condition Candidate Dataset — 실패해도 거래 시작 차단하지 않음
+        try:
+            from repositories.condition_dataset_repository import ConditionDatasetRepository
+            self.condition_dataset = ConditionDatasetRepository(self.db)
+            console.print("[dim]✓ Condition Dataset Repository 초기화 완료[/dim]")
+        except Exception as _cd_err:
+            self.condition_dataset = None
+            console.print(f"[dim yellow]⚠ Condition Dataset 초기화 실패 (거래 무관): {_cd_err}[/dim yellow]")
+
         # VWAP 검증기 (문서 명세 복원)
         self.validator = PreTradeValidator(
             config=self.config,
@@ -646,6 +663,9 @@ class IntegratedTradingSystem:
         # 종목 관리
         self.condition_list = []
         self.watchlist: Set[str] = set()  # 모니터링 대상
+        # [WI3-B 2026-08-09] ScoreEngine 랭킹 순서 보존용(watchlist는 set이라 순서가 없음) —
+        # watchlist 캡/메인 스캔 순회가 스코어 내림차순으로 슬롯 경쟁하도록 별도 보관.
+        self._watchlist_score: Dict[str, float] = {}
         self.validated_stocks: Dict[str, Dict] = {}  # 검증 통과 종목 상세 정보
 
         # 포지션 관리
@@ -1127,8 +1147,11 @@ class IntegratedTradingSystem:
                 )
                 self._db_hard_stop_checked_at = now_ts
             except Exception as e:
-                logger.debug(f"[DB_HARD_STOP_SKIP] {e}")
-                return True, ""
+                # [WI3-D1 2026-08-09] Fail Closed: DB 조회 실패를 조용히 통과(fail-open)시키지
+                # 않는다 — 하드스탑 서킷브레이커가 흔적 없이 무력화되던 버그. ERROR로 남겨
+                # 텍스트 로그에도 실제로 기록되게 한다(기존 debug는 root=INFO라 출력 안 됨).
+                logger.error(f"[DB_HARD_STOP_CHECK_FAILED] {e} — Fail Closed 차단")
+                return False, f"[DB_HARD_STOP_CHECK_FAILED] {e} (Fail Closed)"
 
         state = self._db_hard_stop_state
         if not state.get("halted", False):
@@ -2039,11 +2062,15 @@ class IntegratedTradingSystem:
         """
         info = self.validated_stocks.get(stock_code) or {}
         src = list(info.get('condition_sources') or [])
+        seqs = list(info.get('strategy_seqs') or [])
         return {
             'condition_sources': src or ['UNKNOWN'],
             'primary_condition': info.get('primary_condition') or 'UNKNOWN',
             'condition_match_time': info.get('condition_match_time'),
             'source': info.get('source'),
+            # [WI-9] seq(공식 전략 식별자) — 기록 없으면 동일하게 UNKNOWN(추정 금지)
+            'strategy_seqs': seqs or ['UNKNOWN'],
+            'primary_strategy_seq': info.get('primary_strategy_seq') or 'UNKNOWN',
         }
 
     # ─── 포지션 상태 영속화 (재시작 복원용) ─────────────────────────────────
@@ -2932,17 +2959,22 @@ class IntegratedTradingSystem:
 
         if response.get("return_code") == 0:
             self.condition_list = response.get("data", [])
+            # [2026-08-11] seq(고정 ID) 기준 조회용 — idx(배열위치)는 조건식이
+            # 삭제되면 뒤가 밀려 재현 불가능해서 seq로 직접 찾는다.
+            self.condition_by_seq = {c[0]: c for c in self.condition_list if c}
             console.print(f"✅ 총 {len(self.condition_list)}개 조건검색식 조회 완료", style="green")
             console.print()
 
             # 사용할 조건식 표시
-            console.print(f"🎯 사용 조건식 인덱스: {self.condition_indices}", style="bold cyan")
-            for idx in self.condition_indices:
-                if idx < len(self.condition_list):
-                    condition = self.condition_list[idx]
+            console.print(f"🎯 사용 조건식 seq: {self.condition_indices}", style="bold cyan")
+            for cond_seq in self.condition_indices:
+                condition = self.condition_by_seq.get(str(cond_seq))
+                if condition:
                     seq = condition[0] if len(condition) > 0 else "?"
                     name = condition[1] if len(condition) > 1 else "?"
-                    console.print(f"  [{idx}] {name} (seq: {seq})", style="green")
+                    console.print(f"  [seq {cond_seq}] {name} (seq: {seq})", style="green")
+                else:
+                    console.print(f"  [seq {cond_seq}] ⚠️ 조건식 없음(삭제되었거나 존재하지 않음)", style="red")
             console.print()
 
             return True
@@ -3103,58 +3135,72 @@ class IntegratedTradingSystem:
             #    출처는 **누적 리스트**로 따로 모은다.
             _cond_sources: dict[str, list] = {}
             _cond_first_seen: dict[str, str] = {}
+            # [WI-9] seq(공식 전략 식별자)를 이름과 나란히 누적 — _cond_sources 와 동일 패턴.
+            _cond_seqs: dict[str, list] = {}
 
             # DEBUG 로그
             with open('data/debug_log.txt', 'a', encoding='utf-8') as f:
-                f.write(f"[{datetime.now()}] 사용 조건식 인덱스: {self.condition_indices}\n")
+                f.write(f"[{datetime.now()}] 사용 조건식 seq: {self.condition_indices}\n")
                 f.write(f"  전체 조건식 수: {len(self.condition_list)}\n")
                 f.flush()
 
-            for idx in self.condition_indices:
-                if idx < len(self.condition_list):
-                    condition = self.condition_list[idx]
+            # [2026-08-11] idx(배열위치) 대신 seq(고정 ID)로 조건식을 찾는다 — idx는
+            # 조건식이 삭제되면 뒤가 밀려 다른 조건식을 조용히 가리킬 수 있었다.
+            for cond_seq in self.condition_indices:
+                condition = self.condition_by_seq.get(str(cond_seq))
+                if condition:
                     seq = condition[0]
                     name = condition[1]
 
-                    console.print(f"[yellow]조건식 [{idx}] {name} 검색 중...[/yellow]")
+                    console.print(f"[yellow]조건식 [seq {cond_seq}] {name} 검색 중...[/yellow]")
 
                     stocks = await self.search_condition(seq, name)
                     console.print(f"  ✅ {len(stocks)}개 종목 발견")
 
                     # DEBUG 로그
                     with open('data/debug_log.txt', 'a', encoding='utf-8') as f:
-                        f.write(f"[{datetime.now()}] 조건식 [{idx}] '{name}' → {len(stocks)}개 종목\n")
+                        f.write(f"[{datetime.now()}] 조건식 [seq {cond_seq}] '{name}' → {len(stocks)}개 종목\n")
                         if stocks:
                             f.write(f"  종목코드: {list(stocks)[:5]}\n")  # 최대 5개만
                         f.flush()
 
                     # ✅ Bottom 전략 분기 처리
-                    if idx in bottom_indices:
+                    if cond_seq in bottom_indices:
                         # Bottom 전략: 별도 저장 (L2/L3 필터 이후 신호 등록)
                         console.print(f"  [cyan]→ Bottom Pullback 전략: Pullback 대기 모드[/cyan]")
                         for stock_code in stocks:
-                            bottom_stocks[stock_code] = idx  # backward compatibility
-                            stock_to_condition_map[stock_code] = idx  # ✅ 조건 인덱스 저장
+                            bottom_stocks[stock_code] = cond_seq  # backward compatibility
+                            stock_to_condition_map[stock_code] = cond_seq  # ✅ 조건 seq 저장
                             _cond_sources.setdefault(stock_code, []).append(name)
+                            _cond_seqs.setdefault(stock_code, []).append(cond_seq)
                             _cond_first_seen.setdefault(
                                 stock_code, datetime.now().isoformat(timespec='seconds'))
                             all_stocks.add(stock_code)  # L2/L3 필터 적용 위해 추가
+                            logger.info(
+                                f"[STRATEGY_ATTR] stage=CANDIDATE_MONITORED symbol={stock_code} "
+                                f"strategy_seq={cond_seq} strategy_name={name}"
+                            )
                     else:
                         # 기존 Momentum 전략: 즉시 매수 대상
                         for stock_code in stocks:
-                            stock_to_condition_map[stock_code] = idx  # ✅ 조건 인덱스 저장
+                            stock_to_condition_map[stock_code] = cond_seq  # ✅ 조건 seq 저장
                             _cond_sources.setdefault(stock_code, []).append(name)
+                            _cond_seqs.setdefault(stock_code, []).append(cond_seq)
                             _cond_first_seen.setdefault(
                                 stock_code, datetime.now().isoformat(timespec='seconds'))
+                            logger.info(
+                                f"[STRATEGY_ATTR] stage=CANDIDATE_MONITORED symbol={stock_code} "
+                                f"strategy_seq={cond_seq} strategy_name={name}"
+                            )
                         all_stocks.update(stocks)
 
                     await asyncio.sleep(0.5)
                 else:
-                    # 인덱스가 범위를 벗어남
+                    # 조건식이 삭제되었거나 존재하지 않음
                     with open('data/debug_log.txt', 'a', encoding='utf-8') as f:
-                        f.write(f"[{datetime.now()}] ⚠️ 조건식 인덱스 [{idx}] 범위 초과 (전체: {len(self.condition_list)}개)\n")
+                        f.write(f"[{datetime.now()}] ⚠️ 조건식 seq [{cond_seq}] 없음(삭제되었거나 존재하지 않음, 전체: {len(self.condition_list)}개)\n")
                         f.flush()
-                    console.print(f"[red]⚠️ 조건식 인덱스 [{idx}] 범위 초과[/red]")
+                    console.print(f"[red]⚠️ 조건식 seq [{cond_seq}] 없음[/red]")
 
             console.print()
             console.print(f"[bold green]1차 필터 통과: 총 {len(all_stocks)}개 종목[/bold green]")
@@ -3311,6 +3357,9 @@ class IntegratedTradingSystem:
                                 'condition_sources': list(_cond_sources.get(stock_code, [])),
                                 'primary_condition': (_cond_sources.get(stock_code) or [None])[0],
                                 'condition_match_time': _cond_first_seen.get(stock_code),
+                                # [WI-9] seq(공식 전략 식별자)
+                                'strategy_seqs': list(_cond_seqs.get(stock_code, [])),
+                                'primary_strategy_seq': (_cond_seqs.get(stock_code) or [None])[0],
                             }
                     else:
                         # Momentum 전략: watchlist에 추가 (기존 로직)
@@ -3333,6 +3382,9 @@ class IntegratedTradingSystem:
                             'condition_sources': list(_cond_sources.get(stock_code, [])),
                             'primary_condition': (_cond_sources.get(stock_code) or [None])[0],
                             'condition_match_time': _cond_first_seen.get(stock_code),
+                            # [WI-9] seq(공식 전략 식별자)
+                            'strategy_seqs': list(_cond_seqs.get(stock_code, [])),
+                            'primary_strategy_seq': (_cond_seqs.get(stock_code) or [None])[0],
                         }
 
                     console.print(
@@ -3491,7 +3543,7 @@ class IntegratedTradingSystem:
                             import json as _json
                             _sd_cache_path = BASE_DIR / 'data' / 'sd_score_cache.json'
                             _sd_cache = _json.loads(_sd_cache_path.read_text()) if _sd_cache_path.exists() else {}
-                            _new_sd = float(analysis_result.get('scores', {}).get('supply_demand', 50))
+                            _new_sd = float(analysis_result.get('scores_breakdown', {}).get('supply_demand', 50))
                             _today_str = datetime.now().strftime('%Y-%m-%d')
                             _prev = _sd_cache.get(stock_code, {})
                             if _prev.get('date') != _today_str:
@@ -3517,6 +3569,106 @@ class IntegratedTradingSystem:
                                      f"수급: {scores.get('supply_demand', 50):.0f} | "
                                      f"기본: {scores.get('fundamental', 50):.0f}[/dim]")
                         console.print()
+
+                        # [WI8-A/WI-9] 조건검색 출처 보존 — Evidence 단계 (순수 로깅, 판단 무변경)
+                        # News/Fundamental/Technical(AnalysisEngine)은 WI-7/WI-8에서 이미
+                        # DISPLAY_ONLY로 확정됨(Ranking 공식에 미반영) — 그 사실을 로그에도 명시.
+                        _ca_ev = self._condition_attribution(stock_code)
+
+                        # [WI-10] Strategy Monitor — 순수 관측용, execute_buy/Ranking/Gate
+                        # 어디에도 이 결과를 넘기지 않는다. 신규 API 호출 없음(위에서 이미
+                        # 조회한 chart_data 재사용). 실패해도 파이프라인은 계속 진행된다.
+                        try:
+                            from analyzers.strategy_monitors import route_from_chart_data, MONITOR_MAP
+                            # [WI-13] Signal 저장용 참조가 —
+                            # prepare_dataframe()이 날짜순 정렬을 보장하므로
+                            # chart_data 원본 리스트 순서에 의존하지 않는다.
+                            _wi13_entry_price_ref = None
+                            try:
+                                from analyzers.technical_analyzer import TechnicalAnalyzer
+                                _wi13_df = TechnicalAnalyzer().prepare_dataframe(chart_data)
+                                _wi13_entry_price_ref = float(_wi13_df['close'].iloc[-1])
+                            except Exception:
+                                pass
+                            for _mon_seq in (_ca_ev.get('strategy_seqs') or []):
+                                if _mon_seq == 'UNKNOWN':
+                                    continue
+                                _mon_result = route_from_chart_data(
+                                    _mon_seq, stock_code, chart_data, self.config.config)
+                                _mon_tag = ('STRATEGY_MONITOR' if _mon_result.signal
+                                            else 'STRATEGY_MONITOR_REJECT')
+                                logger.info(
+                                    f"[{_mon_tag}] seq={_mon_result.condition_seq} "
+                                    f"strategy={_mon_result.strategy_name} symbol={stock_code} "
+                                    f"state={_mon_result.monitor_state} "
+                                    f"data_quality={_mon_result.data_quality} "
+                                    f"reason={';'.join(_mon_result.reasons)[:150]}"
+                                )
+
+                                # [WI-13] Strategy Dataset 구조화 저장 — 순수 관측 기록.
+                                # execute_buy/Ranking/Gate 어디에도 이 결과를 넘기지
+                                # 않는다. 실패해도 위 except가 잡아 파이프라인은 계속
+                                # 진행된다.
+                                if self.condition_dataset:
+                                    _cid = self.condition_dataset.record_candidate(
+                                        observed_at=datetime.now(),
+                                        stock_code=stock_code,
+                                        condition_seq=_mon_result.condition_seq,
+                                        condition_name=_mon_result.strategy_name,
+                                        condition_sources=_ca_ev.get('strategy_seqs') or [],
+                                        stock_name=stock_name,
+                                    )
+                                    if _cid:
+                                        if _mon_result.data_quality == 'NO_CODE':
+                                            _mstatus = 'NOT_IMPLEMENTED'
+                                        elif _mon_result.data_quality == 'ERROR':
+                                            _mstatus = 'ERROR'
+                                        elif _mon_result.signal:
+                                            _mstatus = 'SIGNAL'
+                                        else:
+                                            _mstatus = 'NO_SIGNAL'
+                                        _meid = self.condition_dataset.record_monitor_event(
+                                            candidate_id=_cid,
+                                            observed_at=datetime.now(),
+                                            stock_code=stock_code,
+                                            condition_seq=_mon_result.condition_seq,
+                                            monitor_name=MONITOR_MAP.get(
+                                                _mon_result.condition_seq,
+                                                type(None)).__name__,
+                                            monitor_status=_mstatus,
+                                            monitor_state=_mon_result.monitor_state,
+                                            monitor_result={
+                                                'reasons': _mon_result.reasons,
+                                                'data_quality': _mon_result.data_quality,
+                                            },
+                                            monitor_error=(
+                                                ';'.join(_mon_result.reasons)[:500]
+                                                if _mstatus == 'ERROR' else None
+                                            ),
+                                        )
+                                        if _meid and _mstatus == 'SIGNAL':
+                                            self.condition_dataset.record_signal(
+                                                candidate_id=_cid,
+                                                monitor_event_id=_meid,
+                                                observed_at=datetime.now(),
+                                                stock_code=stock_code,
+                                                condition_seq=_mon_result.condition_seq,
+                                                strategy_name=_mon_result.strategy_name,
+                                                signal_type=_mon_result.monitor_state,
+                                                entry_price_reference=_wi13_entry_price_ref,
+                                                signal_reason=';'.join(_mon_result.reasons)[:500],
+                                            )
+                        except Exception as _mon_exc:
+                            logger.debug(f"[STRATEGY_MONITOR_SKIP] {stock_code}: {_mon_exc}")
+
+                        logger.info(
+                            f"[EVIDENCE_ATTR] symbol={stock_code} "
+                            f"strategy_seq={_ca_ev['primary_strategy_seq']} "
+                            f"condition_sources={_ca_ev['condition_sources']} "
+                            f"primary_condition={_ca_ev['primary_condition']} "
+                            f"final_score={final_score:.1f} recommendation={recommendation} "
+                            f"evidence_status=DISPLAY_ONLY"
+                        )
 
                     except Exception as e:
                         console.print(f"  [red]❌ 분석 오류: {e}[/red]")
@@ -4324,10 +4476,15 @@ class IntegratedTradingSystem:
 
         # 모니터링 대상: watchlist + 보유 종목 (중복 제거)
         # 🔧 2026-05-04: API TR 제한 방지 — watchlist 최대 N개 cap
+        # [WI3-B/E 2026-08-09] Ranking→Slot 순서보존: 캡/스캔순회 모두 스코어 내림차순
+        # (동점은 종목코드 오름차순)으로 정렬한다 — 이전엔 set 해시순서(사실상 비결정적)로
+        # 캡·순회돼 슬롯(최대 3개) 경쟁 시 스코어가 실제 진입 우선순위에 반영되지 않았다.
+        _wl_rank_key = functools.partial(watchlist_rank_key, score_map=self._watchlist_score)
+
         _max_wl = int(self.config.get('max_watchlist_size', 30))
-        _wl_capped = set(list(self.watchlist)[:_max_wl])
+        _wl_capped = set(sorted(self.watchlist, key=_wl_rank_key)[:_max_wl])
         if len(self.watchlist) > _max_wl:
-            logger.info(f"[WL_CAP] watchlist {len(self.watchlist)}개 → {_max_wl}개로 제한")
+            logger.info(f"[WL_CAP] watchlist {len(self.watchlist)}개 → {_max_wl}개로 제한(스코어 상위순)")
         all_stocks = _wl_capped | set(self.positions.keys())
 
         # [DIAG_MODE] diagnostic_mode=True 시 최근 ACCEPT 종목을 watchlist에 강제 포함
@@ -4339,7 +4496,7 @@ class IntegratedTradingSystem:
                 logger.info(f"[DIAG_INJECT] ACCEPT 강제포함: {sorted(_injected)}")
                 all_stocks |= _injected
 
-        for stock_code in all_stocks:
+        for stock_code in sorted(all_stocks, key=_wl_rank_key):
             try:
                 # watchlist 종목은 validated_stocks에서, 보유 종목은 positions에서 정보 가져오기
                 if stock_code in self.validated_stocks:
@@ -5598,6 +5755,12 @@ class IntegratedTradingSystem:
         # 5. Equity Curve HALT (멀티데이 DD ≤ -18%)
         # [CBF-1 2026-07-20] Fail Closed: 예외 시 무음통과(fail-open) 대신 차단 + 전체 트레이스백 로깅.
         if hasattr(self, 'equity_ctrl') and self.config.get("equity_control", {}).get("enabled", True):
+            # [WI3-A 2026-08-09] update_peak_eod()는 2026-07-12부터 _account_data_reliable로
+            # 폴백값(계좌조회 실패 시 total_assets=10,000,000) 유입을 막고 있으나, 이 게이트
+            # 호출부엔 동일 가드가 누락돼 있었다 — 폴백값이 실제 peak보다 커서 dd가 항상 양수로
+            # 계산되어 EC_HALT가 조용히 우회될 수 있었다(Fail Closed 원칙 위반, 명백한 propagation bug).
+            if not self._account_data_reliable:
+                return False, "[EC_HALT_UNRELIABLE_DATA] 계좌잔고 신뢰불가(_account_data_reliable=False) — Fail Closed 차단"
             try:
                 _ec_ok, _ec_halt_r = self.equity_ctrl.can_enter(self.total_assets)
                 if not _ec_ok:
@@ -5649,7 +5812,11 @@ class IntegratedTradingSystem:
             #    범위: 14:59/10:00 물리적 시간 + Kill Switch + Daily Loss + Market Sensor + DD + EC
             _gate_ok, _gate_reason = self._check_global_risk_gates(stock_code, stock_name)
             if not _gate_ok:
-                logger.debug(f"[GLOBAL_GATE] {stock_code}: {_gate_reason}")
+                # [WI-9] strategy_seq — 어느 전략의 후보가 이 Gate에서 막혔는지 추적
+                logger.debug(
+                    f"[GLOBAL_GATE] {stock_code}: {_gate_reason} "
+                    f"strategy_seq={stock_info.get('primary_strategy_seq', 'UNKNOWN')}"
+                )
                 # 시스템 리스크 이벤트만 기록 (물리적 시간 필터는 제외)
                 if not _gate_reason.startswith('[TIME_PHYSICAL]'):
                     self._log_rejection(stock_code=stock_code, stock_name=stock_name,
@@ -6839,9 +7006,17 @@ class IntegratedTradingSystem:
                                         # ── Gate B: 시장 약세 필터 (-0.5% 이하만 차단) ─────────
                                         # NO_TRADE_DAY도 횡보 구간(NEUTRAL)에선 Squeeze 허용
                                         # 단, 급락(-0.5% 이하)은 차단
-                                        _mkt_chg     = getattr(self.market_context, '_kodex200_change_pct', 0.0)
+                                        # [WI3-D2 2026-08-09] Fail Closed: KODEX200 조회 실패(None)
+                                        # 시 예전엔 0.0(보합)으로 간주돼 필터가 조용히 통과됐다 —
+                                        # 이제 None도 차단 사유로 명시 처리.
+                                        _mkt_chg     = getattr(self.market_context, '_kodex200_change_pct', None)
                                         _sqz_weak_th = _sqz_cfg.get('weak_market_threshold', -0.5)
-                                        if _mkt_chg <= _sqz_weak_th:
+                                        if _mkt_chg is None:
+                                            logger.error(
+                                                f"[SQZ_MARKET_DATA_FAIL] {stock_code} {stock_name}: "
+                                                f"KODEX200 데이터 조회 실패 → Fail Closed 차단"
+                                            )
+                                        elif _mkt_chg <= _sqz_weak_th:
                                             logger.info(
                                                 f"[SQZ_MARKET_WEAK] {stock_code} {stock_name}: "
                                                 f"KODEX200 {_mkt_chg:.2f}% ≤ {_sqz_weak_th}% → Squeeze 차단"
@@ -7695,7 +7870,7 @@ class IntegratedTradingSystem:
                     if choch_grade in ('A', 'A-') and not _is_a_plus:
                         _sd_for_grade = float(
                             self.validated_stocks.get(stock_code, {})
-                            .get('analysis', {}).get('scores', {}).get('supply_demand', 50)
+                            .get('analysis', {}).get('scores_breakdown', {}).get('supply_demand', 50)
                         )
                         _afilt_cfg_g  = self.config.get('smc.choch_grade.grade_a_filter', {})
                         _grade_sd_min = float(_afilt_cfg_g.get('min_supply_demand_for_a', 50))
@@ -8497,13 +8672,23 @@ class IntegratedTradingSystem:
                                   .get('structure_based_stop', {}) or {})
                                  .get('max_stop_pct', 5.0))
                     if _ep > 0:
-                        _safe = _ep * (1 - _cap / 100.0)
+                        # Iteration 25: ATR Adaptive Stop (기본 off) — 활성화 시
+                        # core/risk_layer.py 공식(진입가-2.0xATR)으로 대체, 아니면
+                        # 기존 flat -cap% 그대로. atr_pct 없으면 항상 기존 동작.
+                        _atr_enabled = bool(((self.config.get_section('risk_layer') or {})
+                                             .get('atr_adaptive_stop', {}) or {})
+                                            .get('enabled', False))
+                        from core.risk_layer import atr_stop_price as _atr_stop_price_fn
+                        _atr_safe = _atr_stop_price_fn(
+                            _ep, position.get('atr_pct_at_entry'), _atr_enabled)
+                        _safe = _atr_safe if _atr_safe is not None else _ep * (1 - _cap / 100.0)
                         position['structure_stop_price'] = _safe
                         position['stop_recovered'] = True
+                        _stop_src = 'ATR_ADAPTIVE' if _atr_safe is not None else f'-{_cap}%'
                         logger.error(
                             f"[SWING_STOP_MISSING] {stock_code} "
                             f"structure_stop_price 없음 → 안전 손절 "
-                            f"{_safe:,.0f}(-{_cap}%) 적용. "
+                            f"{_safe:,.0f}({_stop_src}) 적용. "
                             f"전달 경로 점검 필요 (-12% fallback 방지)"
                         )
                         console.print(
@@ -8942,6 +9127,7 @@ class IntegratedTradingSystem:
                     'strategy': 'swing',
                     'risk_only': True,
                     'allow_overnight': True,
+                    'atr_pct_at_entry': sp_entry.get('atr_pct_at_entry'),
                 }
                 # 4개 경로가 같은 함수를 거치게 한다 (스키마 단일화)
                 self._normalize_position(code, self.positions[code],
@@ -9657,7 +9843,7 @@ class IntegratedTradingSystem:
         sd_filter_cfg = self.config.get('supply_demand_filter', {})
         if sd_filter_cfg.get('enabled', False):
             _sd_analysis = self.validated_stocks.get(stock_code, {}).get('analysis', {})
-            _sd_scores   = _sd_analysis.get('scores', {})
+            _sd_scores   = _sd_analysis.get('scores_breakdown', {})
             _sd_score    = float(_sd_scores.get('supply_demand', 50))
             _sd_min      = float(sd_filter_cfg.get('min_score', 20))
             _sd_warn     = float(sd_filter_cfg.get('warn_below', 40))
@@ -10378,7 +10564,9 @@ class IntegratedTradingSystem:
         )
 
         if not can_enter:
-            logger.info(f"[CAN_ENTER_BLOCK] {stock_code} {stock_name}: {reason}")
+            # [WI-9] strategy_seq — Slot 단계에서 어느 전략의 후보가 밀렸는지 추적
+            _slot_seq = self.validated_stocks.get(stock_code, {}).get('primary_strategy_seq', 'UNKNOWN')
+            logger.info(f"[CAN_ENTER_BLOCK] {stock_code} {stock_name}: {reason} strategy_seq={_slot_seq}")
             console.print(f"[yellow]⚠️  매수 불가: {reason}[/yellow]")
             console.print("=" * 80, style="yellow")
             try:
@@ -11101,6 +11289,7 @@ class IntegratedTradingSystem:
         _ca = self._condition_attribution(stock_code)
         logger.info(
             f"[COND_ATTR] symbol={stock_code} trade_id={trade_id} "
+            f"strategy_seq={_ca['primary_strategy_seq']} "
             f"condition_sources={_ca['condition_sources']} "
             f"primary_condition={_ca['primary_condition']} "
             f"condition_match_time={_ca['condition_match_time']} "
@@ -11957,10 +12146,16 @@ class IntegratedTradingSystem:
             _weak_loss   = _sb_cfg.get('trend_weak_loss_for_block', -1.5)
             _weak_grades = _sb_cfg.get('trend_weak_grades', ['B', 'C'])
             _blk_rev     = _sb_cfg.get('block_on_reversal_with_loss', True)
+            # [WI3-D3 2026-08-09] Fail Closed: get_regime() 예외 시 예전엔 'NEUTRAL'로 조용히
+            # 대체되어 REVERSAL 강제청산 보호 로직이 우회됐다(손실 포지션이 그대로 오버나잇
+            # 캐리될 수 있음) — 이제 UNKNOWN으로 명시하고 보수적으로 강제청산 후보에 포함시킨다.
+            _regime_unknown = False
             try:
                 _mkt_regime, _ = self.market_context.get_regime()
-            except Exception:
-                _mkt_regime = 'NEUTRAL'
+            except Exception as _rg_exc:
+                logger.error(f"[OVERNIGHT_REGIME_FAIL] get_regime() 예외 — Fail Closed(보수적 처리): {_rg_exc}")
+                _mkt_regime = 'UNKNOWN'
+                _regime_unknown = True
 
         for stock_code in list(self.positions.keys()):
             # 중복 청산 방지: 루프 내부에서 이미 제거됐을 수 있음
@@ -11995,7 +12190,7 @@ class IntegratedTradingSystem:
                 _is_major_loss    = profit_pct < _max_loss
                 # 추세 약세(B/C급) + 중간 손실 → 갭다운 리스크 (2026-06-26)
                 _is_weak_loss     = (grade in _weak_grades) and (profit_pct < _weak_loss)
-                _is_reversal_loss = _blk_rev and (_mkt_regime == 'REVERSAL') and (profit_pct < 0)
+                _is_reversal_loss = _blk_rev and (_mkt_regime == 'REVERSAL' or _regime_unknown) and (profit_pct < 0)
                 _block = _is_major_loss or _is_weak_loss or _is_reversal_loss
 
                 if _block:
@@ -13956,12 +14151,22 @@ class IntegratedTradingSystem:
                 )
                 selected = self._score_engine.select(ranked)
 
+                # [WI3-B 2026-08-09] Ranking→Slot 순서보존: self.watchlist는 코드 전역에서
+                # 멤버십/합집합 연산에 쓰이는 set이라 타입을 바꾸지 않는다. 대신 스코어를 별도
+                # 맵으로 보존해, watchlist 캡(:4331)과 메인 스캔 순회(:4345)가 실제 슬롯(3개)
+                # 경쟁 시 set 해시 순서가 아니라 스코어 순서를 쓸 수 있게 한다.
+                self._watchlist_score = {sym: s['total'] for sym, s in ranked}
+
                 # 로그
                 logger.info(self._score_engine.log_summary(ranked))
                 for _sym, _s in ranked[:5]:
+                    # [WI8-A] 조건검색 출처 보존 — Ranking 단계 (순수 로깅, 순위/선별 무변경)
+                    _ca_rk = self._condition_attribution(_sym)
                     logger.info(
                         f'[SCORE_DETAIL] {_sym} volume={_s["volume"]} '
-                        f'ma50={_s["ma50"]} smc={_s["smc"]} total={_s["total"]}'
+                        f'ma50={_s["ma50"]} smc={_s["smc"]} total={_s["total"]} '
+                        f"condition_sources={_ca_rk['condition_sources']} "
+                        f"primary_condition={_ca_rk['primary_condition']}"
                     )
                 console.print(
                     f'[cyan]  [SCORE_ENGINE] {len(self.watchlist)}개 → '
@@ -14243,13 +14448,13 @@ async def main(skip_wait: bool = False):
                 epilog="""
 사용 예시:
   # 백테스트 검증 (일부 조건식만 사용)
-  python3 main_auto_trading.py --dry-run --conditions 17,18,19
+  python3 main_auto_trading.py --dry-run --conditions 32,33,34
 
   # 실전 투입 (전체 조건식 사용)
-  python3 main_auto_trading.py --live --conditions 17,18,19,20,21,22
+  python3 main_auto_trading.py --live --conditions 32,33,34,35,36,37,38,39
 
   # 테스트 모드 (대기 시간 건너뛰기)
-  python3 main_auto_trading.py --skip-wait --conditions 17,18,19
+  python3 main_auto_trading.py --skip-wait --conditions 32,33,34
                 """
             )
             parser.add_argument('--skip-wait', action='store_true',
@@ -14258,8 +14463,8 @@ async def main(skip_wait: bool = False):
                                help='백테스트 검증 모드 (실제 매매 없이 시그널만 확인)')
             parser.add_argument('--live', action='store_true',
                                help='실전 투입 모드 (실제 매매 실행)')
-            parser.add_argument('--conditions', type=str, default='17,18,19,20,21,22',
-                               help='사용할 조건식 인덱스 (쉼표로 구분, 기본값: 17,18,19,20,21,22)')
+            parser.add_argument('--conditions', type=str, default='32,33,34,35,36,37,38,39',
+                               help='사용할 조건식 seq(고정 ID, 쉼표로 구분, 기본값: 32,33,34,35,36,37,38,39)')
             args = parser.parse_args()
 
             # conditions 파싱
@@ -14277,7 +14482,7 @@ async def main(skip_wait: bool = False):
         args.skip_wait = skip_wait
         args.dry_run = False
         args.live = False
-        args.conditions = '17,18,19,20,21,22'
+        args.conditions = '32,33,34,35,36,37,38,39'
 
         # conditions 파싱
         try:
@@ -14396,7 +14601,7 @@ async def main(skip_wait: bool = False):
         console.print()
 
     # 조건식 표시
-    console.print(f"[dim]사용 조건식 인덱스: {condition_indices}[/dim]")
+    console.print(f"[dim]사용 조건식 seq: {condition_indices}[/dim]")
     console.print()
 
     # API 클라이언트 생성

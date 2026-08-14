@@ -367,6 +367,22 @@ def fetch_daily(code: str, market: str, lookback: int = DEFAULT_LOOKBACK_DAYS) -
         return None
 
 
+def _compute_atr_vol(df: pd.DataFrame) -> tuple[Optional[float], Optional[float]]:
+    """atr_pct/volatility20 — phase1/entry_analysis.py:compute_features()와 동일 수식
+    (Iteration 25, Risk Layer 입력값). 최신 봉(마지막 행) 기준 단일 값만 계산한다."""
+    if len(df) < 20:
+        return None, None
+    close, high, low = df['close'], df['high'], df['low']
+    tr = pd.concat([high - low, (high - close.shift()).abs(),
+                    (low - close.shift()).abs()], axis=1).max(axis=1)
+    atr14 = tr.rolling(14).mean()
+    ret = close.pct_change()
+    vola20 = ret.rolling(20).std()
+    atr_pct = float(atr14.iloc[-1] / close.iloc[-1] * 100) if pd.notna(atr14.iloc[-1]) else None
+    volatility20 = float(vola20.iloc[-1] * 100) if pd.notna(vola20.iloc[-1]) else None
+    return atr_pct, volatility20
+
+
 def process_hold_positions(
     positions: dict[str, SwingPosition],
     config: dict,
@@ -590,6 +606,10 @@ def scan_new_signals(
 
         if signal is None:
             continue
+
+        # Iteration 25: Risk Layer(Volatility Size Reduction/ATR Adaptive Stop)
+        # 입력값. 신규 계산이지만 수식은 phase1/entry_analysis.py와 동일 동결값.
+        signal['atr_pct'], signal['volatility20'] = _compute_atr_vol(df)
 
         # ── [SWING_ENTRY] 진입 신호 기록 ─────────────────────────────────
         #
@@ -820,6 +840,9 @@ def find_upgrade_candidate(
             continue
         if signal['final_score'] <= weakest.score:
             continue
+
+        # Iteration 25: Risk Layer 입력값 (진입 경로 A와 동일 처리)
+        signal['atr_pct'], signal['volatility20'] = _compute_atr_vol(df)
 
         if best_signal is None or signal['final_score'] > best_signal['final_score']:
             best_signal = {

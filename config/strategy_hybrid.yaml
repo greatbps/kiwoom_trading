@@ -316,6 +316,15 @@ edt_sizer:
       daily_gain_threshold_pct: 3.0  # 당일 누적 실현 수익 임계값 (%)
       size_mult: 0.5
 
+# Iteration 25 — Risk Layer (Volatility Size Reduction / ATR Adaptive Stop)
+# 공식은 core/risk_layer.py 순수 함수 참조. 둘 다 기본 off — 활성화 시 실거래
+# 스윙 진입 사이즈/손절 계산이 바뀐다(main_auto_trading.py, swing_executor.py).
+risk_layer:
+  volatility_size_reduction:
+    enabled: false
+  atr_adaptive_stop:
+    enabled: false
+
 risk_control:
   max_daily_loss_pct: 3.0      # SignalOrchestrator L0 필터용 (일일 손실 한도)
   max_weekly_loss_pct: 5.0     # 🔧 REFACTOR: 주간 손실 한도 5%
@@ -1270,16 +1279,24 @@ test:
 # Bottom Pullback 전략 설정 (조건 23번)
 # ========================================
 condition_strategies:
-  # 기존 모멘텀 전략 (17-22번)
+  # 모멘텀 전략 — seq(HTS 조건식 고정 ID) 32~39, 8개.
+  # [2026-08-11] 기존 idx(배열위치) 17-22는 CNSRLST 응답의 "현재 순번"이라 앞쪽
+  # 조건식이 삭제되면 뒤가 밀려 다른 조건식을 가리킬 수 있었다(HTS 실측으로 확인,
+  # seq 1/11/15/20/22/25/28/31 결번 = 과거 삭제 이력). seq는 조건식 생성 시 한 번
+  # 부여되면 삭제 전까지 불변이라 이걸로 바꾼다. seq 32~39 = Momentum/Breakout/
+  # EOD/Supertrend+EMA+RSI/VWAP/Squeeze Momentum Pro/Bottom/ITS(HTS 실측 이름).
   momentum:
-    condition_indices: [17, 18, 19, 20, 21, 22]
+    condition_indices: [32, 33, 34, 35, 36, 37, 38, 39]
     strategy_tag: "momentum"
     immediate_entry: true
     description: "기존 즉시 매수 전략 (VWAP + L0-L6 필터)"
 
   # Bottom Pullback 전략 (23번)
   bottom_pullback:
-    condition_indices: [23]
+    # [2026-08-11 WI-9] 기존 [23]은 idx(배열위치) 값이라 seq 38("Bottom 전략")과
+    # 매칭되지 않아 register_signal() 진입점이 막혀있었다(momentum의 seq 리스트에만
+    # 38이 존재) — seq로 교체해 라우팅 복구.
+    condition_indices: [38]
     strategy_tag: "bottom_pullback"
     immediate_entry: false
     wait_for_pullback: true

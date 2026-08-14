@@ -60,8 +60,12 @@ def test_existing_condition_map_untouched():
     """
     기존 stock_to_condition_map 은 전략 태그 결정에 쓰인다.
     출처 추적을 붙이면서 이걸 바꾸면 전략 배정이 달라진다.
+
+    [2026-08-11] 조건식 참조를 idx(배열위치)→seq(고정 ID)로 바꾸면서 루프 변수명도
+    idx→cond_seq로 바뀌었다(값의 의미가 바뀌었으니 이름도 맞춰야 함) — 대입 위치·횟수
+    (2곳)는 그대로다.
     """
-    assert SRC.count('stock_to_condition_map[stock_code] = idx') == 2
+    assert SRC.count('stock_to_condition_map[stock_code] = cond_seq') == 2
 
 
 # ── 전달 ─────────────────────────────────────────────────────────────────

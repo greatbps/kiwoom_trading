@@ -283,7 +283,9 @@ class MarketContextChecker:
         self._re_eval_used: bool             = False     # NO→OK 슬롯 소진 여부
         self._refreshing: bool               = False     # 백그라운드 refresh 진행 중
         self._refresh_lock                   = threading.Lock()
-        self._kodex200_change_pct: float     = 0.0       # KODEX200 당일 등락률 (Squeeze 약세 필터)
+        # [WI3-D2 2026-08-09] Fail Closed: 데이터 조회 실패도 0.0(보합)으로 표현되면 정상 보합과
+        # 구분이 안 돼 소비부(Squeeze 약세필터)가 조용히 통과되던 버그 — None으로 "미확인" 명시.
+        self._kodex200_change_pct: Optional[float] = None  # KODEX200 당일 등락률 (Squeeze 약세 필터)
 
     def reset(self):
         """daily_routine 시작 시 호출 — 당일 캐시 초기화."""
@@ -442,15 +444,17 @@ class MarketContextChecker:
             # ── 2. Opening Range 위치 (KODEX200 5분봉) ─────────────────────────
             df200_5m, err200_5m = _fetch_minute_bars(self.api, KODEX200, "5")
             # 당일 등락률 캐시 (Squeeze Sub 약세 필터용)
+            # [WI3-D2 2026-08-09] Fail Closed: 조회실패/데이터부족/무효데이터 전부 None(미확인)으로
+            # 표현 — 이전엔 0.0(보합)으로 표현되어 실패와 정상보합을 구분할 수 없었다.
             try:
                 if df200_5m is not None and len(df200_5m) >= 2:
                     _last_cl  = float(df200_5m['close'].iloc[-1])
                     _first_op = float(df200_5m['open'].iloc[0])
-                    self._kodex200_change_pct = (_last_cl - _first_op) / _first_op * 100 if _first_op > 0 else 0.0
+                    self._kodex200_change_pct = (_last_cl - _first_op) / _first_op * 100 if _first_op > 0 else None
                 else:
-                    self._kodex200_change_pct = 0.0
+                    self._kodex200_change_pct = None
             except Exception:
-                self._kodex200_change_pct = 0.0
+                self._kodex200_change_pct = None
             or_check_enabled = cfg.get("opening_range_check", {}).get("enabled", True)
             or_ok, or_reason = _check_opening_range(df200_5m, err200_5m)
             details["opening_range"] = {"ok": or_ok, "reason": or_reason, "check_enabled": or_check_enabled}

@@ -410,6 +410,22 @@ def _execute_entry(
     ai_score  = order.get('ai_score')   # AnalysisEngine 0-100 (None if gate disabled)
     ai_rec    = order.get('ai_rec')
 
+    # Iteration 25: Volatility Size Reduction (기본 off) — core/risk_layer.py 공식 재사용
+    _vsr_enabled = False
+    try:
+        import yaml as _yaml_rl
+        _rl_cfg_path = Path(__file__).parent / 'config' / 'strategy_hybrid.yaml'
+        _vsr_enabled = _yaml_rl.safe_load(
+            _rl_cfg_path.read_text(encoding='utf-8')
+        ).get('risk_layer', {}).get('volatility_size_reduction', {}).get('enabled', False)
+    except Exception:
+        pass
+    from core.risk_layer import volatility_size_mult
+    _vsr_mult = volatility_size_mult(order.get('volatility20'), _vsr_enabled)
+    if _vsr_mult != 1.0:
+        logger.info(f"[RISK_LAYER] {code} Volatility Size Reduction 적용: size {size} → {size * _vsr_mult}")
+    size = size * _vsr_mult
+
     current_price = _get_price(api, code)
     if not current_price:
         logger.warning(f"[EXEC_ENTRY] {code} 현재가 실패 → 스킵")
@@ -461,6 +477,7 @@ def _execute_entry(
                 allocated_size=size,
                 quantity=quantity,
                 entry_market_regime=market_regime,
+                atr_pct_at_entry=float(order.get('atr_pct') or 0),
             )
             state_mgr.set(pos)
             state_mgr.save(state_mgr.all)

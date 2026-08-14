@@ -62,6 +62,9 @@ class SwingPosition:
     decision_id: Optional[str] = None       # research.decision_ledger PK
     trace_id: Optional[str] = None         # TR-YYYYMMDD-NNNNNN 전구간 추적용
 
+    # Iteration 25: Risk Layer 연동 필드 (ATR Adaptive Stop 입력값, core/risk_layer.py)
+    atr_pct_at_entry: float = 0.0           # 진입 신호일 기준 ATR14/종가*100
+
     def to_dict(self) -> dict:
         d = asdict(self)
         d['state'] = int(self.state)
@@ -87,6 +90,7 @@ class SwingPosition:
         d.setdefault('entry_market_regime', '')
         d.setdefault('decision_id', None)
         d.setdefault('trace_id', None)
+        d.setdefault('atr_pct_at_entry', 0.0)
         return cls(**d)
 
 
