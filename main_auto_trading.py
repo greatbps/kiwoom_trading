@@ -6167,7 +6167,8 @@ class IntegratedTradingSystem:
             if (entry_mode == 'smc'
                     and self.rae_detector.has_candidate(stock_code)
                     and stock_code not in self.smc_pending
-                    and not _rae_blocked_reason):
+                    and not _rae_blocked_reason
+                    and self.config.get('rae', {}).get('enabled', False)):
                 _rae_sig, _rae_reason, _rae_details = self.rae_detector.check(stock_code, df, current_price)
                 if _rae_sig:
                     _rae_cand = self.rae_detector.get_candidate(stock_code)
