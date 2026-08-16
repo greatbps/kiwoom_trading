@@ -158,20 +158,67 @@ class DecisionService:
         executed_price: Optional[float] = None,
         trace_id: Optional[str] = None,
     ) -> bool:
-        """주문 체결 기록 (Phase 4A Step 3). FROZEN → EXECUTED."""
+        """주문 체결 기록 (Phase 4A Step 3). FROZEN → EXECUTED.
+
+        [Pipeline Health Chain 결함 수정, 2026-08-17] trade_id가 없으면(None 또는
+        0 — public.trades INSERT가 실패했다는 뜻. SERIAL PK는 1부터 시작하므로
+        0은 실제 trade_id로 존재할 수 없는 값) 더 이상 EXECUTED로 위장해서 기록
+        하지 않는다. 이전에는 execution_result.trade_id=0이라는 sentinel만 남긴
+        채 lifecycle_status=EXECUTED로 기록돼, trades 테이블 INSERT 실패가
+        Pipeline Health Chain 밖에서는 전혀 보이지 않았다. 이제 trade_id가 없으면
+        EXECUTION_FAILED로 기록해 그 실패를 명시적으로 남긴다. trade_id가 정상
+        (양의 정수)으로 넘어오는 기존 EXECUTED 경로는 그대로 보존한다.
+        """
         if not decision_id or not self._enabled or not self._dl_enabled:
             return False
+        if not trade_id:
+            return bool(self._safe(
+                'record_order_trade_persist_failure',
+                self._repo.mark_execution_failed,
+                decision_id,
+                f'TRADE_PERSIST_FAILURE order_no={order_no}',
+                trace_id,
+            ))
         return bool(self._safe(
             'record_order',
             self._repo.mark_executed,
             decision_id,
-            trade_id or 0,
+            trade_id,
             order_no,
             executed_price,
             None,   # slippage_pct — 현재 미계산
             None,   # executed_at — mark_executed 내부에서 now() 사용
             trace_id,
         ))
+
+    def record_order_failure(
+        self,
+        ctx: Optional[EvaluationContext],
+        reason: str,
+        features: Optional[Dict] = None,
+    ) -> Optional[str]:
+        """
+        [Pipeline Health Chain 결함 수정, 2026-08-17] SMC가 이미 PASS로 승인한
+        candidate가 브로커 주문 단계(키움 API 매수 주문)에서 실패한 경우 전용.
+
+        기존에는 execute_buy()가 이 경우를 record_rejection()으로 기록해 decision=
+        'REJECT'(SMC가 애초에 거부했다는 뜻)로 남았다 — 실제로는 SMC가 이미 승인
+        (PASS)했는데 브로커 단계에서 실패한 것이라 의미가 다르다. 이 메서드는
+        decision='PASS' + lifecycle_status=EXECUTION_FAILED로 정확히 기록한다
+        (mark_execution_failed()는 그동안 구현만 되어 있고 호출부가 없었다).
+
+        주문/진입 판단 로직 자체는 건드리지 않는다 — 이미 실패가 확정된 뒤의
+        기록(persistence) 경로만 바꾼다.
+
+        반환: decision_id (str) | None — 실패 또는 비활성 시 None.
+        """
+        if not ctx or not self._enabled or not self._dl_enabled:
+            return None
+        return self._safe(
+            'record_order_failure',
+            self._record_order_failure_impl,
+            ctx, reason, features or {},
+        )
 
     def record_exit(
         self,
@@ -274,6 +321,41 @@ class DecisionService:
         logger.info(
             f"[RESEARCH] {decision} recorded "
             f"trace={ctx.trace_id} sym={ctx.symbol} reason={reason_code}"
+        )
+        return decision_id
+
+    def _record_order_failure_impl(
+        self,
+        ctx: EvaluationContext,
+        reason: str,
+        features: Dict,
+    ) -> Optional[str]:
+        """record_order_failure()의 실제 구현. PASS로 freeze한 뒤 즉시
+        EXECUTION_FAILED로 전이한다 — 두 단계지만 한 번의 호출 내에서
+        원자적으로(같은 트레이딩 스레드 안에서 연속) 수행된다."""
+        decided_at = datetime.now()
+        feature_snapshot = self._build_snapshot(features)
+
+        decision_id = self._repo.freeze_decision(
+            candidate_id=ctx.candidate_id,
+            stock_code=ctx.symbol,
+            decision='PASS',
+            decision_reason_code='PASS',
+            policy_version=ctx.policy_version,
+            feature_snapshot=feature_snapshot,
+            observed_at=ctx.observed_at,
+            decided_at=decided_at,
+            strategy_type=getattr(ctx, 'strategy_type', 'SMC_INTRADAY'),
+            trace_id=ctx.trace_id,
+            created_by='decision_service',
+        )
+        if decision_id is None:
+            return None
+
+        self._repo.mark_execution_failed(decision_id, reason[:200], ctx.trace_id)
+        logger.info(
+            f"[RESEARCH] ORDER_EXECUTION_FAILED recorded "
+            f"trace={ctx.trace_id} sym={ctx.symbol} reason={reason}"
         )
         return decision_id
 

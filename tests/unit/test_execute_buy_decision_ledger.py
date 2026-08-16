@@ -157,26 +157,38 @@ class TestExecuteBuyDecisionLedger:
         stub.api.order_buy.assert_not_called()
 
     def test_api_failure(self):
-        """매수 API 호출 자체 예외 → API_FAILURE 1건."""
+        """매수 API 호출 자체 예외 → API_FAILURE 1건.
+
+        [Pipeline Health Chain 결함 수정, 2026-08-17] 이 경우 SMC는 이미 PASS로
+        승인했고 브로커 단계에서만 실패한 것이라 record_rejection()(decision=
+        REJECT, "SMC가 애초에 거부했다"는 뜻)이 아니라 record_order_failure()
+        (decision=PASS + lifecycle_status=EXECUTION_FAILED)를 호출해야 한다."""
         stub, ctx = _stub_with_decision_ctx()
         stub.dry_run_mode = False
         stub.api.order_buy.side_effect = Exception("network timeout")
         _run(stub, _make_df())
 
-        stub.decision_service.record_rejection.assert_called_once()
-        call_args = stub.decision_service.record_rejection.call_args
+        stub.decision_service.record_order_failure.assert_called_once()
+        call_args = stub.decision_service.record_order_failure.call_args
+        assert call_args[0][0] is ctx
         assert call_args[0][1] == "API_FAILURE"
+        stub.decision_service.record_rejection.assert_not_called()
 
     def test_order_failure(self):
-        """주문 API 응답 실패(return_code != 0) → ORDER_FAILURE 1건."""
+        """주문 API 응답 실패(return_code != 0) → ORDER_FAILURE 1건.
+
+        [Pipeline Health Chain 결함 수정, 2026-08-17] API_FAILURE와 동일 이유로
+        record_order_failure()를 호출해야 한다(더 이상 record_rejection() 아님)."""
         stub, ctx = _stub_with_decision_ctx()
         stub.dry_run_mode = False
         stub.api.order_buy.return_value = {"return_code": -1, "return_msg": "잔고부족", "ord_no": None}
         _run(stub, _make_df())
 
-        stub.decision_service.record_rejection.assert_called_once()
-        call_args = stub.decision_service.record_rejection.call_args
+        stub.decision_service.record_order_failure.assert_called_once()
+        call_args = stub.decision_service.record_order_failure.call_args
+        assert call_args[0][0] is ctx
         assert call_args[0][1] == "ORDER_FAILURE"
+        stub.decision_service.record_rejection.assert_not_called()
 
     def test_success_path_does_not_call_reject(self):
         """정상 통과(dry-run까지 도달) → record_rejection 미호출 (오탐 방지 회귀)."""

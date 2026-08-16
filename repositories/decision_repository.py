@@ -15,10 +15,21 @@ GD-007 / DATA_CONTRACT v2.0 기준.
 import json
 import logging
 import random
+import uuid
 from datetime import datetime
 from typing import Any, Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+# 2026-08-17 [Pipeline Health] — create_candidate()/freeze_decision()이 내부에서
+# 예외를 삼키고 (None, trace_id)로 조용히 실패를 흡수하는 기존 구조(§설계 원칙 2번)는
+# 그대로 유지한다(트레이딩 흐름 보호가 목적이므로 변경 대상 아님). 다만 지금까지는
+# 그 실패가 logger.warning() 로그 문자열로만 남아서, 완전한 INSERT 실패(행 자체가
+# 생성되지 못한 경우)는 어떤 테이블/카운터로도 집계되지 않았다 — 이게 2026-08-11
+# 이후 사흘간 Candidate 0건 장애를 몇 주간 아무도 못 알아챈 근본 원인 중 하나였다.
+# 로그 문자열 grep이 아니라 research.event_store에 구조화된 이벤트로 남겨서
+# analysis/decision_health_check.py가 SQL COUNT로 집계할 수 있게 한다.
+PERSISTENCE_FAILURE_EVENT_TYPE = 'PersistenceFailure'
 
 
 class DecisionRepository:
@@ -131,6 +142,10 @@ class DecisionRepository:
             except Exception:
                 pass
             logger.warning(f"[{trace_id}] create_candidate failed stock={stock_code}: {exc}")
+            self._record_persistence_failure(
+                conn, failure_type='CANDIDATE_INSERT', stage='CANDIDATE_INSERT',
+                stock_code=stock_code, trace_id=trace_id, error=exc,
+            )
             return None, trace_id
         finally:
             self._db._put_conn(conn)
@@ -235,6 +250,10 @@ class DecisionRepository:
             logger.warning(
                 f"[{trace_id}] freeze_decision failed "
                 f"stock={stock_code} decision={decision}: {exc}"
+            )
+            self._record_persistence_failure(
+                conn, failure_type='DECISION_INSERT', stage='DECISION_INSERT',
+                stock_code=stock_code, trace_id=trace_id or '', error=exc,
             )
             return None
         finally:
@@ -503,6 +522,10 @@ class DecisionRepository:
                 f"[RETURN] record_future_return failed "
                 f"decision_id={decision_id} horizon={horizon_label}: {exc}"
             )
+            self._record_persistence_failure(
+                conn, failure_type='FUTURE_RETURN_INSERT', stage='FUTURE_RETURN_INSERT',
+                stock_code=stock_code, trace_id=trace_id or '', error=exc,
+            )
             return False
         finally:
             self._db._put_conn(conn)
@@ -566,6 +589,14 @@ class DecisionRepository:
             logger.warning(
                 f"[DECISION_REPO] {event_type} failed decision_id={decision_id}: {exc}"
             )
+            # [Pipeline Health Chain, 2026-08-17] mark_executed/mark_execution_failed/
+            # mark_outcome_pending/mark_exited/complete_audit/extract_knowledge가 전부
+            # 이 헬퍼를 공유한다. new_status로 어느 단계(INTENT→SUBMIT/FILL 등)에서 실패했는지
+            # 구분해 기록한다 — CANDIDATE_INSERT/DECISION_INSERT와 동일한 매커니즘.
+            self._record_persistence_failure(
+                conn, failure_type=f'LIFECYCLE_{new_status}', stage=new_status,
+                stock_code='', trace_id=str(decision_id or ''), error=exc,
+            )
             return False
         finally:
             self._db._put_conn(conn)
@@ -604,3 +635,54 @@ class DecisionRepository:
                 json.dumps(payload, default=str),
                 source,
             ))
+
+    def _record_persistence_failure(
+        self,
+        conn,
+        *,
+        failure_type: str,
+        stage: str,
+        stock_code: str,
+        trace_id: str,
+        error: BaseException,
+    ) -> None:
+        """
+        [Pipeline Health, 2026-08-17] create_candidate()/freeze_decision()의 except
+        블록에서만 호출한다. 원래 트랜잭션은 이미 rollback된 뒤이므로, 같은 conn에
+        완전히 새로운 소규모 트랜잭션(INSERT 1건 + commit)만 연다.
+
+        이 메서드 자체는 절대 예외를 밖으로 던지지 않는다 — 관측 계측이 실패해도
+        (예: DB 연결 자체가 끊긴 극단적 상황) 원래 실패 흐름(logger.warning + None
+        반환)은 그대로 유지되어야 한다(§3 "business logic 변경 없이 보완").
+
+        entity_id는 실패했으니 candidate_id/decision_id가 없다 — 새 UUID를 발급해서
+        payload 안에 stock_code/trace_id/error로 역추적 가능하게 남긴다.
+        """
+        try:
+            failure_id = str(uuid.uuid4())
+            self._emit_event(
+                conn=conn,
+                event_type=PERSISTENCE_FAILURE_EVENT_TYPE,
+                entity_type='persistence_failure',
+                entity_id=failure_id,
+                source='decision_repository',
+                payload={
+                    'failure_type': failure_type,   # CANDIDATE_INSERT / DECISION_INSERT
+                    'stage': stage,
+                    'stock_code': stock_code,
+                    'trace_id': trace_id,
+                    'error_type': type(error).__name__,
+                    'error': str(error)[:500],
+                },
+            )
+            conn.commit()
+        except Exception as meta_exc:
+            # 관측 계측 자체의 실패는 별도로만 로그하고 절대 전파하지 않는다.
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            logger.warning(
+                f"[{trace_id}] persistence failure event 기록 자체가 실패함"
+                f"(원래 실패는 이미 위에서 로그됨, 트레이딩 흐름 영향 없음): {meta_exc}"
+            )

@@ -6643,7 +6643,7 @@ class IntegratedTradingSystem:
                             }
                             _eval_ctx = self.decision_service.begin_evaluation(
                                 symbol=stock_code,
-                                price=current_price,
+                                price=float(current_price),
                                 features=_eval_features,
                                 stock_name=stock_name,
                                 market=market,
@@ -9609,6 +9609,21 @@ class IntegratedTradingSystem:
                 )
                 _ds_rejected = True
 
+        # 🔧 2026-08-17 [Pipeline Health Chain 결함 수정] 브로커 주문 API가 이미
+        # 실패한 뒤(return_code!=0 / 예외)의 기록 전용 — SMC는 이미 PASS로 승인한
+        # 뒤이므로 REJECT(_finalize_decision, 위)가 아니라 PASS+EXECUTION_FAILED로
+        # 기록해야 한다. _ds_rejected 플래그를 공유해 _finalize_decision()과
+        # 상호 배타적으로 동작한다(둘 중 하나만 기록됨). 주문 판단/재시도 로직은
+        # 전혀 건드리지 않음 — 실패가 이미 확정된 뒤의 persistence 경로만 추가.
+        def _finalize_decision_execution_failure(reason_tag: str, detail: str = ''):
+            nonlocal _ds_rejected
+            if _ds_pass_ctx and self.decision_service and not _ds_rejected:
+                self.decision_service.record_order_failure(
+                    _ds_pass_ctx, reason_tag,
+                    features={'gate_reason': f'{reason_tag}: {detail}' if detail else reason_tag},
+                )
+                _ds_rejected = True
+
         # 🔧 2026-02-07: 진입 시도 카운트 (쿨다운 체크 이전)
         self.reentry_metrics.record_entry_signal()
 
@@ -10783,7 +10798,7 @@ class IntegratedTradingSystem:
 
             if order_result.get('return_code') != 0:
                 console.print(f"[red]❌ 매수 주문 실패: {order_result.get('return_msg')}[/red]")
-                _finalize_decision('ORDER_FAILURE', str(order_result.get('return_msg')))
+                _finalize_decision_execution_failure('ORDER_FAILURE', str(order_result.get('return_msg')))
                 return
 
             order_no = order_result.get('ord_no')
@@ -10796,7 +10811,7 @@ class IntegratedTradingSystem:
 
         except Exception as e:
             console.print(f"[red]❌ 매수 API 호출 실패: {e}[/red]")
-            _finalize_decision('API_FAILURE', str(e))
+            _finalize_decision_execution_failure('API_FAILURE', str(e))
             return
 
         # [P0 FIX] Kiwoom 주문 성공 직후 PostgreSQL BUY 즉시 기록 (이후 예외로 함수 종료 시 DB 누락 방지)

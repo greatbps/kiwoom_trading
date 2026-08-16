@@ -241,6 +241,38 @@ def _insert_failure_rate(cur, target_date: date) -> Dict[str, Any]:
     return {'total': total, 'with_event': with_event, 'missing': missing, 'rate_pct': rate}
 
 
+def _persistence_failure_count(cur, target_date: date) -> Dict[str, Any]:
+    """
+    [Pipeline Health, 2026-08-17] research.event_store에 명시적으로 기록된
+    PersistenceFailure 이벤트 집계(repositories/decision_repository.py
+    _record_persistence_failure()). 로그 문자열(grep "create_candidate failed")이
+    아니라 구조화된 이벤트를 센다 — 메시지 형식이 바뀌어도 안 놓친다.
+
+    _insert_failure_rate()와의 차이: 그건 "candidates 행은 존재하는데 이벤트가
+    없는" 부분 실패만 잡는다(분모=candidates 행 수라서 행 자체가 하나도 안
+    만들어진 완전 실패는 분모가 0이 되어 0%로 위장됨 — 2026-08-11 이후 사흘간
+    실제로 이렇게 놓쳤다). 이 함수는 행 존재 여부와 무관하게 실패 시도 자체를
+    센다.
+    """
+    d = str(target_date)
+    cur.execute("""
+        SELECT payload->>'failure_type' AS failure_type, COUNT(*) AS n
+        FROM research.event_store
+        WHERE event_type = 'PersistenceFailure'
+          AND occurred_at::date = %s
+        GROUP BY payload->>'failure_type'
+    """, (d,))
+    by_type: Dict[str, int] = {row[0] or 'UNKNOWN_PERSISTENCE': int(row[1]) for row in cur.fetchall()}
+    return {
+        'total':                     sum(by_type.values()),
+        'candidate_insert_failures': by_type.get('CANDIDATE_INSERT', 0),
+        'decision_insert_failures':  by_type.get('DECISION_INSERT', 0),
+        'other_failures':            sum(v for k, v in by_type.items()
+                                          if k not in ('CANDIDATE_INSERT', 'DECISION_INSERT')),
+        'by_type':                   by_type,
+    }
+
+
 def _pool_usage(cur) -> Dict[str, Any]:
     """
     PostgreSQL 서버 전체 커넥션 사용률.
@@ -516,6 +548,7 @@ def run_health_check(target_date: Optional[date] = None) -> Dict[str, Any]:
         latency       = _recording_latency(cur, target_date)
         reasons       = _reject_reason_breakdown(cur, target_date)
         insert_fail   = _insert_failure_rate(cur, target_date)
+        persist_fail  = _persistence_failure_count(cur, target_date)
         pool          = _pool_usage(cur)
         gaps          = _trace_gap_check(cur, target_date)
         impossibles   = _impossible_transitions(cur)
@@ -541,6 +574,7 @@ def run_health_check(target_date: Optional[date] = None) -> Dict[str, Any]:
             'latency':                latency,
             'reject_reasons':         reasons,
             'insert_failure':         insert_fail,
+            'persistence_failure':    persist_fail,
             'pool_usage':             pool,
             'trace_gaps':             gaps,
             'impossible_transitions': impossibles,
@@ -551,6 +585,9 @@ def run_health_check(target_date: Optional[date] = None) -> Dict[str, Any]:
                 'latency_p99_ms':          latency['p99_ms'],
                 'total_orphans':           total_orphan,
                 'insert_failure_pct':      insert_fail['rate_pct'],
+                'persistence_failures':    persist_fail['total'],
+                'candidate_persist_failures': persist_fail['candidate_insert_failures'],
+                'decision_persist_failures':  persist_fail['decision_insert_failures'],
                 'pool_usage_pct':          pool['usage_pct'],
                 'total_trace_gaps':        len(gaps),
                 'total_impossibles':       len(impossibles),
@@ -559,6 +596,7 @@ def run_health_check(target_date: Optional[date] = None) -> Dict[str, Any]:
                     and len(gaps) == 0
                     and len(impossibles) == 0
                     and insert_fail['rate_pct'] == 0.0
+                    and persist_fail['total'] == 0
                 ),
                 'latency_ok':              latency_ok,
                 'pass_today':              pass_anomaly['today'],
@@ -623,6 +661,10 @@ def print_report(report: Dict[str, Any]) -> None:
     print(f"    [{status(total_gaps==0)}] Trace Gaps           : {total_gaps}  (target=0)")
     print(f"    [{status(total_impos==0)}] Impossible Transitions: {total_impos}  (target=0)")
     print(f"    [{status(ins_fail==0.0)}] INSERT Failure Rate  : {ins_fail:.1f}%  (target=0%)")
+
+    persist_total = kpi['persistence_failures']
+    print(f"    [{status(persist_total==0)}] Persistence Failures  : {persist_total}  (target=0)"
+          f"  (Candidate={kpi['candidate_persist_failures']} Decision={kpi['decision_persist_failures']})")
     print(f"    [{'OK  ' if pool_use < 80 else 'WARN'}] DB Pool Usage        : {pool_use:.0f}%  (warn≥80%)")
 
     if total_orphan > 0:
